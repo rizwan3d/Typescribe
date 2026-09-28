@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Typescribe.Application.Models;
@@ -13,9 +14,9 @@ namespace Typescribe.Desktop;
 public sealed class MainWindow : Window
 {
     private readonly WorkspaceViewModel _viewModel;
+    private readonly PdfPreviewRenderer _pdfPreviewRenderer = new();
     private readonly ListBox _binder = new();
     private readonly TextBox _editor = new();
-    private readonly TextBlock _preview = new();
     private readonly TextBlock _status = new();
     private readonly TextBlock _wordCount = new();
     private readonly TextBlock _engine = new();
@@ -31,10 +32,36 @@ public sealed class MainWindow : Window
     private readonly Button _moveDownButton = new() { Content = "↓" };
     private readonly Button _includeButton = new() { Content = "Exclude" };
     private readonly Button _styleButton = new() { Content = "Book Style", Margin = new Thickness(0, 0, 6, 0) };
-    private readonly Button _previewPdfButton = new() { Content = "Preview PDF", Margin = new Thickness(0, 0, 6, 0) };
+    private readonly Button _refreshPreviewButton = new() { Content = "Refresh Preview", Margin = new Thickness(0, 0, 6, 0) };
     private readonly Button _exportPdfButton = new() { Content = "Publish Book PDF", Margin = new Thickness(0, 0, 6, 0) };
     private readonly Button _downloadPdfEngineButton = new() { Content = "Download LuaLaTeX", Margin = new Thickness(0, 0, 6, 0) };
 
+    private readonly Image _pdfPreviewImage = new()
+    {
+        Stretch = Stretch.Uniform,
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Top
+    };
+    private readonly TextBlock _previewMessage = new()
+    {
+        Text = "Install LuaLaTeX to enable live PDF preview.",
+        TextWrapping = TextWrapping.Wrap,
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(24)
+    };
+    private readonly TextBlock _previewStatus = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _pageLabel = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
+    private readonly Button _previousPageButton = new() { Content = "‹", MinWidth = 34 };
+    private readonly Button _nextPageButton = new() { Content = "›", MinWidth = 34 };
+    private readonly Button _zoomOutButton = new() { Content = "−", MinWidth = 34, Margin = new Thickness(8, 0, 0, 0) };
+    private readonly Button _zoomInButton = new() { Content = "+", MinWidth = 34 };
+
+    private CancellationTokenSource? _previewRenderCts;
+    private PdfPreviewPage? _renderedPreviewPage;
+    private long _loadedPreviewVersion = -1;
+    private int _previewPageIndex;
+    private double _previewZoom = 1.0;
     private bool _updatingUi;
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -54,6 +81,7 @@ public sealed class MainWindow : Window
         _searchResults.DoubleTapped += SearchResultDoubleTapped;
         Closed += WindowClosed;
         UpdateFromState();
+        _ = RefreshPreviewIfNeededAsync();
     }
 
     private Control BuildLayout()
@@ -100,28 +128,25 @@ public sealed class MainWindow : Window
         var newButton = ToolbarButton("New Project");
         var openButton = ToolbarButton("Open Project");
         var saveButton = ToolbarButton("Save");
-        var typstButton = ToolbarButton("Export .typ");
         var latexButton = ToolbarButton("Export .tex");
 
         newButton.Click += async (_, _) => await RunUiTaskAsync(CreateProjectAsync);
         openButton.Click += async (_, _) => await RunUiTaskAsync(OpenProjectAsync);
         saveButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.SaveNowAsync());
         _styleButton.Click += async (_, _) => await RunUiTaskAsync(EditStyleAsync);
-        _previewPdfButton.Click += async (_, _) => await RunUiTaskAsync(PreviewPdfAsync);
+        _refreshPreviewButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.RefreshLivePdfPreviewAsync());
         _exportPdfButton.Click += async (_, _) => await RunUiTaskAsync(ExportPdfAsync);
         _downloadPdfEngineButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.EnsurePdfEngineAsync());
-        typstButton.Click += async (_, _) => await RunUiTaskAsync(ExportTypstAsync);
         latexButton.Click += async (_, _) => await RunUiTaskAsync(ExportLatexAsync);
 
         bar.Children.Add(newButton);
         bar.Children.Add(openButton);
         bar.Children.Add(saveButton);
         bar.Children.Add(_styleButton);
-        bar.Children.Add(_previewPdfButton);
+        bar.Children.Add(_refreshPreviewButton);
         bar.Children.Add(_exportPdfButton);
         bar.Children.Add(_downloadPdfEngineButton);
         bar.Children.Add(latexButton);
-        bar.Children.Add(typstButton);
         return bar;
     }
 
@@ -194,8 +219,8 @@ public sealed class MainWindow : Window
     {
         _editor.AcceptsReturn = true;
         _editor.AcceptsTab = true;
-        _editor.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
-        _editor.FontFamily = new Avalonia.Media.FontFamily("monospace");
+        _editor.TextWrapping = TextWrapping.Wrap;
+        _editor.FontFamily = new FontFamily("monospace");
         _editor.FontSize = 15;
         _editor.VerticalContentAlignment = VerticalAlignment.Top;
         _editor.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -206,17 +231,48 @@ public sealed class MainWindow : Window
 
     private Control BuildPreviewPanel()
     {
-        _preview.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
-        _preview.FontSize = 16;
-        _preview.LineHeight = 24;
-        _preview.Margin = new Thickness(18);
-        return new ScrollViewer
+        _previousPageButton.Click += async (_, _) => await ChangePreviewPageAsync(-1);
+        _nextPageButton.Click += async (_, _) => await ChangePreviewPageAsync(1);
+        _zoomOutButton.Click += (_, _) => ChangeZoom(-0.1);
+        _zoomInButton.Click += (_, _) => ChangeZoom(0.1);
+
+        var controls = new Grid
         {
-            Content = _preview,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FAF8F4"))
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,Auto,*"),
+            Margin = new Thickness(8, 0, 8, 6)
         };
+        controls.Children.Add(_previousPageButton);
+        Grid.SetColumn(_pageLabel, 1);
+        controls.Children.Add(_pageLabel);
+        Grid.SetColumn(_nextPageButton, 2);
+        controls.Children.Add(_nextPageButton);
+        Grid.SetColumn(_zoomOutButton, 3);
+        controls.Children.Add(_zoomOutButton);
+        Grid.SetColumn(_zoomInButton, 4);
+        controls.Children.Add(_zoomInButton);
+        Grid.SetColumn(_previewStatus, 5);
+        _previewStatus.HorizontalAlignment = HorizontalAlignment.Right;
+        controls.Children.Add(_previewStatus);
+
+        var previewSurface = new Grid
+        {
+            Background = new SolidColorBrush(Color.Parse("#E8E8E8"))
+        };
+        previewSurface.Children.Add(_pdfPreviewImage);
+        previewSurface.Children.Add(_previewMessage);
+
+        var scroll = new ScrollViewer
+        {
+            Content = previewSurface,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
+        };
+
+        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        panel.Children.Add(controls);
+        Grid.SetRow(scroll, 1);
+        panel.Children.Add(scroll);
+        return panel;
     }
 
     private Control BuildStatusBar()
@@ -288,22 +344,10 @@ public sealed class MainWindow : Window
         if (style is not null) await _viewModel.UpdateStyleAsync(style);
     }
 
-    private async Task PreviewPdfAsync()
-    {
-        var path = await _viewModel.BuildPdfPreviewAsync();
-        ExternalFileLauncher.Open(path);
-    }
-
     private async Task ExportPdfAsync()
     {
         var path = await PickSavePathAsync("Publish Book PDF", "PDF document", "pdf");
         if (path is not null) await _viewModel.ExportPdfAsync(path);
-    }
-
-    private async Task ExportTypstAsync()
-    {
-        var path = await PickSavePathAsync("Export Book Typst source", "Typst source", "typ");
-        if (path is not null) await _viewModel.ExportTypstAsync(path);
     }
 
     private async Task ExportLatexAsync()
@@ -374,7 +418,31 @@ public sealed class MainWindow : Window
             await RunUiTaskAsync(() => _viewModel.GoToSearchHitAsync(_viewModel.SearchResults[index]));
     }
 
-    private void OnStateChanged(object? sender, EventArgs e) => Dispatcher.UIThread.Post(UpdateFromState);
+    private async Task ChangePreviewPageAsync(int offset)
+    {
+        if (_renderedPreviewPage is null) return;
+        var next = Math.Clamp(_previewPageIndex + offset, 0, _renderedPreviewPage.PageCount - 1);
+        if (next == _previewPageIndex) return;
+        _previewPageIndex = next;
+        await RefreshPreviewIfNeededAsync(force: true);
+    }
+
+    private void ChangeZoom(double delta)
+    {
+        _previewZoom = Math.Clamp(_previewZoom + delta, 0.5, 2.5);
+        ApplyPreviewZoom();
+    }
+
+    private void ApplyPreviewZoom()
+    {
+        _pdfPreviewImage.Width = 760 * _previewZoom;
+    }
+
+    private void OnStateChanged(object? sender, EventArgs e) => Dispatcher.UIThread.Post(() =>
+    {
+        UpdateFromState();
+        _ = RefreshPreviewIfNeededAsync();
+    });
 
     private void UpdateFromState()
     {
@@ -387,7 +455,6 @@ public sealed class MainWindow : Window
             if (!string.Equals(_editor.Text, _viewModel.EditorText, StringComparison.Ordinal))
                 _editor.Text = _viewModel.EditorText;
             _editor.IsEnabled = _viewModel.HasDocument;
-            _preview.Text = _viewModel.PreviewText;
             _status.Text = _viewModel.Status;
             _wordCount.Text = $"{_viewModel.WordCount:N0} words";
             _engine.Text = _viewModel.CanPublishPdf
@@ -396,7 +463,7 @@ public sealed class MainWindow : Window
 
             _downloadPdfEngineButton.IsVisible = !_viewModel.CanPublishPdf;
             _downloadPdfEngineButton.IsEnabled = !_viewModel.CanPublishPdf;
-            _previewPdfButton.IsEnabled = _viewModel.HasProject;
+            _refreshPreviewButton.IsEnabled = _viewModel.HasProject;
             _exportPdfButton.IsEnabled = _viewModel.HasProject;
             _styleButton.IsEnabled = _viewModel.HasProject;
 
@@ -406,10 +473,75 @@ public sealed class MainWindow : Window
             _moveDownButton.IsEnabled = _viewModel.HasSelection;
             _includeButton.IsEnabled = _viewModel.HasSelection;
             _includeButton.Content = _viewModel.SelectedIncluded ? "Exclude" : "Include";
+
+            _previewStatus.Text = _viewModel.IsLivePreviewBuilding
+                ? "Compiling…"
+                : _viewModel.LivePreviewError is not null
+                    ? "Preview error"
+                    : _viewModel.LivePreviewPdfPath is not null
+                        ? "Live"
+                        : string.Empty;
+
+            if (_renderedPreviewPage is null)
+            {
+                _previewMessage.IsVisible = true;
+                _previewMessage.Text = _viewModel.LivePreviewError
+                    ?? (_viewModel.CanPublishPdf
+                        ? _viewModel.PreviewText
+                        : "Install LuaLaTeX to enable live PDF preview.");
+            }
         }
         finally
         {
             _updatingUi = false;
+        }
+    }
+
+    private async Task RefreshPreviewIfNeededAsync(bool force = false)
+    {
+        var path = _viewModel.LivePreviewPdfPath;
+        var version = _viewModel.LivePreviewVersion;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        if (!force && version == _loadedPreviewVersion) return;
+
+        _previewRenderCts?.Cancel();
+        _previewRenderCts?.Dispose();
+        _previewRenderCts = new CancellationTokenSource();
+        var token = _previewRenderCts.Token;
+
+        try
+        {
+            var page = await _pdfPreviewRenderer.RenderAsync(path, _previewPageIndex, token);
+            if (token.IsCancellationRequested)
+            {
+                page.Dispose();
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _renderedPreviewPage?.Dispose();
+                _renderedPreviewPage = page;
+                _pdfPreviewImage.Source = page.Bitmap;
+                _previewPageIndex = page.PageIndex;
+                _loadedPreviewVersion = version;
+                _pageLabel.Text = $"{page.PageIndex + 1} / {page.PageCount}";
+                _previousPageButton.IsEnabled = page.PageIndex > 0;
+                _nextPageButton.IsEnabled = page.PageIndex + 1 < page.PageCount;
+                _previewMessage.IsVisible = false;
+                ApplyPreviewZoom();
+            });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _previewMessage.Text = $"Could not render PDF preview: {ex.Message}";
+                _previewMessage.IsVisible = true;
+            });
         }
     }
 
@@ -444,7 +576,7 @@ public sealed class MainWindow : Window
                     new ScrollViewer
                     {
                         MaxHeight = 180,
-                        Content = new TextBlock { Text = message, TextWrapping = Avalonia.Media.TextWrapping.Wrap }
+                        Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }
                     },
                     close
                 }
@@ -457,6 +589,9 @@ public sealed class MainWindow : Window
     private async void WindowClosed(object? sender, EventArgs e)
     {
         _viewModel.StateChanged -= OnStateChanged;
+        _previewRenderCts?.Cancel();
+        _previewRenderCts?.Dispose();
+        _renderedPreviewPage?.Dispose();
         await _viewModel.DisposeAsync();
     }
 
