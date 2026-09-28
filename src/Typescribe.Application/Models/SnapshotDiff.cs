@@ -17,6 +17,8 @@ public sealed record DiffLine(DiffLineKind Kind, int? OldLine, int? NewLine, str
             DiffLineKind.Removed => "-",
             _ => " "
         };
-        return $"{marker} {OldLine?.ToString() ?? "":>4} {NewLine?.ToString() ?? "":>4}  {Text}";
+        var oldLine = OldLine?.ToString() ?? string.Empty;
+        var newLine = NewLine?.ToString() ?? string.Empty;
+        return $"{marker} {oldLine,4} {newLine,4}  {Text}";
     }
 }
