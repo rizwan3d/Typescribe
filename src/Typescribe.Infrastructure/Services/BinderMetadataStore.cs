@@ -33,6 +33,7 @@ internal sealed class BinderMetadataStore
             var targetWords = fields.Length >= 10 && int.TryParse(fields[9], out var parsedTarget)
                 ? Math.Max(0, parsedTarget)
                 : 0;
+            var persistentId = fields.Length >= 11 ? Unescape(fields[10]) : string.Empty;
             result[Normalize(relativePath)] = new BinderMetadata(
                 kind,
                 included,
@@ -43,7 +44,8 @@ internal sealed class BinderMetadataStore
                 status,
                 label,
                 keywords,
-                targetWords);
+                targetWords,
+                persistentId);
         }
         return result;
     }
@@ -51,7 +53,7 @@ internal sealed class BinderMetadataStore
     public Task SaveAsync(BookProject project, CancellationToken cancellationToken = default)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("# kind\tincluded\trelative-path\ttitle\tsynopsis\tnotes\tstatus\tlabel\tkeywords\ttarget-words");
+        builder.AppendLine("# kind\tincluded\trelative-path\ttitle\tsynopsis\tnotes\tstatus\tlabel\tkeywords\ttarget-words\tpersistent-id");
         foreach (var node in Flatten(project.Root))
         {
             if (node.RelativePath is null) continue;
@@ -64,7 +66,8 @@ internal sealed class BinderMetadataStore
                 .Append(Escape(node.Status)).Append('\t')
                 .Append(Escape(node.Label)).Append('\t')
                 .Append(Escape(node.Keywords)).Append('\t')
-                .Append(node.TargetWords).AppendLine();
+                .Append(node.TargetWords).Append('\t')
+                .Append(Escape(node.PersistentId)).AppendLine();
         }
         return AtomicFileWriter.WriteTextAsync(GetPath(project.RootPath), builder.ToString(), cancellationToken);
     }
@@ -128,4 +131,5 @@ internal sealed record BinderMetadata(
     string Status,
     string Label,
     string Keywords,
-    int TargetWords);
+    int TargetWords,
+    string PersistentId);
