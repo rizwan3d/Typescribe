@@ -4,17 +4,24 @@ public sealed class ProjectNode
 {
     private readonly List<ProjectNode> _children = [];
 
-    public ProjectNode(string id, string title, NodeKind kind, string? relativePath = null)
+    public ProjectNode(
+        string id,
+        string title,
+        NodeKind kind,
+        string? relativePath = null,
+        string? persistentId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         Id = id;
+        PersistentId = string.IsNullOrWhiteSpace(persistentId) ? Guid.NewGuid().ToString("N") : persistentId.Trim();
         Title = title.Trim();
         Kind = kind;
         RelativePath = relativePath;
     }
 
     public string Id { get; private set; }
+    public string PersistentId { get; }
     public string Title { get; private set; }
     public NodeKind Kind { get; private set; }
     public string? RelativePath { get; private set; }
