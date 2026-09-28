@@ -4,7 +4,9 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Typescribe.Application.Models;
 using Typescribe.Desktop.ViewModels;
+using Typescribe.Domain.Models;
 
 namespace Typescribe.Desktop;
 
@@ -19,18 +21,30 @@ public sealed class MainWindow : Window
     private readonly TextBlock _engine = new();
     private readonly TextBox _searchBox = new();
     private readonly ListBox _searchResults = new();
+    private readonly CheckBox _regexSearch = new() { Content = "Regex" };
+    private readonly CheckBox _caseSearch = new() { Content = "Case" };
+    private readonly CheckBox _wholeWordSearch = new() { Content = "Whole word" };
+
+    private readonly Button _renameBinderButton = new() { Content = "Rename" };
+    private readonly Button _deleteBinderButton = new() { Content = "Delete" };
+    private readonly Button _moveUpButton = new() { Content = "↑" };
+    private readonly Button _moveDownButton = new() { Content = "↓" };
+    private readonly Button _includeButton = new() { Content = "Exclude" };
+    private readonly Button _styleButton = new() { Content = "Book Style", Margin = new Thickness(0, 0, 6, 0) };
+    private readonly Button _previewPdfButton = new() { Content = "Preview PDF", Margin = new Thickness(0, 0, 6, 0) };
     private readonly Button _exportPdfButton = new() { Content = "Publish Book PDF", Margin = new Thickness(0, 0, 6, 0) };
-    private readonly Button _downloadPdfEngineButton = new() { Content = "Download PDF Engine", Margin = new Thickness(0, 0, 6, 0) };
+    private readonly Button _downloadPdfEngineButton = new() { Content = "Download LuaLaTeX", Margin = new Thickness(0, 0, 6, 0) };
+
     private bool _updatingUi;
 
     public MainWindow(WorkspaceViewModel viewModel)
     {
         _viewModel = viewModel;
         Title = "Typescribe";
-        Width = 1440;
-        Height = 900;
-        MinWidth = 980;
-        MinHeight = 620;
+        Width = 1500;
+        Height = 920;
+        MinWidth = 1040;
+        MinHeight = 650;
         Content = BuildLayout();
 
         _viewModel.StateChanged += OnStateChanged;
@@ -56,7 +70,7 @@ public sealed class MainWindow : Window
 
         var workspace = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("250,5*,4*"),
+            ColumnDefinitions = new ColumnDefinitions("300,5*,4*"),
             Margin = new Thickness(8, 0, 8, 0)
         };
         Grid.SetRow(workspace, 1);
@@ -82,18 +96,18 @@ public sealed class MainWindow : Window
 
     private Control BuildToolbar()
     {
-        var bar = new DockPanel { Margin = new Thickness(8), LastChildFill = false };
-        var newButton = new Button { Content = "New Project", Margin = new Thickness(0, 0, 6, 0) };
-        var openButton = new Button { Content = "Open Project", Margin = new Thickness(0, 0, 6, 0) };
-        var addChapterButton = new Button { Content = "New Chapter", Margin = new Thickness(0, 0, 6, 0) };
-        var saveButton = new Button { Content = "Save", Margin = new Thickness(0, 0, 6, 0) };
-        var typstButton = new Button { Content = "Export Book .typ", Margin = new Thickness(0, 0, 6, 0) };
-        var latexButton = new Button { Content = "Export Book .tex", Margin = new Thickness(0, 0, 6, 0) };
+        var bar = new WrapPanel { Margin = new Thickness(8), Orientation = Orientation.Horizontal };
+        var newButton = ToolbarButton("New Project");
+        var openButton = ToolbarButton("Open Project");
+        var saveButton = ToolbarButton("Save");
+        var typstButton = ToolbarButton("Export .typ");
+        var latexButton = ToolbarButton("Export .tex");
 
         newButton.Click += async (_, _) => await RunUiTaskAsync(CreateProjectAsync);
         openButton.Click += async (_, _) => await RunUiTaskAsync(OpenProjectAsync);
-        addChapterButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.AddChapterAsync());
         saveButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.SaveNowAsync());
+        _styleButton.Click += async (_, _) => await RunUiTaskAsync(EditStyleAsync);
+        _previewPdfButton.Click += async (_, _) => await RunUiTaskAsync(PreviewPdfAsync);
         _exportPdfButton.Click += async (_, _) => await RunUiTaskAsync(ExportPdfAsync);
         _downloadPdfEngineButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.EnsurePdfEngineAsync());
         typstButton.Click += async (_, _) => await RunUiTaskAsync(ExportTypstAsync);
@@ -101,12 +115,13 @@ public sealed class MainWindow : Window
 
         bar.Children.Add(newButton);
         bar.Children.Add(openButton);
-        bar.Children.Add(addChapterButton);
         bar.Children.Add(saveButton);
+        bar.Children.Add(_styleButton);
+        bar.Children.Add(_previewPdfButton);
         bar.Children.Add(_exportPdfButton);
         bar.Children.Add(_downloadPdfEngineButton);
-        bar.Children.Add(typstButton);
         bar.Children.Add(latexButton);
+        bar.Children.Add(typstButton);
         return bar;
     }
 
@@ -124,14 +139,53 @@ public sealed class MainWindow : Window
         Grid.SetColumn(searchButton, 1);
         searchRow.Children.Add(searchButton);
 
-        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,3*,Auto,2*") };
+        var searchOptions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        _regexSearch.Margin = new Thickness(0, 0, 8, 0);
+        _caseSearch.Margin = new Thickness(0, 0, 8, 0);
+        searchOptions.Children.Add(_regexSearch);
+        searchOptions.Children.Add(_caseSearch);
+        searchOptions.Children.Add(_wholeWordSearch);
+
+        var binderActions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        var addChapter = SmallButton("+ Chapter");
+        var addFolder = SmallButton("+ Folder");
+        var addPart = SmallButton("+ Part");
+        _renameBinderButton.Margin = new Thickness(0, 0, 4, 4);
+        _deleteBinderButton.Margin = new Thickness(0, 0, 4, 4);
+        _moveUpButton.Margin = new Thickness(0, 0, 4, 4);
+        _moveDownButton.Margin = new Thickness(0, 0, 4, 4);
+        _includeButton.Margin = new Thickness(0, 0, 4, 4);
+
+        addChapter.Click += async (_, _) => await RunUiTaskAsync(() => AddBinderNodeAsync(NodeKind.Chapter, "New Chapter"));
+        addFolder.Click += async (_, _) => await RunUiTaskAsync(() => AddBinderNodeAsync(NodeKind.Folder, "New Folder"));
+        addPart.Click += async (_, _) => await RunUiTaskAsync(() => AddBinderNodeAsync(NodeKind.Part, "New Part"));
+        _renameBinderButton.Click += async (_, _) => await RunUiTaskAsync(RenameBinderNodeAsync);
+        _deleteBinderButton.Click += async (_, _) => await RunUiTaskAsync(DeleteBinderNodeAsync);
+        _moveUpButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.MoveSelectedAsync(-1));
+        _moveDownButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.MoveSelectedAsync(1));
+        _includeButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.ToggleSelectedCompilationAsync());
+
+        binderActions.Children.Add(addChapter);
+        binderActions.Children.Add(addFolder);
+        binderActions.Children.Add(addPart);
+        binderActions.Children.Add(_renameBinderButton);
+        binderActions.Children.Add(_deleteBinderButton);
+        binderActions.Children.Add(_moveUpButton);
+        binderActions.Children.Add(_moveDownButton);
+        binderActions.Children.Add(_includeButton);
+
+        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,3*,Auto,2*") };
         panel.Children.Add(searchRow);
-        Grid.SetRow(_binder, 1);
+        Grid.SetRow(searchOptions, 1);
+        panel.Children.Add(searchOptions);
+        Grid.SetRow(binderActions, 2);
+        panel.Children.Add(binderActions);
+        Grid.SetRow(_binder, 3);
         panel.Children.Add(_binder);
         var resultLabel = new TextBlock { Text = "Search results", Margin = new Thickness(0, 8, 0, 4) };
-        Grid.SetRow(resultLabel, 2);
+        Grid.SetRow(resultLabel, 4);
         panel.Children.Add(resultLabel);
-        Grid.SetRow(_searchResults, 3);
+        Grid.SetRow(_searchResults, 5);
         panel.Children.Add(_searchResults);
         return panel;
     }
@@ -156,14 +210,13 @@ public sealed class MainWindow : Window
         _preview.FontSize = 16;
         _preview.LineHeight = 24;
         _preview.Margin = new Thickness(18);
-        var scroll = new ScrollViewer
+        return new ScrollViewer
         {
             Content = _preview,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#FAF8F4"))
         };
-        return scroll;
     }
 
     private Control BuildStatusBar()
@@ -205,11 +258,44 @@ public sealed class MainWindow : Window
         if (folder is not null) await _viewModel.OpenProjectAsync(folder.Path.LocalPath);
     }
 
+    private async Task AddBinderNodeAsync(NodeKind kind, string initialTitle)
+    {
+        var title = await DesktopDialogService.PromptAsync(this, $"Add {kind}", "Title", initialTitle);
+        if (title is not null) await _viewModel.AddNodeAsync(kind, title);
+    }
+
+    private async Task RenameBinderNodeAsync()
+    {
+        if (!_viewModel.HasSelection) return;
+        var title = await DesktopDialogService.PromptAsync(this, "Rename Binder Item", "Title", _viewModel.SelectedTitle);
+        if (title is not null) await _viewModel.RenameSelectedAsync(title);
+    }
+
+    private async Task DeleteBinderNodeAsync()
+    {
+        if (!_viewModel.HasSelection) return;
+        var confirmed = await DesktopDialogService.ConfirmAsync(
+            this,
+            "Delete Binder Item",
+            $"Delete '{_viewModel.SelectedTitle}' and its on-disk content? This cannot be undone.");
+        if (confirmed) await _viewModel.DeleteSelectedAsync();
+    }
+
+    private async Task EditStyleAsync()
+    {
+        if (!_viewModel.HasProject) return;
+        var style = await DesktopDialogService.EditStyleAsync(this, _viewModel.CurrentStyle);
+        if (style is not null) await _viewModel.UpdateStyleAsync(style);
+    }
+
+    private async Task PreviewPdfAsync()
+    {
+        var path = await _viewModel.BuildPdfPreviewAsync();
+        ExternalFileLauncher.Open(path);
+    }
+
     private async Task ExportPdfAsync()
     {
-        if (!_viewModel.CanPublishPdf)
-            await _viewModel.EnsurePdfEngineAsync();
-
         var path = await PickSavePathAsync("Publish Book PDF", "PDF document", "pdf");
         if (path is not null) await _viewModel.ExportPdfAsync(path);
     }
@@ -247,8 +333,16 @@ public sealed class MainWindow : Window
 
     private async Task SearchAsync()
     {
-        await _viewModel.SearchAsync(_searchBox.Text ?? string.Empty);
-        _searchResults.ItemsSource = _viewModel.SearchResults.Select(static hit => $"{hit.Title}:{hit.Line}  {hit.Preview}").ToArray();
+        var options = new SearchOptions(
+            MatchCase: _caseSearch.IsChecked == true,
+            UseRegex: _regexSearch.IsChecked == true,
+            WholeWord: _wholeWordSearch.IsChecked == true);
+        await _viewModel.SearchAsync(_searchBox.Text ?? string.Empty, options);
+        _searchResults.ItemsSource = _viewModel.SearchResults
+            .Select(static hit => hit.Line == 0
+                ? $"{hit.Title} [title]  {hit.Preview}"
+                : $"{hit.Title}:{hit.Line}  {hit.Preview}")
+            .ToArray();
     }
 
     private async void BinderSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -298,10 +392,20 @@ public sealed class MainWindow : Window
             _wordCount.Text = $"{_viewModel.WordCount:N0} words";
             _engine.Text = _viewModel.CanPublishPdf
                 ? $"PDF: {_viewModel.PublishingEngineName}"
-                : "PDF engine not installed";
+                : "PDF: LuaLaTeX not installed";
+
             _downloadPdfEngineButton.IsVisible = !_viewModel.CanPublishPdf;
             _downloadPdfEngineButton.IsEnabled = !_viewModel.CanPublishPdf;
-            _exportPdfButton.IsEnabled = _viewModel.HasDocument;
+            _previewPdfButton.IsEnabled = _viewModel.HasProject;
+            _exportPdfButton.IsEnabled = _viewModel.HasProject;
+            _styleButton.IsEnabled = _viewModel.HasProject;
+
+            _renameBinderButton.IsEnabled = _viewModel.HasSelection;
+            _deleteBinderButton.IsEnabled = _viewModel.HasSelection;
+            _moveUpButton.IsEnabled = _viewModel.HasSelection;
+            _moveDownButton.IsEnabled = _viewModel.HasSelection;
+            _includeButton.IsEnabled = _viewModel.HasSelection;
+            _includeButton.Content = _viewModel.SelectedIncluded ? "Exclude" : "Include";
         }
         finally
         {
@@ -327,16 +431,21 @@ public sealed class MainWindow : Window
         var dialog = new Window
         {
             Title = "Typescribe",
-            Width = 520,
-            Height = 220,
+            Width = 600,
+            Height = 280,
             CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Content = new StackPanel
             {
                 Margin = new Thickness(20),
                 Spacing = 18,
                 Children =
                 {
-                    new TextBlock { Text = message, TextWrapping = Avalonia.Media.TextWrapping.Wrap },
+                    new ScrollViewer
+                    {
+                        MaxHeight = 180,
+                        Content = new TextBlock { Text = message, TextWrapping = Avalonia.Media.TextWrapping.Wrap }
+                    },
                     close
                 }
             }
@@ -350,4 +459,10 @@ public sealed class MainWindow : Window
         _viewModel.StateChanged -= OnStateChanged;
         await _viewModel.DisposeAsync();
     }
+
+    private static Button ToolbarButton(string content)
+        => new() { Content = content, Margin = new Thickness(0, 0, 6, 0) };
+
+    private static Button SmallButton(string content)
+        => new() { Content = content, Margin = new Thickness(0, 0, 4, 4) };
 }
