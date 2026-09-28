@@ -13,6 +13,7 @@ public interface IProjectRepository
     Task RenameNodeAsync(BookProject project, ProjectNode node, string newTitle, CancellationToken cancellationToken = default);
     Task DeleteNodeAsync(BookProject project, ProjectNode node, CancellationToken cancellationToken = default);
     Task<bool> MoveNodeAsync(BookProject project, ProjectNode node, int offset, CancellationToken cancellationToken = default);
+    Task<bool> ReparentNodeAsync(BookProject project, ProjectNode node, ProjectNode? newParent, int targetIndex, CancellationToken cancellationToken = default);
     Task SetCompilationIncludedAsync(BookProject project, ProjectNode node, bool included, CancellationToken cancellationToken = default);
     Task SaveStyleAsync(BookProject project, BookStyle style, CancellationToken cancellationToken = default);
     IAsyncEnumerable<(ProjectNode Node, string Content)> EnumerateDocumentsAsync(BookProject project, CancellationToken cancellationToken = default);
