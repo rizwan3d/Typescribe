@@ -1,13 +1,13 @@
-using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Themes.Fluent;
+using AvaloniaApplication = Avalonia.Application;
 using Typescribe.Application.Services;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Infrastructure.Services;
 
 namespace Typescribe.Desktop;
 
-public sealed class App : Application
+public sealed class App : AvaloniaApplication
 {
     public override void Initialize()
     {
@@ -27,6 +27,7 @@ public sealed class App : Application
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
             desktop.MainWindow = new MainWindow(viewModel);
         }
+
         base.OnFrameworkInitializationCompleted();
     }
 }
