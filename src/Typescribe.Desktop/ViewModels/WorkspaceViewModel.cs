@@ -24,12 +24,15 @@ public sealed class WorkspaceViewModel(
     private string _editorText = string.Empty;
     private bool _suppressEditorChanges;
     private bool _isDirty;
+    private bool _previewWholeBook;
     private long _editVersion;
     private long _previewBuildVersion;
+    private long _editorNavigationVersion;
 
     public event EventHandler? StateChanged;
     public ObservableCollection<BinderRowViewModel> BinderRows { get; } = [];
     public ObservableCollection<SearchHit> SearchResults { get; } = [];
+    public ObservableCollection<OutlineItemViewModel> OutlineItems { get; } = [];
 
     public string ProjectTitle => _project?.Title ?? "Typescribe";
     public string EditorText => _editorText;
@@ -37,6 +40,7 @@ public sealed class WorkspaceViewModel(
     public int WordCount { get; private set; }
     public string Status { get; private set; } = "Ready";
     public BinderRowViewModel? SelectedRow { get; private set; }
+    public OutlineItemViewModel? SelectedOutline { get; private set; }
     public bool HasProject => _project is not null;
     public bool HasSelection => _selectedNode is not null;
     public bool HasDocument => _selectedNode?.IsDocument == true;
@@ -50,6 +54,16 @@ public sealed class WorkspaceViewModel(
     public long LivePreviewVersion { get; private set; }
     public bool IsLivePreviewBuilding { get; private set; }
     public string? LivePreviewError { get; private set; }
+    public bool PreviewWholeBook => _previewWholeBook;
+    public string PreviewScopeLabel => _previewWholeBook
+        ? "Whole Book"
+        : SelectedOutline is not null
+            ? $"Section: {SelectedOutline.Title}"
+            : HasDocument
+                ? $"Document: {SelectedTitle}"
+                : "Whole Book";
+    public int EditorNavigationLine { get; private set; } = 1;
+    public long EditorNavigationVersion => _editorNavigationVersion;
 
     public async Task CreateProjectAsync(string folder, CancellationToken cancellationToken = default)
     {
@@ -78,6 +92,7 @@ public sealed class WorkspaceViewModel(
 
         SelectedRow = row;
         _selectedNode = row.Node;
+        SelectedOutline = null;
         _suppressEditorChanges = true;
         try
         {
@@ -87,6 +102,7 @@ public sealed class WorkspaceViewModel(
                 _isDirty = false;
                 _editVersion = 0;
                 RecomputeDocumentState();
+                RequestEditorNavigation(1);
                 SetStatus($"Editing {_selectedNode.Title}");
             }
             else
@@ -94,6 +110,7 @@ public sealed class WorkspaceViewModel(
                 _editorText = string.Empty;
                 _isDirty = false;
                 _editVersion = 0;
+                OutlineItems.Clear();
                 PreviewText = $"{_selectedNode.Kind}: {_selectedNode.Title}";
                 WordCount = 0;
                 SetStatus($"Selected {_selectedNode.Title}");
@@ -177,6 +194,40 @@ public sealed class WorkspaceViewModel(
         SetStatus(offset < 0 ? "Moved binder item up" : "Moved binder item down");
     }
 
+    public bool CanDropBinderItem(BinderRowViewModel? source, BinderRowViewModel? target)
+    {
+        if (_project is null || source is null || target is null) return false;
+        if (ReferenceEquals(source.Node, target.Node)) return false;
+        return !ContainsNode(source.Node, target.Node);
+    }
+
+    public async Task MoveBinderItemAsync(
+        BinderRowViewModel source,
+        BinderRowViewModel target,
+        bool dropIntoTarget,
+        CancellationToken cancellationToken = default)
+    {
+        if (_project is null || !CanDropBinderItem(source, target)) return;
+        await FlushAutosaveAsync();
+
+        var destinationParent = dropIntoTarget && target.Node.IsContainer
+            ? target.Node
+            : FindParent(_project.Root, target.Node) ?? _project.Root;
+        var targetIndex = ReferenceEquals(destinationParent, target.Node)
+            ? destinationParent.Children.Count
+            : Math.Max(0, destinationParent.IndexOf(target.Node));
+
+        if (!await repository.ReparentNodeAsync(_project, source.Node, destinationParent, targetIndex, cancellationToken)) return;
+
+        RefreshBinder();
+        SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, source.Node));
+        _selectedNode = source.Node;
+        ScheduleLivePdfPreview();
+        SetStatus(dropIntoTarget && target.Node.IsContainer
+            ? $"Moved {source.Node.Title} into {target.Node.Title}"
+            : $"Moved {source.Node.Title} before {target.Node.Title}");
+    }
+
     public async Task ToggleSelectedCompilationAsync(CancellationToken cancellationToken = default)
     {
         if (_project is null || _selectedNode is null) return;
@@ -195,6 +246,32 @@ public sealed class WorkspaceViewModel(
         RecomputeDocumentState();
         ScheduleLivePdfPreview();
         SetStatus($"Applied style: {style.Name}");
+    }
+
+    public void SetPreviewWholeBook(bool enabled)
+    {
+        if (_previewWholeBook == enabled) return;
+        _previewWholeBook = enabled;
+        ScheduleLivePdfPreview(TimeSpan.Zero);
+        SetStatus(enabled ? "Preview scope: whole book" : $"Preview scope: {PreviewScopeLabel}");
+    }
+
+    public void SelectOutline(OutlineItemViewModel? item)
+    {
+        if (!HasDocument) return;
+        SelectedOutline = item;
+        if (item is not null)
+        {
+            RequestEditorNavigation(item.SourceLine);
+            SetStatus($"Focused heading: {item.Title}");
+        }
+        else
+        {
+            RequestEditorNavigation(1);
+            SetStatus($"Previewing {SelectedTitle}");
+        }
+        ScheduleLivePdfPreview(TimeSpan.Zero);
+        StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task SearchAsync(
@@ -218,7 +295,10 @@ public sealed class WorkspaceViewModel(
     {
         if (hit is null) return;
         var row = BinderRows.FirstOrDefault(candidate => candidate.Node.Id == hit.NodeId);
-        if (row is not null) await SelectAsync(row, cancellationToken);
+        if (row is null) return;
+        await SelectAsync(row, cancellationToken);
+        if (hit.Line > 0) RequestEditorNavigation(hit.Line);
+        StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task EnsurePdfEngineAsync(CancellationToken cancellationToken = default)
@@ -299,12 +379,55 @@ public sealed class WorkspaceViewModel(
         {
             PreviewText = _selectedNode is null ? "Select a manuscript document to begin." : $"{_selectedNode.Kind}: {_selectedNode.Title}";
             WordCount = 0;
+            OutlineItems.Clear();
+            SelectedOutline = null;
             return;
         }
 
+        var previousHeading = SelectedOutline;
         var ast = parser.Parse(_editorText);
         PreviewText = renderer.RenderPreview(ast);
         WordCount = wordCountService.Count(_editorText);
+        RebuildOutline(ast, previousHeading);
+    }
+
+    private void RebuildOutline(DocumentAst ast, OutlineItemViewModel? previousHeading)
+    {
+        var headings = ast.Blocks.OfType<HeadingBlock>().ToArray();
+        var totalLines = Math.Max(1, CountLines(_editorText));
+        var items = new List<OutlineItemViewModel>(headings.Length);
+
+        for (var index = 0; index < headings.Length; index++)
+        {
+            var heading = headings[index];
+            var endLine = totalLines;
+            for (var next = index + 1; next < headings.Length; next++)
+            {
+                if (headings[next].Level <= heading.Level)
+                {
+                    endLine = Math.Max(heading.SourceLine, headings[next].SourceLine - 1);
+                    break;
+                }
+            }
+            items.Add(new OutlineItemViewModel(
+                heading.Inlines.ToPlainText(),
+                heading.Level,
+                heading.SourceLine,
+                endLine));
+        }
+
+        OutlineItems.Clear();
+        foreach (var item in items) OutlineItems.Add(item);
+
+        if (previousHeading is null)
+        {
+            SelectedOutline = null;
+            return;
+        }
+
+        SelectedOutline = items.FirstOrDefault(item =>
+            item.Level == previousHeading.Level &&
+            string.Equals(item.Title, previousHeading.Title, StringComparison.Ordinal));
     }
 
     private void ScheduleAutosave()
@@ -379,19 +502,20 @@ public sealed class WorkspaceViewModel(
             cancellationToken.ThrowIfCancellationRequested();
             IsLivePreviewBuilding = true;
             LivePreviewError = null;
-            Status = "Updating live PDF preview…";
+            Status = $"Updating live PDF preview — {PreviewScopeLabel}…";
             StateChanged?.Invoke(this, EventArgs.Empty);
 
-            var source = await BuildCompilationSourceAsync(cancellationToken, useEditorBuffer: true);
+            var source = await BuildPreviewSourceAsync(cancellationToken);
             var buildDirectory = Path.Combine(_project.RootPath, "build");
             Directory.CreateDirectory(buildDirectory);
             var destination = Path.Combine(buildDirectory, "live-preview.pdf");
-            await exportService.ExportPdfPreviewAsync(source, _project.Title, _project.Style, destination, cancellationToken);
+            var previewTitle = HasDocument && !_previewWholeBook ? SelectedTitle : _project.Title;
+            await exportService.ExportPdfPreviewAsync(source, previewTitle, _project.Style, destination, cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
             LivePreviewPdfPath = destination;
             LivePreviewVersion = Interlocked.Increment(ref _previewBuildVersion);
-            Status = "Live PDF preview updated";
+            Status = $"Live PDF preview updated — {PreviewScopeLabel}";
         }
         finally
         {
@@ -399,6 +523,17 @@ public sealed class WorkspaceViewModel(
             _previewGate.Release();
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private async Task<string> BuildPreviewSourceAsync(CancellationToken cancellationToken)
+    {
+        if (_project is null) throw new InvalidOperationException("Open a project first.");
+        if (_previewWholeBook || _selectedNode?.IsDocument != true)
+            return await BuildCompilationSourceAsync(cancellationToken, useEditorBuffer: true);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SelectedOutline is null) return _editorText;
+        return SliceLines(_editorText, SelectedOutline.SourceLine, SelectedOutline.EndLine);
     }
 
     private async Task SaveCurrentDocumentAsync(CancellationToken cancellationToken)
@@ -443,6 +578,8 @@ public sealed class WorkspaceViewModel(
         _previewCts = null;
         _selectedNode = null;
         SelectedRow = null;
+        SelectedOutline = null;
+        OutlineItems.Clear();
         _editorText = string.Empty;
         _isDirty = false;
         _editVersion = 0;
@@ -452,6 +589,7 @@ public sealed class WorkspaceViewModel(
         LivePreviewVersion = 0;
         LivePreviewError = null;
         IsLivePreviewBuilding = false;
+        EditorNavigationLine = 1;
     }
 
     private async Task<string> BuildCompilationSourceAsync(CancellationToken cancellationToken, bool useEditorBuffer)
@@ -467,6 +605,50 @@ public sealed class WorkspaceViewModel(
             builder.Append(effectiveContent.TrimEnd()).AppendLine();
         }
         return builder.ToString();
+    }
+
+    private void RequestEditorNavigation(int line)
+    {
+        EditorNavigationLine = Math.Max(1, line);
+        _editorNavigationVersion++;
+    }
+
+    private static int CountLines(string text)
+    {
+        if (text.Length == 0) return 1;
+        var count = 1;
+        foreach (var ch in text)
+            if (ch == '\n') count++;
+        return count;
+    }
+
+    private static string SliceLines(string text, int startLine, int endLine)
+    {
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        var start = Math.Clamp(startLine - 1, 0, Math.Max(0, lines.Length - 1));
+        var endExclusive = Math.Clamp(endLine, start + 1, lines.Length);
+        return string.Join(Environment.NewLine, lines[start..endExclusive]);
+    }
+
+    private static ProjectNode? FindParent(ProjectNode root, ProjectNode target)
+    {
+        foreach (var child in root.Children)
+        {
+            if (ReferenceEquals(child, target)) return root;
+            var parent = FindParent(child, target);
+            if (parent is not null) return parent;
+        }
+        return null;
+    }
+
+    private static bool ContainsNode(ProjectNode root, ProjectNode target)
+    {
+        foreach (var child in root.Children)
+        {
+            if (ReferenceEquals(child, target) || ContainsNode(child, target)) return true;
+        }
+        return false;
     }
 
     private void EnsureProject()
