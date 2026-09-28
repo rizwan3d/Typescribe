@@ -207,6 +207,9 @@ public sealed class MainWindow : Window
 
     private async Task ExportPdfAsync()
     {
+        if (!_viewModel.CanPublishPdf)
+            await _viewModel.EnsurePdfEngineAsync();
+
         var path = await PickSavePathAsync("Publish Book PDF", "PDF document", "pdf");
         if (path is not null) await _viewModel.ExportPdfAsync(path);
     }
@@ -298,7 +301,7 @@ public sealed class MainWindow : Window
                 : "PDF engine not installed";
             _downloadPdfEngineButton.IsVisible = !_viewModel.CanPublishPdf;
             _downloadPdfEngineButton.IsEnabled = !_viewModel.CanPublishPdf;
-            _exportPdfButton.IsEnabled = _viewModel.HasDocument && _viewModel.CanPublishPdf;
+            _exportPdfButton.IsEnabled = _viewModel.HasDocument;
         }
         finally
         {
