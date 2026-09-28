@@ -49,6 +49,14 @@
     <Setter Property="Padding" Value="10,7" />
   </Style>
 
+  <Style Selector="Window.typescribe-studio WrapPanel.toolbar-panel">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio Grid.status-panel">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+  </Style>
+
   <Style Selector="Window.typescribe-studio Button">
     <Setter Property="MinHeight" Value="34" />
     <Setter Property="Padding" Value="12,6" />
@@ -149,18 +157,6 @@
     <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="12" />
-  </Style>
-
-  <Style Selector="Window.typescribe-studio Border.toolbar-surface">
-    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
-    <Setter Property="BorderThickness" Value="0,0,0,1" />
-  </Style>
-
-  <Style Selector="Window.typescribe-studio Border.status-surface">
-    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
-    <Setter Property="BorderThickness" Value="0,1,0,0" />
   </Style>
 
   <Style Selector="Window.typescribe-studio TextBlock.section-title">
