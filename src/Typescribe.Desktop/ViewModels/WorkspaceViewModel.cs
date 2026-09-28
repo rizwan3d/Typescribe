@@ -205,6 +205,7 @@ public sealed class WorkspaceViewModel(
         BinderRowViewModel source,
         BinderRowViewModel target,
         bool dropIntoTarget,
+        bool insertAfterTarget = false,
         CancellationToken cancellationToken = default)
     {
         if (_project is null || !CanDropBinderItem(source, target)) return;
@@ -215,7 +216,7 @@ public sealed class WorkspaceViewModel(
             : FindParent(_project.Root, target.Node) ?? _project.Root;
         var targetIndex = ReferenceEquals(destinationParent, target.Node)
             ? destinationParent.Children.Count
-            : Math.Max(0, destinationParent.IndexOf(target.Node));
+            : Math.Max(0, destinationParent.IndexOf(target.Node) + (insertAfterTarget ? 1 : 0));
 
         if (!await repository.ReparentNodeAsync(_project, source.Node, destinationParent, targetIndex, cancellationToken)) return;
 
@@ -223,9 +224,12 @@ public sealed class WorkspaceViewModel(
         SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, source.Node));
         _selectedNode = source.Node;
         ScheduleLivePdfPreview();
-        SetStatus(dropIntoTarget && target.Node.IsContainer
-            ? $"Moved {source.Node.Title} into {target.Node.Title}"
-            : $"Moved {source.Node.Title} before {target.Node.Title}");
+        var placement = dropIntoTarget && target.Node.IsContainer
+            ? $"into {target.Node.Title}"
+            : insertAfterTarget
+                ? $"after {target.Node.Title}"
+                : $"before {target.Node.Title}";
+        SetStatus($"Moved {source.Node.Title} {placement}");
     }
 
     public async Task ToggleSelectedCompilationAsync(CancellationToken cancellationToken = default)
