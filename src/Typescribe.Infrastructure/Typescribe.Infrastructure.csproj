@@ -8,12 +8,4 @@
     <ProjectReference Include="../Typescribe.Domain/Typescribe.Domain.csproj" />
     <ProjectReference Include="../Typescribe.Application/Typescribe.Application.csproj" />
   </ItemGroup>
-
-  <ItemGroup Condition="Exists('tools/typst')">
-    <EmbeddedResource Include="tools/typst" LogicalName="Typescribe.Engine.typst" />
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('tools/typst.exe')">
-    <EmbeddedResource Include="tools/typst.exe" LogicalName="Typescribe.Engine.typst" />
-  </ItemGroup>
 </Project>
