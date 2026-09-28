@@ -27,8 +27,8 @@
 ./src/Typescribe.Application/Typescribe.Application.csproj
 ./src/Typescribe.Desktop/App.cs
 ./src/Typescribe.Desktop/DesktopDialogService.cs
-./src/Typescribe.Desktop/ExternalFileLauncher.cs
 ./src/Typescribe.Desktop/MainWindow.cs
+./src/Typescribe.Desktop/PdfPreviewRenderer.cs
 ./src/Typescribe.Desktop/Program.cs
 ./src/Typescribe.Desktop/Typescribe.Desktop.csproj
 ./src/Typescribe.Desktop/ViewModels/BinderRowViewModel.cs
