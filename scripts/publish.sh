@@ -7,6 +7,7 @@ if [[ -z "$RID" ]]; then
   ARCH="$(uname -m)"
   case "$OS/$ARCH" in
     Linux/x86_64) RID="linux-x64" ;;
+    Linux/aarch64|Linux/arm64) RID="linux-arm64" ;;
     Darwin/x86_64) RID="osx-x64" ;;
     Darwin/arm64) RID="osx-arm64" ;;
     *) echo "Could not infer a supported RID. Pass it explicitly." >&2; exit 2 ;;
@@ -18,7 +19,6 @@ ARTIFACTS="$ROOT/artifacts"
 PUBLISH="$ARTIFACTS/publish/$RID"
 PROJECT="$ROOT/src/Typescribe.Desktop/Typescribe.Desktop.csproj"
 
-"$ROOT/scripts/fetch-typst.sh" "$RID"
 rm -rf "$PUBLISH"
 mkdir -p "$PUBLISH" "$ARTIFACTS"
 
@@ -38,6 +38,7 @@ cp "$ROOT/README.md" "$PUBLISH/README.md"
 case "$RID" in
   linux-*)
     ARCHIVE="$ARTIFACTS/Typescribe-$RID.tar.gz"
+    rm -f "$ARCHIVE"
     tar -C "$PUBLISH" -czf "$ARCHIVE" .
     ;;
   osx-*)
