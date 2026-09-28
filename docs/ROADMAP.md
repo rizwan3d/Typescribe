@@ -9,10 +9,14 @@
 - Persistent hierarchical binder
 - Chapters, parts, and folders
 - Binder rename/delete/reorder/include-exclude
+- Drag/drop binder reordering and reparenting with real filesystem moves
 - Markdown-like parser to canonical semantic AST
 - Inline strong/emphasis/code/link/math
 - Headings, quotes, ordered/unordered lists, code blocks, display math, thematic breaks
 - Editor with debounced autosave and atomic writes
+- Document heading outline with editor navigation
+- Selection-scoped live preview for document or heading
+- Optional whole-book live preview
 - Word count
 - Project title/content search
 - Case-sensitive, whole-word, and regex search
@@ -26,15 +30,19 @@
 - Two-pass final PDF export
 - LaTeX source export
 - Whole-book compilation in binder order
+- Resizable Binder / Editor / Inspector workspace
+- Binder/Search and PDF Preview/Outline tabs
+- Desktop menu bar, toolbar, context menu, and common keyboard shortcuts
 - Cross-platform compile CI
 
 ## v0.1 follow-up hardening
 
-- Drag/drop binder reparenting
-- Source-to-PDF cursor synchronization
+- Persist window, pane widths, active tabs, and preview zoom between sessions
+- Source-to-PDF cursor synchronization beyond heading/document scope
 - Virtualized multi-page PDF scrolling and page thumbnails
 - PDF text selection/search in preview
 - Structured LuaLaTeX diagnostics mapped to manuscript source lines
+- Undoable binder filesystem operations
 - Parser/render/persistence automated test suite
 - Native AOT publish validation in CI
 - Performance fixtures for very large projects
@@ -42,8 +50,8 @@
 
 ## v0.2
 
-- Corkboard and outline views
-- Rich metadata fields
+- Corkboard and richer outline views
+- Rich metadata fields and inspector
 - Footnotes/endnotes
 - Figures and asset management
 - Tables
