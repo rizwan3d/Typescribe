@@ -10,7 +10,6 @@ $Artifacts = Join-Path $Root 'artifacts'
 $Publish = Join-Path $Artifacts "publish/$Rid"
 $Project = Join-Path $Root 'src/Typescribe.Desktop/Typescribe.Desktop.csproj'
 
-& (Join-Path $PSScriptRoot 'fetch-typst.ps1') -Rid $Rid
 if (Test-Path $Publish) { Remove-Item $Publish -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Publish, $Artifacts | Out-Null
 
