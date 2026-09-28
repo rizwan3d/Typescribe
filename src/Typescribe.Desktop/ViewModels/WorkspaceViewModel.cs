@@ -16,13 +16,16 @@ public sealed class WorkspaceViewModel(
     IDocumentExportService exportService) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _saveGate = new(1, 1);
+    private readonly SemaphoreSlim _previewGate = new(1, 1);
     private CancellationTokenSource? _autosaveCts;
+    private CancellationTokenSource? _previewCts;
     private BookProject? _project;
     private ProjectNode? _selectedNode;
     private string _editorText = string.Empty;
     private bool _suppressEditorChanges;
     private bool _isDirty;
     private long _editVersion;
+    private long _previewBuildVersion;
 
     public event EventHandler? StateChanged;
     public ObservableCollection<BinderRowViewModel> BinderRows { get; } = [];
@@ -43,6 +46,10 @@ public sealed class WorkspaceViewModel(
     public BookStyle CurrentStyle => _project?.Style ?? BookStyle.Default;
     public bool CanPublishPdf => exportService.CanPublishPdf;
     public string PublishingEngineName => exportService.PublishingEngineName;
+    public string? LivePreviewPdfPath { get; private set; }
+    public long LivePreviewVersion { get; private set; }
+    public bool IsLivePreviewBuilding { get; private set; }
+    public string? LivePreviewError { get; private set; }
 
     public async Task CreateProjectAsync(string folder, CancellationToken cancellationToken = default)
     {
@@ -97,6 +104,7 @@ public sealed class WorkspaceViewModel(
             _suppressEditorChanges = false;
         }
 
+        ScheduleLivePdfPreview();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -108,6 +116,7 @@ public sealed class WorkspaceViewModel(
         _editVersion++;
         RecomputeDocumentState();
         ScheduleAutosave();
+        ScheduleLivePdfPreview();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -125,6 +134,7 @@ public sealed class WorkspaceViewModel(
         RefreshBinder();
         var row = BinderRows.First(candidate => ReferenceEquals(candidate.Node, node));
         await SelectAsync(row, cancellationToken);
+        ScheduleLivePdfPreview();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -137,6 +147,7 @@ public sealed class WorkspaceViewModel(
         RefreshBinder();
         var row = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, node));
         if (row is not null) await SelectAsync(row, cancellationToken);
+        ScheduleLivePdfPreview();
         SetStatus($"Renamed to {newTitle.Trim()}");
     }
 
@@ -150,6 +161,7 @@ public sealed class WorkspaceViewModel(
         RefreshBinder();
         var next = BinderRows.FirstOrDefault(static row => row.Node.IsDocument) ?? BinderRows.FirstOrDefault();
         if (next is not null) await SelectAsync(next, cancellationToken);
+        ScheduleLivePdfPreview();
         SetStatus($"Deleted {title}");
     }
 
@@ -161,6 +173,7 @@ public sealed class WorkspaceViewModel(
         if (!await repository.MoveNodeAsync(_project, node, offset, cancellationToken)) return;
         RefreshBinder();
         SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, node));
+        ScheduleLivePdfPreview();
         SetStatus(offset < 0 ? "Moved binder item up" : "Moved binder item down");
     }
 
@@ -171,6 +184,7 @@ public sealed class WorkspaceViewModel(
         await repository.SetCompilationIncludedAsync(_project, _selectedNode, include, cancellationToken);
         RefreshBinder();
         SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, _selectedNode));
+        ScheduleLivePdfPreview();
         SetStatus(include ? "Included in compilation" : "Excluded from compilation");
     }
 
@@ -179,6 +193,7 @@ public sealed class WorkspaceViewModel(
         if (_project is null) return;
         await repository.SaveStyleAsync(_project, style.Validate(), cancellationToken);
         RecomputeDocumentState();
+        ScheduleLivePdfPreview();
         SetStatus($"Applied style: {style.Name}");
     }
 
@@ -208,31 +223,21 @@ public sealed class WorkspaceViewModel(
 
     public async Task EnsurePdfEngineAsync(CancellationToken cancellationToken = default)
     {
-        if (CanPublishPdf)
+        if (!CanPublishPdf)
         {
-            SetStatus($"PDF engine ready: {PublishingEngineName}");
-            return;
+            SetStatus("Downloading and verifying portable LuaLaTeX…");
+            await exportService.EnsurePdfEngineAsync(cancellationToken);
         }
 
-        SetStatus("Downloading and verifying portable LuaLaTeX…");
-        await exportService.EnsurePdfEngineAsync(cancellationToken);
         SetStatus($"PDF engine ready: {PublishingEngineName}");
+        ScheduleLivePdfPreview(TimeSpan.Zero);
     }
 
-    public async Task<string> BuildPdfPreviewAsync(CancellationToken cancellationToken = default)
+    public async Task RefreshLivePdfPreviewAsync(CancellationToken cancellationToken = default)
     {
         EnsureProject();
-        await FlushAutosaveAsync();
         if (!CanPublishPdf) await EnsurePdfEngineAsync(cancellationToken);
-
-        SetStatus("Building production PDF preview…");
-        var source = await BuildCompilationSourceAsync(cancellationToken);
-        var buildDirectory = Path.Combine(_project!.RootPath, "build");
-        Directory.CreateDirectory(buildDirectory);
-        var destination = Path.Combine(buildDirectory, "preview.pdf");
-        await exportService.ExportPdfAsync(source, _project.Title, _project.Style, destination, cancellationToken);
-        SetStatus("PDF preview ready");
-        return destination;
+        await BuildLivePdfPreviewCoreAsync(cancellationToken);
     }
 
     public async Task ExportPdfAsync(string destination, CancellationToken cancellationToken = default)
@@ -242,25 +247,16 @@ public sealed class WorkspaceViewModel(
         if (!CanPublishPdf) await EnsurePdfEngineAsync(cancellationToken);
 
         SetStatus("Publishing book PDF with LuaLaTeX…");
-        var source = await BuildCompilationSourceAsync(cancellationToken);
+        var source = await BuildCompilationSourceAsync(cancellationToken, useEditorBuffer: false);
         await exportService.ExportPdfAsync(source, _project!.Title, _project.Style, destination, cancellationToken);
         SetStatus($"Published {Path.GetFileName(destination)}");
-    }
-
-    public async Task ExportTypstAsync(string destination, CancellationToken cancellationToken = default)
-    {
-        EnsureProject();
-        await FlushAutosaveAsync();
-        var source = await BuildCompilationSourceAsync(cancellationToken);
-        await exportService.ExportTypstAsync(source, _project!.Title, _project.Style, destination, cancellationToken);
-        SetStatus($"Exported {Path.GetFileName(destination)}");
     }
 
     public async Task ExportLatexAsync(string destination, CancellationToken cancellationToken = default)
     {
         EnsureProject();
         await FlushAutosaveAsync();
-        var source = await BuildCompilationSourceAsync(cancellationToken);
+        var source = await BuildCompilationSourceAsync(cancellationToken, useEditorBuffer: false);
         await exportService.ExportLatexAsync(source, _project!.Title, _project.Style, destination, cancellationToken);
         SetStatus($"Exported {Path.GetFileName(destination)}");
     }
@@ -277,6 +273,7 @@ public sealed class WorkspaceViewModel(
         RefreshBinder();
         var first = BinderRows.FirstOrDefault(static row => row.Node.IsDocument) ?? BinderRows.FirstOrDefault();
         if (first is not null) await SelectAsync(first, cancellationToken);
+        ScheduleLivePdfPreview();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -336,6 +333,75 @@ public sealed class WorkspaceViewModel(
         }
     }
 
+    private void ScheduleLivePdfPreview(TimeSpan? delay = null)
+    {
+        _previewCts?.Cancel();
+        _previewCts?.Dispose();
+        _previewCts = null;
+
+        if (_project is null || !CanPublishPdf)
+        {
+            if (_project is not null && !CanPublishPdf)
+                LivePreviewError = "Install LuaLaTeX to enable live PDF preview.";
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        _previewCts = new CancellationTokenSource();
+        _ = LivePreviewAfterDelayAsync(delay ?? TimeSpan.FromMilliseconds(550), _previewCts.Token);
+    }
+
+    private async Task LivePreviewAfterDelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (delay > TimeSpan.Zero) await Task.Delay(delay, cancellationToken);
+            await BuildLivePdfPreviewCoreAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            LivePreviewError = ex.Message;
+            IsLivePreviewBuilding = false;
+            Status = "Live PDF preview failed";
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private async Task BuildLivePdfPreviewCoreAsync(CancellationToken cancellationToken)
+    {
+        if (_project is null || !CanPublishPdf) return;
+
+        await _previewGate.WaitAsync(cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IsLivePreviewBuilding = true;
+            LivePreviewError = null;
+            Status = "Updating live PDF preview…";
+            StateChanged?.Invoke(this, EventArgs.Empty);
+
+            var source = await BuildCompilationSourceAsync(cancellationToken, useEditorBuffer: true);
+            var buildDirectory = Path.Combine(_project.RootPath, "build");
+            Directory.CreateDirectory(buildDirectory);
+            var destination = Path.Combine(buildDirectory, "live-preview.pdf");
+            await exportService.ExportPdfPreviewAsync(source, _project.Title, _project.Style, destination, cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            LivePreviewPdfPath = destination;
+            LivePreviewVersion = Interlocked.Increment(ref _previewBuildVersion);
+            Status = "Live PDF preview updated";
+        }
+        finally
+        {
+            IsLivePreviewBuilding = false;
+            _previewGate.Release();
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     private async Task SaveCurrentDocumentAsync(CancellationToken cancellationToken)
     {
         if (_project is null || _selectedNode is null || !_selectedNode.IsDocument || !_isDirty) return;
@@ -373,6 +439,9 @@ public sealed class WorkspaceViewModel(
         _autosaveCts?.Cancel();
         _autosaveCts?.Dispose();
         _autosaveCts = null;
+        _previewCts?.Cancel();
+        _previewCts?.Dispose();
+        _previewCts = null;
         _selectedNode = null;
         SelectedRow = null;
         _editorText = string.Empty;
@@ -380,16 +449,23 @@ public sealed class WorkspaceViewModel(
         _editVersion = 0;
         PreviewText = "Select a manuscript document to begin.";
         WordCount = 0;
+        LivePreviewPdfPath = null;
+        LivePreviewVersion = 0;
+        LivePreviewError = null;
+        IsLivePreviewBuilding = false;
     }
 
-    private async Task<string> BuildCompilationSourceAsync(CancellationToken cancellationToken)
+    private async Task<string> BuildCompilationSourceAsync(CancellationToken cancellationToken, bool useEditorBuffer)
     {
         if (_project is null) throw new InvalidOperationException("Open a project first.");
         var builder = new StringBuilder();
-        await foreach (var (_, content) in repository.EnumerateDocumentsAsync(_project, cancellationToken))
+        await foreach (var (node, content) in repository.EnumerateDocumentsAsync(_project, cancellationToken))
         {
+            var effectiveContent = useEditorBuffer && ReferenceEquals(node, _selectedNode)
+                ? _editorText
+                : content;
             if (builder.Length > 0) builder.AppendLine().AppendLine();
-            builder.Append(content.TrimEnd()).AppendLine();
+            builder.Append(effectiveContent.TrimEnd()).AppendLine();
         }
         return builder.ToString();
     }
@@ -407,8 +483,11 @@ public sealed class WorkspaceViewModel(
 
     public async ValueTask DisposeAsync()
     {
+        _previewCts?.Cancel();
         await FlushAutosaveAsync();
         _saveGate.Dispose();
+        _previewGate.Dispose();
         _autosaveCts?.Dispose();
+        _previewCts?.Dispose();
     }
 }
