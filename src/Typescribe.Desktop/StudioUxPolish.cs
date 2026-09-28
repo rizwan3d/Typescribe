@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Domain.Models;
@@ -17,6 +18,9 @@ internal sealed class StudioUxPolish
     private Border? _editorEmptyState;
     private TextBox? _editor;
     private TabControl? _inspectorTabs;
+    private bool _applyScheduled;
+    private bool _isApplying;
+    private bool _disposed;
 
     private StudioUxPolish(StudioWorkspaceWindow window)
     {
@@ -32,34 +36,61 @@ internal sealed class StudioUxPolish
         window.LayoutUpdated += polish.OnLayoutUpdated;
         window.ActualThemeVariantChanged += polish.OnThemeChanged;
         window.Closed += polish.OnClosed;
-        polish.ApplyTree();
+        polish.ScheduleApply();
     }
 
-    private void OnOpened(object? sender, EventArgs e) => ApplyTree();
+    private void OnOpened(object? sender, EventArgs e) => ScheduleApply();
 
-    private void OnLayoutUpdated(object? sender, EventArgs e) => ApplyTree();
+    private void OnLayoutUpdated(object? sender, EventArgs e) => ScheduleApply();
 
     private void OnThemeChanged(object? sender, EventArgs e)
     {
         _styled = new ConditionalWeakTable<Control, object>();
-        ApplyTree();
+        ScheduleApply();
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _disposed = true;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.ActualThemeVariantChanged -= OnThemeChanged;
         _window.Closed -= OnClosed;
     }
 
+    private void ScheduleApply()
+    {
+        if (_disposed || _applyScheduled) return;
+        _applyScheduled = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _applyScheduled = false;
+            if (!_disposed) ApplyTree();
+        }, DispatcherPriority.Background);
+    }
+
     private void ApplyTree()
     {
-        NormalizeWindowTitle();
-        ApplyShellClasses();
-        StyleOnce(_window);
-        foreach (var control in _window.GetVisualDescendants().OfType<Control>()) StyleOnce(control);
-        UpdateEmptyState();
+        if (_disposed || _isApplying) return;
+        _isApplying = true;
+        try
+        {
+            NormalizeWindowTitle();
+            ApplyShellClasses();
+            StyleOnce(_window);
+
+            // GetVisualDescendants() is a lazy walk over Avalonia's live visual collections.
+            // Some styling operations below intentionally alter templates/children, so first
+            // freeze the traversal into a snapshot and only then mutate controls.
+            var controls = _window.GetVisualDescendants().OfType<Control>().ToArray();
+            foreach (var control in controls) StyleOnce(control);
+
+            UpdateEmptyState();
+        }
+        finally
+        {
+            _isApplying = false;
+        }
     }
 
     private void NormalizeWindowTitle()
