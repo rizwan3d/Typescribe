@@ -30,9 +30,12 @@ internal sealed class AuthoringStateStore
                 case "targets" when values.Length >= 5:
                     state.ProjectTargetWords = ParseNonNegative(values[1]);
                     state.DailyTargetWords = ParseNonNegative(values[2]);
-                    if (DateOnly.TryParseExact(values[3], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                    var dateIndex = values.Length >= 6 ? 4 : 3;
+                    var baselineIndex = values.Length >= 6 ? 5 : 4;
+                    if (values.Length >= 6) state.SessionTargetWords = ParseNonNegative(values[3]);
+                    if (DateOnly.TryParseExact(values[dateIndex], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
                         state.DailyDate = date;
-                    state.DailyBaselineWords = ParseNonNegative(values[4]);
+                    state.DailyBaselineWords = ParseNonNegative(values[baselineIndex]);
                     break;
 
                 case "field" when values.Length >= 3:
@@ -89,6 +92,7 @@ internal sealed class AuthoringStateStore
         builder.Append("targets\t")
             .Append(project.Authoring.ProjectTargetWords.ToString(CultureInfo.InvariantCulture)).Append('\t')
             .Append(project.Authoring.DailyTargetWords.ToString(CultureInfo.InvariantCulture)).Append('\t')
+            .Append(project.Authoring.SessionTargetWords.ToString(CultureInfo.InvariantCulture)).Append('\t')
             .Append(project.Authoring.DailyDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append('\t')
             .Append(project.Authoring.DailyBaselineWords.ToString(CultureInfo.InvariantCulture)).AppendLine();
 
