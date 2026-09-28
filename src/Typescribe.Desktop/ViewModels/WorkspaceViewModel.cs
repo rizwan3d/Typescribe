@@ -122,6 +122,19 @@ public sealed class WorkspaceViewModel(
         if (row is not null) await SelectAsync(row, cancellationToken);
     }
 
+    public async Task EnsurePdfEngineAsync(CancellationToken cancellationToken = default)
+    {
+        if (CanPublishPdf)
+        {
+            SetStatus($"PDF engine ready: {PublishingEngineName}");
+            return;
+        }
+
+        SetStatus("Downloading and verifying PDF engine…");
+        await exportService.EnsurePdfEngineAsync(cancellationToken);
+        SetStatus($"PDF engine ready: {PublishingEngineName}");
+    }
+
     public async Task ExportPdfAsync(string destination, CancellationToken cancellationToken = default)
     {
         EnsureProject();
