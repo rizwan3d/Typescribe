@@ -19,6 +19,12 @@ public sealed class ProjectNode
     public NodeKind Kind { get; private set; }
     public string? RelativePath { get; private set; }
     public bool IncludeInCompilation { get; set; } = true;
+    public string Synopsis { get; private set; } = string.Empty;
+    public string Notes { get; private set; } = string.Empty;
+    public string Status { get; private set; } = "Draft";
+    public string Label { get; private set; } = string.Empty;
+    public string Keywords { get; private set; } = string.Empty;
+    public int TargetWords { get; private set; }
     public IReadOnlyList<ProjectNode> Children => _children;
     public bool IsDocument => RelativePath is not null && Kind is not NodeKind.Folder and not NodeKind.Part;
     public bool IsContainer => Kind is NodeKind.Book or NodeKind.Part or NodeKind.Folder;
@@ -36,6 +42,22 @@ public sealed class ProjectNode
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         Id = id;
         RelativePath = relativePath;
+    }
+
+    public void UpdateMetadata(
+        string? synopsis,
+        string? notes,
+        string? status,
+        string? label,
+        string? keywords,
+        int targetWords)
+    {
+        Synopsis = (synopsis ?? string.Empty).Trim();
+        Notes = (notes ?? string.Empty).Trim();
+        Status = string.IsNullOrWhiteSpace(status) ? "Draft" : status.Trim();
+        Label = (label ?? string.Empty).Trim();
+        Keywords = (keywords ?? string.Empty).Trim();
+        TargetWords = Math.Max(0, targetWords);
     }
 
     public void AddChild(ProjectNode child)
