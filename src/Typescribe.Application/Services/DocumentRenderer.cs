@@ -47,70 +47,13 @@ public sealed class DocumentRenderer : IDocumentRenderer
         return output.ToString().TrimEnd();
     }
 
-    public string RenderTypst(DocumentAst document, string title, BookStyle style)
-    {
-        style.Validate();
-        var output = new StringBuilder();
-        output.Append("#set page(width: ").Append(Inches(style.PageWidthInches))
-            .Append(", height: ").Append(Inches(style.PageHeightInches))
-            .Append(", margin: (top: ").Append(Inches(style.MarginTopInches))
-            .Append(", bottom: ").Append(Inches(style.MarginBottomInches))
-            .Append(", left: ").Append(Inches(style.MarginInnerInches))
-            .Append(", right: ").Append(Inches(style.MarginOuterInches)).AppendLine("))");
-        output.Append("#set text(font: ").Append(TypstString(style.BodyFontFamily))
-            .Append(", size: ").Append(Points(style.BodyFontSizePoints)).AppendLine(")");
-        output.Append("#set par(justify: ").Append(style.JustifyBody ? "true" : "false")
-            .Append(", leading: ").Append(Format(style.LineSpacing)).AppendLine("em)");
-        output.AppendLine($"#metadata({TypstString(title)}) <typescribe-title>");
-        output.AppendLine();
-
-        foreach (var block in document.Blocks)
-        {
-            switch (block)
-            {
-                case HeadingBlock heading:
-                    output.Append(new string('=', Math.Clamp(heading.Level, 1, 6))).Append(' ')
-                        .AppendLine(RenderTypstInlines(heading.Inlines));
-                    output.AppendLine();
-                    break;
-                case ParagraphBlock paragraph:
-                    output.AppendLine(RenderTypstInlines(paragraph.Inlines));
-                    output.AppendLine();
-                    break;
-                case QuoteBlock quote:
-                    output.AppendLine($"#quote(block: true)[{RenderTypstInlines(quote.Inlines)}]");
-                    output.AppendLine();
-                    break;
-                case ListItemBlock item:
-                    output.Append(item.Ordered ? "+ " : "- ").AppendLine(RenderTypstInlines(item.Inlines));
-                    break;
-                case CodeBlock code:
-                    output.AppendLine("```");
-                    output.AppendLine(code.Text.Replace("```", "` ` `", StringComparison.Ordinal));
-                    output.AppendLine("```");
-                    output.AppendLine();
-                    break;
-                case DisplayMathBlock math:
-                    output.Append("#raw(").Append(TypstString(math.Text)).AppendLine(", lang: \"latex\", block: true)");
-                    output.AppendLine();
-                    break;
-                case ThematicBreakBlock:
-                    output.AppendLine("#line(length: 100%)");
-                    output.AppendLine();
-                    break;
-            }
-        }
-        return output.ToString();
-    }
-
     public string RenderLatex(DocumentAst document, string title, BookStyle style)
     {
         style.Validate();
         var output = new StringBuilder();
         output.AppendLine("\\documentclass[11pt,openany]{book}");
         output.AppendLine("\\usepackage{fontspec}");
-        output.AppendLine("\\usepackage{microtype}");
-        output.AppendLine("\\usepackage{amsmath,amssymb}");
+        output.AppendLine("\\usepackage{amsmath}");
         output.AppendLine("\\usepackage{hyperref}");
         output.Append("\\usepackage[paperwidth=").Append(Inches(style.PageWidthInches))
             .Append(",paperheight=").Append(Inches(style.PageHeightInches))
@@ -119,8 +62,9 @@ public sealed class DocumentRenderer : IDocumentRenderer
             .Append(",inner=").Append(Inches(style.MarginInnerInches))
             .Append(",outer=").Append(Inches(style.MarginOuterInches)).AppendLine("]{geometry}");
         output.AppendLine("\\hypersetup{hidelinks}");
+        output.AppendLine("\\defaultfontfeatures{Ligatures=TeX}");
         output.Append("\\IfFontExistsTF{").Append(EscapeLatex(style.BodyFontFamily)).Append("}{\\setmainfont{")
-            .Append(EscapeLatex(style.BodyFontFamily)).AppendLine("}}{\\setmainfont{Latin Modern Roman}}");
+            .Append(EscapeLatex(style.BodyFontFamily)).AppendLine("}}{}");
         output.Append("\\setlength{\\parindent}{").Append(Format(style.ParagraphIndentEm)).AppendLine("em}");
         output.Append("\\setlength{\\parskip}{").Append(Points(style.ParagraphSpacingPoints)).AppendLine("}");
         output.Append("\\linespread{").Append(Format(style.LineSpacing)).AppendLine("}");
@@ -226,37 +170,6 @@ public sealed class DocumentRenderer : IDocumentRenderer
         return output.ToString();
     }
 
-    private static string RenderTypstInlines(IEnumerable<AstInline> inlines)
-    {
-        var output = new StringBuilder();
-        foreach (var inline in inlines)
-        {
-            switch (inline)
-            {
-                case TextInline text:
-                    output.Append(EscapeTypst(text.Text));
-                    break;
-                case StrongInline strong:
-                    output.Append('*').Append(RenderTypstInlines(strong.Children)).Append('*');
-                    break;
-                case EmphasisInline emphasis:
-                    output.Append('_').Append(RenderTypstInlines(emphasis.Children)).Append('_');
-                    break;
-                case CodeInline code:
-                    output.Append('`').Append(code.Text.Replace("`", "\\`", StringComparison.Ordinal)).Append('`');
-                    break;
-                case LinkInline link:
-                    output.Append("#link(").Append(TypstString(link.Url)).Append(")[")
-                        .Append(RenderTypstInlines(link.Label)).Append(']');
-                    break;
-                case MathInline math:
-                    output.Append("#raw(").Append(TypstString(math.Text)).Append(", lang: \"latex\")");
-                    break;
-            }
-        }
-        return output.ToString();
-    }
-
     private static string RenderLatexInlines(IEnumerable<AstInline> inlines)
     {
         var output = new StringBuilder();
@@ -287,21 +200,6 @@ public sealed class DocumentRenderer : IDocumentRenderer
         }
         return output.ToString();
     }
-
-    private static string EscapeTypst(string text) => text
-        .Replace("\\", "\\\\", StringComparison.Ordinal)
-        .Replace("#", "\\#", StringComparison.Ordinal)
-        .Replace("$", "\\$", StringComparison.Ordinal)
-        .Replace("[", "\\[", StringComparison.Ordinal)
-        .Replace("]", "\\]", StringComparison.Ordinal)
-        .Replace("*", "\\*", StringComparison.Ordinal)
-        .Replace("_", "\\_", StringComparison.Ordinal)
-        .Replace("`", "\\`", StringComparison.Ordinal)
-        .Replace("<", "\\<", StringComparison.Ordinal)
-        .Replace(">", "\\>", StringComparison.Ordinal)
-        .Replace("@", "\\@", StringComparison.Ordinal);
-
-    private static string TypstString(string text) => $"\"{text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 
     private static string EscapeLatex(string text)
     {
