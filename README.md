@@ -36,7 +36,7 @@ The manuscript files remain normal files under `manuscript/` and can be edited o
 
 The current semantic parser supports:
 
-```text
+````text
 # Heading
 ## Subheading
 
@@ -57,7 +57,7 @@ code block
 $$
 F(x) = \int_0^x f(t) dt
 $$
-```
+````
 
 These structures are represented in the Typescribe AST rather than being passed directly to a publishing engine.
 
