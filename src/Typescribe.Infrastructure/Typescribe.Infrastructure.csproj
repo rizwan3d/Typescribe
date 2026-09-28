@@ -2,15 +2,37 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <IsAotCompatible>true</IsAotCompatible>
+    <TypstToolsDirectory>$(MSBuildProjectDirectory)/tools</TypstToolsDirectory>
+    <TypstExecutable Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(TypstToolsDirectory)/typst.exe</TypstExecutable>
+    <TypstExecutable Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(TypstToolsDirectory)/typst</TypstExecutable>
+    <TypstRuntimeIdentifier Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</TypstRuntimeIdentifier>
+    <TypstRuntimeIdentifier Condition="'$(TypstRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</TypstRuntimeIdentifier>
   </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="../Typescribe.Domain/Typescribe.Domain.csproj" />
     <ProjectReference Include="../Typescribe.Application/Typescribe.Application.csproj" />
   </ItemGroup>
-  <ItemGroup Condition="Exists('tools/typst')">
-    <EmbeddedResource Include="tools/typst" LogicalName="Typescribe.Engine.typst" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('tools/typst.exe')">
-    <EmbeddedResource Include="tools/typst.exe" LogicalName="Typescribe.Engine.typst" />
-  </ItemGroup>
+
+  <Target Name="EnsureBundledTypst"
+          BeforeTargets="PrepareResourceNames"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high"
+             Condition="!Exists('$(TypstExecutable)')"
+             Text="Typescribe publishing engine is missing; fetching pinned Typst for $(TypstRuntimeIdentifier)..." />
+
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) and !Exists('$(TypstExecutable)')"
+          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)/../../scripts/fetch-typst.ps1&quot; -Rid &quot;$(TypstRuntimeIdentifier)&quot;" />
+
+    <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows')) and !Exists('$(TypstExecutable)')"
+          Command="bash &quot;$(MSBuildProjectDirectory)/../../scripts/fetch-typst.sh&quot; &quot;$(TypstRuntimeIdentifier)&quot;" />
+
+    <Error Condition="!Exists('$(TypstExecutable)')"
+           Text="Typescribe could not prepare the bundled Typst publishing engine for $(TypstRuntimeIdentifier)." />
+
+    <ItemGroup>
+      <EmbeddedResource Include="$(TypstExecutable)"
+                        LogicalName="Typescribe.Engine.typst" />
+    </ItemGroup>
+  </Target>
 </Project>
