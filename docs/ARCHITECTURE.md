@@ -2,13 +2,13 @@
 
 ## Goals
 
-Typescribe is a local-first, cross-platform authoring and typesetting desktop application. Manuscript content stays independent from presentation and from the concrete publishing engine.
+Typescribe is a local-first, cross-platform authoring and typesetting desktop application. Manuscript content stays independent from presentation while the production rendering path is deliberately standardized on LaTeX/LuaLaTeX.
 
 ## Layering
 
 ```text
 Typescribe.Desktop
-    │  Avalonia UI + composition root
+    │  Avalonia UI + PDFium page preview
     ▼
 Typescribe.Application
     │  use cases + ports + parser/render/search services
@@ -21,16 +21,17 @@ Typescribe.Infrastructure
        filesystem persistence + LuaLaTeX publishing
 ```
 
-Domain has no package dependencies. Application depends only on Domain. Infrastructure implements Application ports. Desktop composes concrete implementations.
+Domain has no package dependencies. Application depends only on Domain. Infrastructure implements Application ports. Desktop composes concrete implementations and owns PDF page rasterization for presentation.
 
 ## Design patterns
 
 - **Repository** — `IProjectRepository` hides project filesystem and binder metadata persistence.
-- **Strategy / Adapter** — `IPdfPublishingEngine` isolates the production compiler.
+- **Strategy / Adapter** — `IPdfPublishingEngine` isolates the LuaLaTeX process adapter.
 - **Ports and Adapters** — Application interfaces define the boundaries implemented by Infrastructure.
-- **Presentation Model** — `WorkspaceViewModel` owns desktop state without file-picker dependencies.
+- **Presentation Model** — `WorkspaceViewModel` owns editor, binder, search, and live-preview state without Avalonia file-picker dependencies.
 - **Composition Root** — `App` explicitly creates services and avoids reflection-heavy DI.
-- **Debounce** — manuscript changes autosave after a short idle period.
+- **Debounce** — manuscript changes autosave and compile preview after separate short idle periods.
+- **Cancellation** — a newer edit cancels an obsolete preview compilation/process tree.
 - **Atomic Replace** — writes use sibling temporary files before replacement.
 
 ## AOT decisions
@@ -39,12 +40,12 @@ Domain has no package dependencies. Application depends only on Domain. Infrastr
 - No dynamic proxy container or runtime assembly scanning.
 - No reflection-based project serializer.
 - Code-only Avalonia UI.
-- Libraries declare AOT compatibility where applicable.
 - LuaLaTeX executes as an isolated external publishing process rather than being loaded into the application process.
+- In-app PDF pages are rendered through PDFtoImage/PDFium/SkiaSharp, keeping the preview cross-platform without embedding a browser control.
 
 ## Canonical document model
 
-Markdown-like manuscript source is parsed into `DocumentAst`. Renderer formats are projections from this model and are never canonical manuscript content.
+Markdown-like manuscript source is parsed into `DocumentAst`. LaTeX is generated from this model and is never canonical manuscript content.
 
 Current block nodes:
 
@@ -65,45 +66,28 @@ Current inline nodes:
 - Link
 - Inline math
 
-The parser can be extended with figures, tables, citations, footnotes, semantic blocks, and cross-references without tying the editor to LaTeX syntax.
+The parser can be extended with figures, tables, citations, footnotes, semantic blocks, and cross-references without making authors write LaTeX directly.
 
 ## Binder model
 
 The physical manuscript hierarchy remains under `manuscript/`. Binder-specific information that does not belong in manuscript text is stored in `.typescribe/binder.tsv`.
 
-The sidecar currently persists:
-
-- Node type
-- Include/exclude state
-- Project-relative path
-- Display title
-- Sibling ordering through record order
-
-Filesystem paths remain the durable ownership boundary, while the sidecar provides application-specific organization without introducing a proprietary manuscript database.
+The sidecar currently persists node type, include/exclude state, project-relative path, display title, and sibling ordering through record order. Filesystem paths remain the durable ownership boundary while the sidecar provides application-specific organization without introducing a proprietary manuscript database.
 
 ## Style model
 
-`BookStyle` is presentation data, separate from manuscript content. `styles/book.style` persists the initial style surface:
-
-- Page size
-- Margins
-- Body font and size
-- Line spacing
-- Paragraph indentation/spacing
-- Justification
-
-Both the LaTeX and Typst generators consume the same style model.
+`BookStyle` is presentation data, separate from manuscript content. `styles/book.style` persists page size, margins, body font and size, line spacing, paragraph indentation/spacing, and justification. The LaTeX generator consumes the same style model for live preview and final publishing.
 
 ## Search
 
 The initial project search intentionally remains database-free. It scans manuscript files and supports title/content matching, case sensitivity, whole-word mode, and regular expressions with a timeout guard. A future indexed implementation can replace the service behind the same application workflow.
 
-## Publishing
+## LaTeX publishing pipeline
 
-The production pipeline is:
+The only production typesetting pipeline is:
 
 ```text
-UTF-8 manuscript
+UTF-8 manuscript / current editor buffer
       ↓
 DocumentParser
       ↓
@@ -121,29 +105,44 @@ PDF
 The PDF adapter resolves LuaLaTeX in this order:
 
 1. `TYPESCRIBE_LUALATEX`
-2. Typescribe-managed TinyTeX runtime
+2. Typescribe-managed full TinyTeX runtime
 3. `lualatex` from `PATH`
 
-If unavailable, the user can ask Typescribe to download a pinned TinyTeX 2026.09 runtime. The archive SHA-256 is verified before installation. LuaLaTeX is invoked twice for stable references and with `-no-shell-escape`.
+If unavailable, Typescribe downloads the pinned full TinyTeX 2026.09 runtime for the current platform and verifies the archive SHA-256 before installation. The managed runtime lives in a versioned `tinytex-full-2026.09` directory so older minimal runtime installs are not reused accidentally.
 
-**Preview PDF** and **Publish Book PDF** use the same production pipeline. Preview writes `build/preview.pdf` and opens it with the operating system PDF viewer. An embedded paginated PDF canvas is later UI work; the compiled preview itself is already the production renderer's output.
+LuaLaTeX always runs with `-no-shell-escape`, `-halt-on-error`, and file/line diagnostics enabled.
 
-Typst remains an optional generated source format only.
+## Realtime PDF preview
+
+The preview path uses the same parser, AST, style model, LaTeX generator, and LuaLaTeX executable as final publishing. The differences are scheduling and pass count:
+
+- Editor input is debounced by about 550 ms.
+- Preview source uses the current unsaved editor buffer for the selected document and on-disk content for the rest of the book.
+- A new edit cancels the previous debounce and, when needed, terminates the obsolete LuaLaTeX process tree.
+- Preview uses one LuaLaTeX pass for lower latency.
+- The result is atomically copied to `build/live-preview.pdf`.
+- PDFtoImage/PDFium rasterizes the requested page and the Avalonia UI displays it in the right-hand pane.
+- Page navigation and zoom are handled entirely inside Typescribe.
+
+The previous successfully rendered page remains visible while a newer preview is compiling, avoiding visual flicker during normal typing.
+
+Final **Publish Book PDF** flushes manuscript autosave and runs two LuaLaTeX passes for stable references and page numbering.
 
 ## Security boundaries
 
 - Project-relative paths are canonicalized and checked against the project root.
 - Binder file operations resolve through the project repository.
-- Manuscript prose is escaped before generated LaTeX/Typst output.
+- Manuscript prose is escaped before generated LaTeX output.
 - LuaLaTeX receives generated source, not arbitrary manuscript shell commands.
 - Shell escape is explicitly disabled.
 - Downloaded TinyTeX archives are verified against pinned SHA-256 digests.
+- Obsolete preview compiler processes are killed on cancellation.
 - No manuscript telemetry/upload path exists in the v0.1 implementation.
 
 ## Known limitations
 
 - Binder movement is currently explicit up/down plus selected-container insertion, not drag/drop reparenting.
-- The writing preview is semantic text; production PDF preview opens the compiled PDF in the OS viewer rather than an embedded page canvas.
+- The embedded PDF preview is page-raster based; source-to-PDF cursor synchronization, text selection, thumbnail navigation, and virtualized multi-page scrolling are future work.
 - Figures, tables, footnotes, citations, bibliography, and cross-references are not yet represented in the AST.
 - Search is a file scan rather than an incremental SQLite FTS index.
-- Compile diagnostics are surfaced as LuaLaTeX output but are not yet mapped back to AST/source locations.
+- LuaLaTeX diagnostics are surfaced with focused compiler output but are not yet mapped back to AST/source locations in the editor.
