@@ -7,6 +7,7 @@
 - Local project creation/opening
 - Plain UTF-8 manuscript storage
 - Persistent hierarchical binder
+- Stable persistent binder-item IDs independent from filesystem paths
 - Chapters, parts, and folders
 - Binder rename/delete/reorder/include-exclude
 - Drag/drop binder reordering and reparenting with real filesystem moves
@@ -14,6 +15,12 @@
 - Inline strong/emphasis/code/link/math
 - Headings, quotes, ordered/unordered lists, code blocks, display math, thematic breaks
 - Editor with debounced autosave and atomic writes
+- Corkboard index-card planning view
+- Document Inspector with synopsis, notes, status, label, keywords, and word target
+- Per-document writing-target progress
+- Immutable timestamped document snapshots
+- Safe snapshot restore with automatic pre-restore snapshot
+- F11 distraction-reduced Composition Mode
 - Document heading outline with editor navigation
 - Selection-scoped live preview for document or heading
 - Optional whole-book live preview
@@ -30,14 +37,17 @@
 - Two-pass final PDF export
 - LaTeX source export
 - Whole-book compilation in binder order
-- Resizable Binder / Editor / Inspector workspace
-- Binder/Search and PDF Preview/Outline tabs
+- Resizable Binder / Editor-Corkboard / Inspector workspace
+- Binder/Search and Inspector/PDF/Outline/Snapshots tabs
 - Desktop menu bar, toolbar, context menu, and common keyboard shortcuts
 - Cross-platform compile CI
 
 ## v0.1 follow-up hardening
 
-- Persist window, pane widths, active tabs, and preview zoom between sessions
+- Persist window, pane widths, active tabs, Corkboard mode, and preview zoom between sessions
+- Corkboard drag/drop reordering directly on cards
+- Project-wide writing target and session/daily targets
+- Snapshot compare/diff viewer
 - Source-to-PDF cursor synchronization beyond heading/document scope
 - Virtualized multi-page PDF scrolling and page thumbnails
 - PDF text selection/search in preview
@@ -50,14 +60,15 @@
 
 ## v0.2
 
-- Corkboard and richer outline views
-- Rich metadata fields and inspector
+- Spreadsheet-style project Outliner
+- Custom metadata columns and saved views
 - Footnotes/endnotes
 - Figures and asset management
 - Tables
 - Cross-references
 - Citation keys and bibliography model
 - Incremental project index (SQLite FTS5)
+- Corkboard freeform layout and card stacks
 
 ## v0.3
 
@@ -65,7 +76,7 @@
 - EPUB 3 exporter
 - DOCX exporter
 - Track changes and comments
-- Immutable snapshots
+- Snapshot diff/compare tools
 - Print profiles and preflight validation
 
 ## v0.4+
