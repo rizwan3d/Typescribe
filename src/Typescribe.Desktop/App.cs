@@ -25,7 +25,7 @@ public sealed class App : AvaloniaApplication
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
             var searchService = new ProjectSearchService(repository);
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
-            desktop.MainWindow = new AuthorWorkspaceWindow(viewModel);
+            desktop.MainWindow = new StudioWorkspaceWindow(viewModel);
         }
 
         base.OnFrameworkInitializationCompleted();
