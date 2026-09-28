@@ -8,7 +8,7 @@ public sealed class ProjectAuthoringState
     public int ProjectTargetWords { get; set; }
     public int DailyTargetWords { get; set; }
     public int SessionTargetWords { get; set; }
-    public DateOnly DailyDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+    public DateOnly DailyDate { get; set; }
     public int DailyBaselineWords { get; set; }
     public IReadOnlyList<CustomMetadataDefinition> CustomFields => _customFields;
     public IReadOnlyList<ProjectCollection> Collections => _collections;
