@@ -3,6 +3,8 @@ namespace Typescribe.Domain.Models;
 public sealed class ProjectNode
 {
     private readonly List<ProjectNode> _children = [];
+    private readonly Dictionary<string, string> _customMetadata = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<DocumentComment> _comments = [];
 
     public ProjectNode(
         string id,
@@ -32,6 +34,8 @@ public sealed class ProjectNode
     public string Label { get; private set; } = string.Empty;
     public string Keywords { get; private set; } = string.Empty;
     public int TargetWords { get; private set; }
+    public IReadOnlyDictionary<string, string> CustomMetadata => _customMetadata;
+    public IReadOnlyList<DocumentComment> Comments => _comments;
     public IReadOnlyList<ProjectNode> Children => _children;
     public bool IsDocument => RelativePath is not null && Kind is not NodeKind.Folder and not NodeKind.Part;
     public bool IsContainer => Kind is NodeKind.Book or NodeKind.Part or NodeKind.Folder;
@@ -65,6 +69,53 @@ public sealed class ProjectNode
         Label = (label ?? string.Empty).Trim();
         Keywords = (keywords ?? string.Empty).Trim();
         TargetWords = Math.Max(0, targetWords);
+    }
+
+    public void SetCustomMetadata(string key, string? value)
+    {
+        var normalized = ProjectAuthoringState.NormalizeKey(key);
+        var trimmed = (value ?? string.Empty).Trim();
+        if (trimmed.Length == 0) _customMetadata.Remove(normalized);
+        else _customMetadata[normalized] = trimmed;
+    }
+
+    public void ReplaceCustomMetadata(IEnumerable<KeyValuePair<string, string>> values)
+    {
+        _customMetadata.Clear();
+        foreach (var pair in values) SetCustomMetadata(pair.Key, pair.Value);
+    }
+
+    public void ReplaceComments(IEnumerable<DocumentComment> comments)
+    {
+        _comments.Clear();
+        _comments.AddRange(comments.OrderBy(static comment => comment.Line).ThenBy(static comment => comment.CreatedAt));
+    }
+
+    public void AddComment(DocumentComment comment)
+    {
+        ArgumentNullException.ThrowIfNull(comment);
+        _comments.Add(comment);
+        _comments.Sort(static (left, right) =>
+        {
+            var line = left.Line.CompareTo(right.Line);
+            return line != 0 ? line : left.CreatedAt.CompareTo(right.CreatedAt);
+        });
+    }
+
+    public bool SetCommentResolved(string id, bool resolved)
+    {
+        var index = _comments.FindIndex(comment => string.Equals(comment.Id, id, StringComparison.Ordinal));
+        if (index < 0) return false;
+        _comments[index] = _comments[index] with { Resolved = resolved };
+        return true;
+    }
+
+    public bool RemoveComment(string id)
+    {
+        var index = _comments.FindIndex(comment => string.Equals(comment.Id, id, StringComparison.Ordinal));
+        if (index < 0) return false;
+        _comments.RemoveAt(index);
+        return true;
     }
 
     public void AddChild(ProjectNode child)
