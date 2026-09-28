@@ -1,6 +1,6 @@
 # Third-party notices
 
-Typescribe uses third-party components in published builds.
+Typescribe uses third-party components and can download optional publishing components at runtime.
 
 ## Avalonia
 
@@ -8,13 +8,19 @@ Typescribe uses third-party components in published builds.
 - License: MIT
 - Source: https://github.com/AvaloniaUI/Avalonia
 
-## Typst
+## TinyTeX / TeX Live
 
-- Project: Typst
-- Version pinned by the release scripts: 0.15.1
-- License: Apache-2.0
-- Source: https://github.com/typst/typst
+Typescribe can download a version-pinned **TinyTeX 2026.09** runtime when LuaLaTeX is not otherwise available.
 
-The release scripts download an official Typst release asset for the target platform, verify its pinned SHA-256 digest before extraction, and embed the executable into the Typescribe build. Typst itself contains upstream embedded fonts; Typescribe does not redistribute separate font files.
+- TinyTeX release project: https://github.com/rstudio/tinytex-releases
+- TeX Live project: https://tug.org/texlive/
 
-Before redistributing a production build, review the current upstream license and notice files for every dependency and include any notices required by those licenses.
+TinyTeX is a distribution mechanism for TeX Live. TeX Live contains many independently licensed packages; the applicable package licenses and notices remain those supplied by the corresponding upstream projects and TeX Live distribution. Typescribe verifies the pinned runtime archive digest before installing it under the user's local application-data directory.
+
+The Typescribe source repository does not contain the TinyTeX/TeX Live runtime itself.
+
+## Typst format support
+
+Typescribe can generate `.typ` source as an alternate export format. The production PDF pipeline does not bundle or invoke Typst.
+
+Before redistributing a production build together with additional third-party runtimes, review the current upstream licenses and notices and include anything required by those components.
