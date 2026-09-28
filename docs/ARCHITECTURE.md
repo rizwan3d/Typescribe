@@ -28,7 +28,7 @@ Domain has no package dependencies. Application depends only on Domain. Infrastr
 - **Repository** — `IProjectRepository` hides project filesystem and binder metadata persistence.
 - **Strategy / Adapter** — `IPdfPublishingEngine` isolates the LuaLaTeX process adapter.
 - **Ports and Adapters** — Application interfaces define the boundaries implemented by Infrastructure.
-- **Presentation Model** — `WorkspaceViewModel` owns editor, binder, search, and live-preview state without Avalonia file-picker dependencies.
+- **Presentation Model** — `WorkspaceViewModel` owns editor, binder, outline, search, and live-preview state without Avalonia file-picker dependencies.
 - **Composition Root** — `App` explicitly creates services and avoids reflection-heavy DI.
 - **Debounce** — manuscript changes autosave and compile preview after separate short idle periods.
 - **Cancellation** — a newer edit cancels an obsolete preview compilation/process tree.
@@ -68,11 +68,27 @@ Current inline nodes:
 
 The parser can be extended with figures, tables, citations, footnotes, semantic blocks, and cross-references without making authors write LaTeX directly.
 
+Heading nodes also drive the desktop outline. Each outline item retains its source line and computed section end, allowing heading selection to navigate the editor and temporarily narrow live-preview compilation to that section without changing canonical manuscript content.
+
 ## Binder model
 
 The physical manuscript hierarchy remains under `manuscript/`. Binder-specific information that does not belong in manuscript text is stored in `.typescribe/binder.tsv`.
 
-The sidecar currently persists node type, include/exclude state, project-relative path, display title, and sibling ordering through record order. Filesystem paths remain the durable ownership boundary while the sidecar provides application-specific organization without introducing a proprietary manuscript database.
+The sidecar persists node type, include/exclude state, project-relative path, display title, and sibling ordering through record order. Filesystem paths remain the durable ownership boundary while the sidecar provides application-specific organization without introducing a proprietary manuscript database.
+
+Binder drag/drop is implemented through the repository boundary rather than directly in the Avalonia view. The UI expresses an intended placement—before, after, or inside a container—and `FileSystemProjectRepository.ReparentNodeAsync` performs the durable tree/filesystem operation. Cross-container moves physically move the corresponding file or directory, recursively repath moved descendants, preserve binder ordering, avoid filename collisions, and reject cyclic parent/descendant moves.
+
+## Desktop workspace
+
+The desktop shell is a resizable three-pane workspace:
+
+```text
+Binder / Search   |   Editor   |   PDF Preview / Outline
+```
+
+The outer shell owns desktop concerns such as menu commands, keyboard shortcuts, context menus, pane visibility, file pickers, drag/drop gestures, editor caret positioning, and PDF bitmap presentation. `WorkspaceViewModel` owns the corresponding application-facing state: selected binder item, outline focus, search results, preview scope, editor-navigation requests, and preview build lifecycle.
+
+This separation keeps Avalonia-specific interaction mechanics out of the project/publishing services while preserving explicit AOT-friendly composition.
 
 ## Style model
 
@@ -114,24 +130,28 @@ LuaLaTeX always runs with `-no-shell-escape`, `-halt-on-error`, and file/line di
 
 ## Realtime PDF preview
 
-The preview path uses the same parser, AST, style model, LaTeX generator, and LuaLaTeX executable as final publishing. The differences are scheduling and pass count:
+The preview path uses the same parser, AST, style model, LaTeX generator, and LuaLaTeX executable as final publishing. The differences are source scope, scheduling, and pass count:
 
 - Editor input is debounced by about 550 ms.
-- Preview source uses the current unsaved editor buffer for the selected document and on-disk content for the rest of the book.
+- Selecting a manuscript document makes that document the default preview source.
+- Selecting an outline heading narrows the source to that heading's computed section and requests editor navigation to its source line.
+- The user can explicitly switch preview scope to the whole included book.
+- Preview source uses the current unsaved editor buffer for the selected document.
 - A new edit cancels the previous debounce and, when needed, terminates the obsolete LuaLaTeX process tree.
 - Preview uses one LuaLaTeX pass for lower latency.
 - The result is atomically copied to `build/live-preview.pdf`.
-- PDFtoImage/PDFium rasterizes the requested page and the Avalonia UI displays it in the right-hand pane.
+- PDFtoImage/PDFium rasterizes the requested page and the Avalonia UI displays it in the inspector.
 - Page navigation and zoom are handled entirely inside Typescribe.
 
 The previous successfully rendered page remains visible while a newer preview is compiling, avoiding visual flicker during normal typing.
 
-Final **Publish Book PDF** flushes manuscript autosave and runs two LuaLaTeX passes for stable references and page numbering.
+Final **Publish PDF** ignores temporary preview scope, flushes manuscript autosave, compiles the complete included book, and runs two LuaLaTeX passes for stable references and page numbering.
 
 ## Security boundaries
 
 - Project-relative paths are canonicalized and checked against the project root.
 - Binder file operations resolve through the project repository.
+- Drag/drop rejects self/descendant cycles before durable filesystem moves.
 - Manuscript prose is escaped before generated LaTeX output.
 - LuaLaTeX receives generated source, not arbitrary manuscript shell commands.
 - Shell escape is explicitly disabled.
@@ -141,8 +161,9 @@ Final **Publish Book PDF** flushes manuscript autosave and runs two LuaLaTeX pas
 
 ## Known limitations
 
-- Binder movement is currently explicit up/down plus selected-container insertion, not drag/drop reparenting.
-- The embedded PDF preview is page-raster based; source-to-PDF cursor synchronization, text selection, thumbnail navigation, and virtualized multi-page scrolling are future work.
+- Workspace dimensions, pane visibility, active tabs, and preview zoom are not yet persisted between sessions.
+- Binder drag/drop is durable but not yet undoable as a filesystem transaction.
+- The embedded PDF preview is page-raster based; exact cursor-to-PDF synchronization, text selection, thumbnail navigation, and virtualized multi-page scrolling are future work.
 - Figures, tables, footnotes, citations, bibliography, and cross-references are not yet represented in the AST.
 - Search is a file scan rather than an incremental SQLite FTS index.
 - LuaLaTeX diagnostics are surfaced with focused compiler output but are not yet mapped back to AST/source locations in the editor.
