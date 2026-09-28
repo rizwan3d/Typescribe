@@ -43,7 +43,7 @@ public sealed class FileSystemProjectRepository : IProjectRepository
         PopulateTree(root, rootPath, manuscriptPath);
         return Task.FromResult(new BookProject
         {
-            RootPath = Path.GetFullPath(rootPath),
+            RootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath)),
             Title = metadata.Title,
             Author = metadata.Author,
             Language = metadata.Language,
@@ -97,11 +97,23 @@ public sealed class FileSystemProjectRepository : IProjectRepository
     private static string ResolveDocumentPath(BookProject project, ProjectNode node)
     {
         if (node.RelativePath is null) throw new InvalidOperationException("The selected node is not a document.");
-        var root = Path.GetFullPath(project.RootPath) + Path.DirectorySeparatorChar;
-        var candidate = Path.GetFullPath(Path.Combine(project.RootPath, node.RelativePath));
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (!candidate.StartsWith(root, comparison)) throw new InvalidOperationException("Project path traversal was rejected.");
+
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(project.RootPath));
+        var candidate = Path.GetFullPath(Path.Combine(root, node.RelativePath));
+        var relativeToRoot = Path.GetRelativePath(root, candidate);
+
+        if (Path.IsPathRooted(relativeToRoot) || IsParentPath(relativeToRoot))
+            throw new InvalidOperationException("Project path traversal was rejected.");
+
         return candidate;
+    }
+
+    private static bool IsParentPath(string relativePath)
+    {
+        if (relativePath.Equals("..", StringComparison.Ordinal)) return true;
+        if (relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) return true;
+        return Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar
+            && relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
     }
 
     private static IEnumerable<ProjectNode> Flatten(ProjectNode root)
