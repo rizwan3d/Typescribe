@@ -19,7 +19,8 @@ public sealed class MainWindow : Window
     private readonly TextBlock _engine = new();
     private readonly TextBox _searchBox = new();
     private readonly ListBox _searchResults = new();
-    private readonly Button _exportPdfButton = new() { Content = "Publish Book PDF" };
+    private readonly Button _exportPdfButton = new() { Content = "Publish Book PDF", Margin = new Thickness(0, 0, 6, 0) };
+    private readonly Button _downloadPdfEngineButton = new() { Content = "Download PDF Engine", Margin = new Thickness(0, 0, 6, 0) };
     private bool _updatingUi;
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -94,6 +95,7 @@ public sealed class MainWindow : Window
         addChapterButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.AddChapterAsync());
         saveButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.SaveNowAsync());
         _exportPdfButton.Click += async (_, _) => await RunUiTaskAsync(ExportPdfAsync);
+        _downloadPdfEngineButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.EnsurePdfEngineAsync());
         typstButton.Click += async (_, _) => await RunUiTaskAsync(ExportTypstAsync);
         latexButton.Click += async (_, _) => await RunUiTaskAsync(ExportLatexAsync);
 
@@ -102,6 +104,7 @@ public sealed class MainWindow : Window
         bar.Children.Add(addChapterButton);
         bar.Children.Add(saveButton);
         bar.Children.Add(_exportPdfButton);
+        bar.Children.Add(_downloadPdfEngineButton);
         bar.Children.Add(typstButton);
         bar.Children.Add(latexButton);
         return bar;
@@ -290,7 +293,11 @@ public sealed class MainWindow : Window
             _preview.Text = _viewModel.PreviewText;
             _status.Text = _viewModel.Status;
             _wordCount.Text = $"{_viewModel.WordCount:N0} words";
-            _engine.Text = _viewModel.CanPublishPdf ? $"PDF: {_viewModel.PublishingEngineName}" : "PDF engine not bundled in dev build";
+            _engine.Text = _viewModel.CanPublishPdf
+                ? $"PDF: {_viewModel.PublishingEngineName}"
+                : "PDF engine not installed";
+            _downloadPdfEngineButton.IsVisible = !_viewModel.CanPublishPdf;
+            _downloadPdfEngineButton.IsEnabled = !_viewModel.CanPublishPdf;
             _exportPdfButton.IsEnabled = _viewModel.HasDocument && _viewModel.CanPublishPdf;
         }
         finally
