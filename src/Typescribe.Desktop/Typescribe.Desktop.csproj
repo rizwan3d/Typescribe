@@ -17,15 +17,11 @@
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="PDFtoImage" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Typescribe.Domain/Typescribe.Domain.csproj" />
     <ProjectReference Include="../Typescribe.Application/Typescribe.Application.csproj" />
     <ProjectReference Include="../Typescribe.Infrastructure/Typescribe.Infrastructure.csproj" />
   </ItemGroup>
-  <Target Name="EnsureBundledPublishingEngine"
-          BeforeTargets="PrepareForPublish"
-          Condition="'$(Configuration)' == 'Release' and !Exists('../Typescribe.Infrastructure/tools/typst') and !Exists('../Typescribe.Infrastructure/tools/typst.exe')">
-    <Error Text="Release publishing requires a pinned Typst binary. Run scripts/fetch-typst.sh or scripts/fetch-typst.ps1 first." />
-  </Target>
 </Project>
