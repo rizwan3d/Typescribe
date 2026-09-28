@@ -181,8 +181,8 @@ public sealed class MainWindow : Window
         var newGesture = new KeyGesture(Key.N, KeyModifiers.Control);
         var findGesture = new KeyGesture(Key.F, KeyModifiers.Control);
 
-        _showBinderMenuItem = ToggleMenuItem("_Binder", true, () => ToggleBinder());
-        _showInspectorMenuItem = ToggleMenuItem("_Inspector", true, () => ToggleInspector());
+        _showBinderMenuItem = ToggleMenuItem("_Binder", true, ToggleBinder);
+        _showInspectorMenuItem = ToggleMenuItem("_Inspector", true, ToggleInspector);
         _wholeBookPreviewMenuItem = ToggleMenuItem("Preview _Whole Book", false, () =>
         {
             var enabled = _wholeBookPreviewMenuItem?.IsChecked == true;
@@ -329,8 +329,14 @@ public sealed class MainWindow : Window
         _exportPdfButton.Click += async (_, _) => await RunUiTaskAsync(ExportPdfAsync);
         _downloadPdfEngineButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.EnsurePdfEngineAsync());
 
-        foreach (var button in newButton, openButton, saveButton, addChapter, searchButton, binderButton, inspectorButton, _styleButton, _refreshPreviewButton, _exportPdfButton, _downloadPdfEngineButton)
+        foreach (var button in new[]
+                 {
+                     newButton, openButton, saveButton, addChapter, searchButton, binderButton,
+                     inspectorButton, _styleButton, _refreshPreviewButton, _exportPdfButton, _downloadPdfEngineButton
+                 })
+        {
             bar.Children.Add(button);
+        }
         return bar;
     }
 
@@ -354,7 +360,11 @@ public sealed class MainWindow : Window
         _moveDownButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.MoveSelectedAsync(1));
         _includeButton.Click += async (_, _) => await RunUiTaskAsync(() => _viewModel.ToggleSelectedCompilationAsync());
 
-        foreach (var button in addChapter, addFolder, addPart, _renameBinderButton, _deleteBinderButton, _moveUpButton, _moveDownButton, _includeButton)
+        foreach (var button in new[]
+                 {
+                     addChapter, addFolder, addPart, _renameBinderButton, _deleteBinderButton,
+                     _moveUpButton, _moveDownButton, _includeButton
+                 })
         {
             button.Margin = new Thickness(0, 0, 4, 4);
             binderActions.Children.Add(button);
@@ -652,12 +662,12 @@ public sealed class MainWindow : Window
         if (path is not null) await _viewModel.ExportLatexAsync(path);
     }
 
-    private async Task FocusSearchAsync()
+    private Task FocusSearchAsync()
     {
         if (!_showBinder) ToggleBinder();
         _leftTabs.SelectedIndex = 1;
         _searchBox.Focus();
-        await Task.CompletedTask;
+        return Task.CompletedTask;
     }
 
     private async Task ShowAboutAsync()
@@ -1196,10 +1206,10 @@ public sealed class MainWindow : Window
         return y > height * 0.5 ? BinderDropPlacement.After : BinderDropPlacement.Before;
     }
 
-    private static MenuItem MenuAction(string header, Func<Task> action, KeyGesture? gesture = null)
+    private MenuItem MenuAction(string header, Func<Task> action, KeyGesture? gesture = null)
     {
         var item = new MenuItem { Header = header, InputGesture = gesture };
-        item.Click += async (_, _) => await action();
+        item.Click += async (_, _) => await RunUiTaskAsync(action);
         return item;
     }
 
