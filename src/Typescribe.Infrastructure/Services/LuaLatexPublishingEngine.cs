@@ -77,14 +77,19 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
         }
     }
 
-    public async Task PublishAsync(string source, string outputPdfPath, CancellationToken cancellationToken = default)
+    public async Task PublishAsync(
+        string source,
+        string outputPdfPath,
+        int passes = 2,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPdfPath);
+        if (passes is < 1 or > 4) throw new ArgumentOutOfRangeException(nameof(passes));
 
         var executable = ResolveExistingExecutable();
         if (executable is null)
-            throw new InvalidOperationException("LuaLaTeX is not installed. Use the PDF engine download action and try again.");
+            throw new InvalidOperationException("LuaLaTeX is not installed. Use 'Download LuaLaTeX' and try again.");
 
         var outputFullPath = Path.GetFullPath(outputPdfPath);
         var outputDirectory = Path.GetDirectoryName(outputFullPath);
@@ -97,8 +102,8 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
 
         try
         {
-            await RunLuaLatexPassAsync(executable, sourcePath, work, cancellationToken);
-            await RunLuaLatexPassAsync(executable, sourcePath, work, cancellationToken);
+            for (var pass = 0; pass < passes; pass++)
+                await RunLuaLatexPassAsync(executable, sourcePath, work, cancellationToken);
 
             var producedPdf = Path.Combine(work, "document.pdf");
             if (!File.Exists(producedPdf))
@@ -180,6 +185,18 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start LuaLaTeX.");
+        using var cancellationRegistration = cancellationToken.Register(static state =>
+        {
+            var runningProcess = (Process)state!;
+            try
+            {
+                if (!runningProcess.HasExited) runningProcess.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }, process);
+
         var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken);
@@ -188,7 +205,7 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
 
         if (process.ExitCode != 0)
         {
-            var details = Tail(stdErr + Environment.NewLine + stdOut, 6_000);
+            var details = ExtractUsefulError(stdErr + Environment.NewLine + stdOut);
             throw new InvalidOperationException($"LuaLaTeX failed with exit code {process.ExitCode}:{Environment.NewLine}{details}");
         }
     }
@@ -266,6 +283,17 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
         {
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Could not start the TinyTeX archive extractor.");
+            using var cancellationRegistration = cancellationToken.Register(static state =>
+            {
+                var runningProcess = (Process)state!;
+                try
+                {
+                    if (!runningProcess.HasExited) runningProcess.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }, process);
             var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
@@ -284,26 +312,26 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
     {
         if (OperatingSystem.IsWindows() && RuntimeInformation.ProcessArchitecture == Architecture.X64)
             return new DownloadAsset(
-                "TinyTeX-1-windows-v2026.09.exe",
-                "eea6a6e5f97d44416ca9ea974385af1ffd3fa119be19d34cdaf2abc85775d374",
+                "TinyTeX-windows-v2026.09.exe",
+                "f2e7c2f6de04c958c0a9660f86af7f3d7f385b98cdc4cb715e915f899e0eec3b",
                 SelfExtractingWindowsArchive: true);
 
         if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64)
             return new DownloadAsset(
-                "TinyTeX-1-linux-x86_64-v2026.09.tar.xz",
-                "cf9a4d19742eeb6d54a3de91fb5df071360f23877cafa5b39893421b32ca6295",
+                "TinyTeX-linux-x86_64-v2026.09.tar.xz",
+                "9551e932ed74ea77a36b4bd3fb6d852f540c044037b083f77a8b15d4b97ca3fc",
                 SelfExtractingWindowsArchive: false);
 
         if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
             return new DownloadAsset(
-                "TinyTeX-1-linux-arm64-v2026.09.tar.xz",
-                "ef8eb34928ed5ea4a39dfd1b797c6cdac7db7c0b3d289727bea03f716d222086",
+                "TinyTeX-linux-arm64-v2026.09.tar.xz",
+                "6fc321d7c57f133e62f07a711dbd52c79fda2d152a231afc421ab762b02e217b",
                 SelfExtractingWindowsArchive: false);
 
         if (OperatingSystem.IsMacOS())
             return new DownloadAsset(
-                "TinyTeX-1-darwin-v2026.09.tar.xz",
-                "974bb21f394def11780788eaacf77ae8fc1974a60bc9e75a9a2f9d735db479fe",
+                "TinyTeX-darwin-v2026.09.tar.xz",
+                "b8d9528b0d475b64e00b379111438b26b9e127a9b2b76782aecfc5db3326aa03",
                 SelfExtractingWindowsArchive: false);
 
         throw new PlatformNotSupportedException(
@@ -344,14 +372,28 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
             : OperatingSystem.IsMacOS()
                 ? $"macos-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}"
                 : $"linux-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}";
-        return Path.Combine(basePath, "Typescribe", "engines", $"tinytex-{TinyTexVersion}", platform);
+        return Path.Combine(basePath, "Typescribe", "engines", $"tinytex-full-{TinyTexVersion}", platform);
     }
 
     private static HttpClient CreateHttpClient()
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
+        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Typescribe/0.1");
         return client;
+    }
+
+    private static string ExtractUsefulError(string value)
+    {
+        var normalized = value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        var errorIndex = Array.FindIndex(lines, static line => line.StartsWith("!", StringComparison.Ordinal) || line.Contains("LaTeX Error:", StringComparison.Ordinal));
+        if (errorIndex >= 0)
+        {
+            var start = Math.Max(0, errorIndex - 4);
+            var count = Math.Min(lines.Length - start, 20);
+            return string.Join(Environment.NewLine, lines.Skip(start).Take(count));
+        }
+        return Tail(normalized, 6_000);
     }
 
     private static string Tail(string value, int maxLength)
