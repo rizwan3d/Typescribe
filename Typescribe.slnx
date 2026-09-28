@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Typescribe.Domain/Typescribe.Domain.csproj" />
+    <Project Path="src/Typescribe.Application/Typescribe.Application.csproj" />
+    <Project Path="src/Typescribe.Infrastructure/Typescribe.Infrastructure.csproj" />
+    <Project Path="src/Typescribe.Desktop/Typescribe.Desktop.csproj" />
+  </Folder>
+</Solution>
