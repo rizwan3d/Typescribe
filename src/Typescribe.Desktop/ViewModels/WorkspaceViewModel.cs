@@ -28,11 +28,14 @@ public sealed class WorkspaceViewModel(
     private long _editVersion;
     private long _previewBuildVersion;
     private long _editorNavigationVersion;
+    private long _corkboardVersion;
 
     public event EventHandler? StateChanged;
     public ObservableCollection<BinderRowViewModel> BinderRows { get; } = [];
     public ObservableCollection<SearchHit> SearchResults { get; } = [];
     public ObservableCollection<OutlineItemViewModel> OutlineItems { get; } = [];
+    public ObservableCollection<CorkboardCardViewModel> CorkboardCards { get; } = [];
+    public ObservableCollection<SnapshotInfo> Snapshots { get; } = [];
 
     public string ProjectTitle => _project?.Title ?? "Typescribe";
     public string EditorText => _editorText;
@@ -47,6 +50,18 @@ public sealed class WorkspaceViewModel(
     public bool SelectedIsContainer => _selectedNode?.IsContainer == true;
     public bool SelectedIncluded => _selectedNode?.IncludeInCompilation ?? false;
     public string SelectedTitle => _selectedNode?.Title ?? string.Empty;
+    public string SelectedSynopsis => _selectedNode?.Synopsis ?? string.Empty;
+    public string SelectedNotes => _selectedNode?.Notes ?? string.Empty;
+    public string SelectedStatus => _selectedNode?.Status ?? "Draft";
+    public string SelectedLabel => _selectedNode?.Label ?? string.Empty;
+    public string SelectedKeywords => _selectedNode?.Keywords ?? string.Empty;
+    public int SelectedTargetWords => _selectedNode?.TargetWords ?? 0;
+    public double SelectedTargetProgress => SelectedTargetWords <= 0 ? 0 : Math.Clamp(WordCount / (double)SelectedTargetWords, 0, 1);
+    public string SelectedTargetText => SelectedTargetWords <= 0
+        ? $"{WordCount:N0} words • no target"
+        : $"{WordCount:N0} / {SelectedTargetWords:N0} words ({SelectedTargetProgress:P0})";
+    public string CorkboardTitle { get; private set; } = "Corkboard";
+    public long CorkboardVersion => _corkboardVersion;
     public BookStyle CurrentStyle => _project?.Style ?? BookStyle.Default;
     public bool CanPublishPdf => exportService.CanPublishPdf;
     public string PublishingEngineName => exportService.PublishingEngineName;
@@ -103,6 +118,7 @@ public sealed class WorkspaceViewModel(
                 _editVersion = 0;
                 RecomputeDocumentState();
                 RequestEditorNavigation(1);
+                await RefreshSnapshotsAsync(cancellationToken);
                 SetStatus($"Editing {_selectedNode.Title}");
             }
             else
@@ -111,10 +127,13 @@ public sealed class WorkspaceViewModel(
                 _isDirty = false;
                 _editVersion = 0;
                 OutlineItems.Clear();
+                Snapshots.Clear();
                 PreviewText = $"{_selectedNode.Kind}: {_selectedNode.Title}";
                 WordCount = 0;
                 SetStatus($"Selected {_selectedNode.Title}");
             }
+
+            await RefreshCorkboardAsync(cancellationToken);
         }
         finally
         {
@@ -132,6 +151,7 @@ public sealed class WorkspaceViewModel(
         _isDirty = true;
         _editVersion++;
         RecomputeDocumentState();
+        UpdateActiveCorkboardWordCount();
         ScheduleAutosave();
         ScheduleLivePdfPreview();
         StateChanged?.Invoke(this, EventArgs.Empty);
@@ -190,6 +210,7 @@ public sealed class WorkspaceViewModel(
         if (!await repository.MoveNodeAsync(_project, node, offset, cancellationToken)) return;
         RefreshBinder();
         SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, node));
+        await RefreshCorkboardAsync(cancellationToken);
         ScheduleLivePdfPreview();
         SetStatus(offset < 0 ? "Moved binder item up" : "Moved binder item down");
     }
@@ -223,6 +244,7 @@ public sealed class WorkspaceViewModel(
         RefreshBinder();
         SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, source.Node));
         _selectedNode = source.Node;
+        await RefreshCorkboardAsync(cancellationToken);
         ScheduleLivePdfPreview();
         var placement = dropIntoTarget && target.Node.IsContainer
             ? $"into {target.Node.Title}"
@@ -239,8 +261,87 @@ public sealed class WorkspaceViewModel(
         await repository.SetCompilationIncludedAsync(_project, _selectedNode, include, cancellationToken);
         RefreshBinder();
         SelectedRow = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, _selectedNode));
+        await RefreshCorkboardAsync(cancellationToken);
         ScheduleLivePdfPreview();
         SetStatus(include ? "Included in compilation" : "Excluded from compilation");
+    }
+
+    public async Task SaveSelectedMetadataAsync(
+        string synopsis,
+        string notes,
+        string status,
+        string label,
+        string keywords,
+        int targetWords,
+        CancellationToken cancellationToken = default)
+    {
+        if (_project is null || _selectedNode is null) return;
+        await repository.SaveNodeMetadataAsync(
+            _project,
+            _selectedNode,
+            synopsis,
+            notes,
+            status,
+            label,
+            keywords,
+            targetWords,
+            cancellationToken);
+        await RefreshCorkboardAsync(cancellationToken);
+        SetStatus("Inspector metadata saved");
+    }
+
+    public async Task<SnapshotInfo?> CreateSnapshotAsync(string label, CancellationToken cancellationToken = default)
+    {
+        if (_project is null || _selectedNode?.IsDocument != true) return null;
+        var snapshot = await repository.CreateSnapshotAsync(
+            _project,
+            _selectedNode,
+            _editorText,
+            label,
+            cancellationToken);
+        await RefreshSnapshotsAsync(cancellationToken);
+        SetStatus($"Snapshot created {snapshot.CreatedAt.LocalDateTime:g}");
+        return snapshot;
+    }
+
+    public async Task RestoreSnapshotAsync(SnapshotInfo snapshot, CancellationToken cancellationToken = default)
+    {
+        if (_project is null || _selectedNode?.IsDocument != true) return;
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        await repository.CreateSnapshotAsync(
+            _project,
+            _selectedNode,
+            _editorText,
+            $"Before restore {DateTime.Now:g}",
+            cancellationToken);
+
+        _editorText = await repository.ReadSnapshotAsync(_project, _selectedNode, snapshot, cancellationToken);
+        _isDirty = true;
+        _editVersion++;
+        RecomputeDocumentState();
+        UpdateActiveCorkboardWordCount();
+        ScheduleAutosave();
+        ScheduleLivePdfPreview(TimeSpan.Zero);
+        await RefreshSnapshotsAsync(cancellationToken);
+        RequestEditorNavigation(1);
+        SetStatus($"Restored snapshot from {snapshot.CreatedAt.LocalDateTime:g}");
+    }
+
+    public async Task DeleteSnapshotAsync(SnapshotInfo snapshot, CancellationToken cancellationToken = default)
+    {
+        if (_project is null || _selectedNode?.IsDocument != true) return;
+        ArgumentNullException.ThrowIfNull(snapshot);
+        await repository.DeleteSnapshotAsync(_project, _selectedNode, snapshot, cancellationToken);
+        await RefreshSnapshotsAsync(cancellationToken);
+        SetStatus("Snapshot deleted");
+    }
+
+    public async Task SelectCorkboardCardAsync(CorkboardCardViewModel? card, CancellationToken cancellationToken = default)
+    {
+        if (card is null) return;
+        var row = BinderRows.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, card.Node));
+        if (row is not null) await SelectAsync(row, cancellationToken);
     }
 
     public async Task UpdateStyleAsync(BookStyle style, CancellationToken cancellationToken = default)
@@ -434,6 +535,74 @@ public sealed class WorkspaceViewModel(
             string.Equals(item.Title, previousHeading.Title, StringComparison.Ordinal));
     }
 
+    private async Task RefreshSnapshotsAsync(CancellationToken cancellationToken)
+    {
+        Snapshots.Clear();
+        if (_project is null || _selectedNode?.IsDocument != true) return;
+        var snapshots = await repository.ListSnapshotsAsync(_project, _selectedNode, cancellationToken);
+        foreach (var snapshot in snapshots) Snapshots.Add(snapshot);
+    }
+
+    private async Task RefreshCorkboardAsync(CancellationToken cancellationToken)
+    {
+        CorkboardCards.Clear();
+        if (_project is null)
+        {
+            CorkboardTitle = "Corkboard";
+            _corkboardVersion++;
+            return;
+        }
+
+        ProjectNode container;
+        if (_selectedNode is null)
+        {
+            container = _project.Root;
+        }
+        else if (_selectedNode.IsContainer)
+        {
+            container = _selectedNode;
+        }
+        else
+        {
+            container = FindParent(_project.Root, _selectedNode) ?? _project.Root;
+        }
+
+        CorkboardTitle = container == _project.Root ? _project.Title : container.Title;
+        foreach (var child in container.Children)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var words = await CountNodeWordsAsync(child, cancellationToken);
+            CorkboardCards.Add(new CorkboardCardViewModel(child, words));
+        }
+        _corkboardVersion++;
+    }
+
+    private async Task<int> CountNodeWordsAsync(ProjectNode node, CancellationToken cancellationToken)
+    {
+        if (_project is null) return 0;
+        if (node.IsDocument)
+        {
+            var content = ReferenceEquals(node, _selectedNode)
+                ? _editorText
+                : await repository.ReadDocumentAsync(_project, node, cancellationToken);
+            return wordCountService.Count(content);
+        }
+
+        var total = 0;
+        foreach (var child in node.Children)
+            total += await CountNodeWordsAsync(child, cancellationToken);
+        return total;
+    }
+
+    private void UpdateActiveCorkboardWordCount()
+    {
+        if (_selectedNode is null) return;
+        var card = CorkboardCards.FirstOrDefault(candidate => ReferenceEquals(candidate.Node, _selectedNode));
+        if (card is null) return;
+        card.CurrentWords = WordCount;
+        _corkboardVersion++;
+    }
+
     private void ScheduleAutosave()
     {
         _autosaveCts?.Cancel();
@@ -584,6 +753,10 @@ public sealed class WorkspaceViewModel(
         SelectedRow = null;
         SelectedOutline = null;
         OutlineItems.Clear();
+        Snapshots.Clear();
+        CorkboardCards.Clear();
+        CorkboardTitle = "Corkboard";
+        _corkboardVersion++;
         _editorText = string.Empty;
         _isDirty = false;
         _editVersion = 0;
