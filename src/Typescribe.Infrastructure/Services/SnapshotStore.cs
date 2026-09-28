@@ -93,7 +93,7 @@ internal sealed class SnapshotStore
 
     private static SnapshotInfo ReadInfo(string id, string sourcePath, string metadataPath)
     {
-        var createdAt = File.GetLastWriteTimeUtc(sourcePath);
+        DateTimeOffset createdAt = File.GetLastWriteTimeUtc(sourcePath);
         var label = string.Empty;
         var words = 0;
 
