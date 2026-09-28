@@ -230,7 +230,6 @@ public sealed class WorkspaceViewModel(
         }
 
         SetStatus($"PDF engine ready: {PublishingEngineName}");
-        ScheduleLivePdfPreview(TimeSpan.Zero);
     }
 
     public async Task RefreshLivePdfPreviewAsync(CancellationToken cancellationToken = default)
