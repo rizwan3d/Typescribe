@@ -1,0 +1,59 @@
+name: portable-native-aot
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Publish
+        run: ./scripts/publish.sh linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Typescribe-linux-x64
+          path: artifacts/Typescribe-linux-x64.tar.gz
+          if-no-files-found: error
+
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish
+        shell: pwsh
+        run: ./scripts/publish.ps1 -Rid win-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Typescribe-win-x64
+          path: artifacts/Typescribe-win-x64.zip
+          if-no-files-found: error
+
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish
+        run: ./scripts/publish.sh osx-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Typescribe-osx-arm64
+          path: artifacts/Typescribe-osx-arm64.zip
+          if-no-files-found: error
