@@ -8,6 +8,9 @@ public sealed class DocumentExportService(IDocumentParser parser, IDocumentRende
     public bool CanPublishPdf => publishingEngine.IsAvailable;
     public string PublishingEngineName => publishingEngine.Name;
 
+    public Task EnsurePdfEngineAsync(CancellationToken cancellationToken = default)
+        => publishingEngine.EnsureAvailableAsync(cancellationToken);
+
     public Task ExportPdfAsync(string source, string title, string destination, CancellationToken cancellationToken = default)
         => publishingEngine.PublishAsync(renderer.RenderTypst(parser.Parse(source), title), destination, cancellationToken);
 
