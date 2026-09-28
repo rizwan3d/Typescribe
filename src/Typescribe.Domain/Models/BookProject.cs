@@ -6,5 +6,6 @@ public sealed class BookProject
     public required string Title { get; init; }
     public string Author { get; init; } = string.Empty;
     public string Language { get; init; } = "en";
+    public BookStyle Style { get; set; } = BookStyle.Default;
     public required ProjectNode Root { get; init; }
 }
