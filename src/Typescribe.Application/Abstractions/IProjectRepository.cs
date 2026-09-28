@@ -15,6 +15,36 @@ public interface IProjectRepository
     Task<bool> MoveNodeAsync(BookProject project, ProjectNode node, int offset, CancellationToken cancellationToken = default);
     Task<bool> ReparentNodeAsync(BookProject project, ProjectNode node, ProjectNode? newParent, int targetIndex, CancellationToken cancellationToken = default);
     Task SetCompilationIncludedAsync(BookProject project, ProjectNode node, bool included, CancellationToken cancellationToken = default);
+    Task SaveNodeMetadataAsync(
+        BookProject project,
+        ProjectNode node,
+        string synopsis,
+        string notes,
+        string status,
+        string label,
+        string keywords,
+        int targetWords,
+        CancellationToken cancellationToken = default);
+    Task<SnapshotInfo> CreateSnapshotAsync(
+        BookProject project,
+        ProjectNode node,
+        string content,
+        string label,
+        CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SnapshotInfo>> ListSnapshotsAsync(
+        BookProject project,
+        ProjectNode node,
+        CancellationToken cancellationToken = default);
+    Task<string> ReadSnapshotAsync(
+        BookProject project,
+        ProjectNode node,
+        SnapshotInfo snapshot,
+        CancellationToken cancellationToken = default);
+    Task DeleteSnapshotAsync(
+        BookProject project,
+        ProjectNode node,
+        SnapshotInfo snapshot,
+        CancellationToken cancellationToken = default);
     Task SaveStyleAsync(BookProject project, BookStyle style, CancellationToken cancellationToken = default);
     IAsyncEnumerable<(ProjectNode Node, string Content)> EnumerateDocumentsAsync(BookProject project, CancellationToken cancellationToken = default);
 }
