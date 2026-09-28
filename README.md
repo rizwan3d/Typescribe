@@ -1,103 +1,138 @@
 # Typescribe
 
-Typescribe is a local-first, cross-platform C# desktop application for long-form writing and professional typesetting. Manuscripts stay in plain UTF-8 files, are parsed into a canonical semantic AST, and are published through a LaTeX-only production pipeline.
+Typescribe is a local-first, cross-platform C# desktop application for long-form writing and professional typesetting. Manuscripts stay in plain UTF-8 files, planning metadata stays in small project sidecars, and publication uses a LaTeX-only pipeline.
 
 ## Technology
 
 - **.NET 10 / C# 14**
 - **Avalonia 12.1.3** for Windows, macOS, and Linux
-- **Native AOT** for self-contained platform-native application releases
+- **Native AOT** for self-contained platform-native releases
 - **LuaLaTeX** for preview and production PDF generation
-- **TinyTeX 2026.09** as the verified portable LuaLaTeX runtime when a system LuaLaTeX installation is unavailable
-- **PDFtoImage 5.4.0 + PDFium/SkiaSharp** for cross-platform in-app PDF page rendering
-- **Plain UTF-8 manuscript files** plus small text metadata/style files
+- **TinyTeX 2026.09** as the verified portable LuaLaTeX runtime when needed
+- **PDFtoImage + PDFium/SkiaSharp** for in-app PDF rendering
+- **Plain UTF-8 manuscript files** with text-based project metadata
 
 WPF is intentionally not used because it is Windows-only.
 
-## Authoring workspace
+## Studio workspace
 
-Typescribe now uses a long-form authoring workspace inspired by the workflow of established writing applications while keeping its own UI and project format.
+Typescribe uses a multi-pane long-form writing studio inspired by established authoring workflows while keeping its own UI and project format.
 
-The main shell provides:
-
-- **Binder / Search** on the left
-- **Editor / Corkboard** in the center
-- **Inspector / PDF / Outline / Snapshots** on the right
+- **Left:** Binder, Search, Collections
+- **Center:** Editor, Corkboard, Outliner
+- **Right:** Inspector, Comments, PDF, Outline, Snapshots, Project Targets
 - Resizable and hideable side panes
-- Desktop menu bar, command toolbar, context menus, and keyboard shortcuts
-- **F11 Composition Mode** for distraction-reduced fullscreen writing
+- Menu bar, command toolbar, context menus, and keyboard shortcuts
+- **F11 Composition Mode** for fullscreen distraction-reduced writing
 
-Selecting a folder or part automatically brings the Corkboard forward. Selecting a manuscript document brings the Editor forward.
+Selecting a folder or part favors planning views; selecting a manuscript document favors the Editor.
 
 ## Binder
 
-The binder is backed by the manuscript filesystem and `.typescribe/binder.tsv`. It supports chapters, parts, folders, nested creation, rename, delete, include/exclude, persistent ordering, and drag/drop reorganization.
+The Binder is backed by the real manuscript filesystem plus `.typescribe/binder.tsv`.
 
-Drag/drop changes the actual project structure:
+It supports chapters, parts, folders, nested creation, rename, delete, include/exclude, persistent ordering, move up/down, and drag/drop reorganization. Drag/drop performs real filesystem/tree moves: drop above/below to reorder or into a folder/part to reparent. Cyclic moves are rejected.
 
-- Drop near the top of an item to move **before** it.
-- Drop near the bottom to move **after** it.
-- Drop in the middle of a folder or part to move **inside** it.
-- Moving a folder reparents its full subtree and updates project-relative paths.
-- Cyclic moves are rejected.
-
-Each binder item also has a stable persistent ID independent from its filesystem path. Metadata and snapshots therefore remain associated with a document after rename or reparenting.
+Each binder item has a stable persistent ID independent of its path, so snapshots, comments, custom metadata, and collections survive rename and drag/drop moves.
 
 ## Corkboard
 
-The center Corkboard shows index-card-style planning cards for the selected container, or the siblings of the selected document.
+The Corkboard shows index-card planning cards for the active binder group. Cards display title, synopsis, status, label, compile state, word count, and document-target progress.
 
-Cards show:
+Cards can be double-clicked to open the item and can now be **dragged directly on the Corkboard to reorder siblings**. The Corkboard reuses the same binder move operation as the Binder, so planning order and compile order remain consistent.
+
+## Project Outliner
+
+The **Outliner** is a spreadsheet-style project view. Its built-in columns include:
 
 - Title
-- Synopsis
-- Document kind
-- Compile state
+- Type
 - Status
 - Label
-- Current word count
-- Word-target progress when a target is configured
+- Current words
+- Word target
+- Compile inclusion
 
-Double-clicking a card opens that binder item. Container cards keep the Corkboard visible; document cards switch to the Editor.
+Every project-defined custom metadata field automatically becomes an additional Outliner column. Clicking a document title opens it in the Editor. Manual Collections can filter the Outliner to a curated set of documents.
 
-## Inspector and document metadata
+## Inspector and custom metadata
 
-The Inspector persists planning metadata separately from manuscript prose:
+The Inspector keeps planning information separate from manuscript prose:
 
 - Synopsis
 - Notes
 - Status
 - Label
 - Keywords
-- Word target
+- Per-document word target
+- User-defined custom metadata fields
 
-Inspector fields autosave after a short idle period and are flushed before document selection changes. Metadata is stored in the project’s text-based binder metadata rather than embedded in manuscript files.
+Standard Inspector fields autosave after a short idle period. Custom metadata fields are persisted when edited and are also visible as Outliner columns.
 
-The current document target is shown as a progress bar and in the status area while writing.
+Custom field definitions, values, writing targets, comments, and collections are stored in `.typescribe/authoring.tsv` rather than embedded in manuscript files.
 
-## Snapshots
+## Comments and annotations
 
-Each manuscript document can have immutable timestamped snapshots stored under `.typescribe/snapshots/`.
+Document comments are line-anchored annotations stored outside manuscript text.
 
-- **Take Snapshot** captures the current in-memory editor text, including unsaved edits.
-- The Snapshots inspector lists date/time, word count, and label.
-- **Restore** replaces the current editor buffer with the selected snapshot.
-- Before restore, Typescribe automatically creates a safety snapshot of the current text so the operation remains reversible.
+- **Document → Add Comment at Caret** creates a comment at the current source line.
+- The Comments inspector lists open and resolved comments.
+- Double-clicking a comment jumps the editor to its source line.
+- Comments can be resolved/reopened or deleted.
+
+Line anchors are intentionally lightweight in this version; edits above an annotation do not yet automatically remap its line number.
+
+## Writing targets
+
+Typescribe supports four levels of writing progress:
+
+- Per-document target in the Inspector
+- **Project target** for total manuscript words
+- **Daily target** measured from the first project word count seen on the current local day
+- **Session target** measured from the project word count when the project is opened
+
+The Project inspector shows independent progress bars for project, daily, and session targets. Daily baseline/date are persisted across restarts; session baseline resets when the project is opened. Live editor changes update target progress without waiting for autosave.
+
+## Snapshots and diff comparison
+
+Each manuscript document can have immutable timestamped snapshots under `.typescribe/snapshots/`.
+
+- **Take Snapshot** captures the current in-memory text, including unsaved edits.
+- Snapshot entries show date/time, word count, and label.
+- **Compare** opens a line-oriented snapshot-vs-current diff with added/removed/unchanged lines.
+- **Restore** replaces the editor buffer with the selected snapshot.
+- Before restore, Typescribe automatically creates a safety snapshot of the current text.
 - Snapshots can be deleted explicitly.
+
+The diff service uses a bounded line LCS for normal documents and a memory-safe fallback for unusually large files.
+
+## Collections and saved searches
+
+The left Collections tab supports two collection types:
+
+### Saved searches
+
+A current project search can be saved with its query and matching options (case, whole word, regex). Double-clicking the collection reruns that search.
+
+### Manual collections
+
+A manual collection stores stable binder-item IDs rather than paths. Create one from the selected binder item, add additional selections later, and double-click it to filter the Outliner to that collection.
+
+Collections are organizational views only; they do not duplicate or move manuscript files.
+
+## Project templates
+
+Use **Project → Save Project as Template** to save the current project structure as a reusable local template. Runtime build output and document snapshots are excluded.
+
+Use **File → New from Template** to choose a saved template, select an empty destination folder, enter a new project title, materialize the project, and open it immediately.
+
+Templates are stored in the user's local Typescribe application-data directory, not inside the active manuscript project.
 
 ## Composition Mode
 
-Press **F11** or use **View → Composition Mode** to enter distraction-reduced writing mode.
+Press **F11** or use **View → Composition Mode**.
 
-Composition Mode:
-
-- Hides Binder and Inspector
-- Hides menus, toolbar, and status chrome
-- Expands the editor
-- Uses fullscreen window mode
-- Keeps autosave and live document state active
-
-Press F11 again to restore the previous window and pane state.
+Composition Mode hides Binder, Inspector, menus, toolbar, and status chrome; expands the Editor; and enters fullscreen mode while preserving autosave and live document state. Press F11 again to restore the previous pane visibility and window state.
 
 ## Markdown-like authoring
 
@@ -126,80 +161,37 @@ F(x) = \int_0^x f(t) dt
 $$
 ````
 
-These structures are represented in the Typescribe AST rather than passed directly to LuaLaTeX.
+These structures are parsed into the Typescribe AST rather than passed directly to LuaLaTeX.
 
 ## Outline and selection-aware preview
 
-When a manuscript document is selected, Typescribe builds an outline from semantic heading nodes. Selecting a heading moves the editor caret to its source line and changes live preview scope to that section.
+Selecting a manuscript document builds a heading Outline. Selecting a heading moves the editor caret to its source line and scopes live PDF preview to that section. Clear heading focus to preview the whole document, or enable **Whole book** to preview the complete compilation.
 
-Preview scope follows writing context:
-
-1. Selecting a chapter/document previews that document by default.
-2. Selecting a heading previews that heading and its section.
-3. **Show Full Document** clears heading focus.
-4. **Whole book** switches live preview to the complete compilation.
-5. Final **Publish PDF** always publishes the complete included book.
+Final **Publish PDF** always publishes the complete included book regardless of temporary preview scope.
 
 ## Search
 
-Project search covers document titles and manuscript text and supports:
+Project search covers document titles and manuscript text and supports case-insensitive/default matching, case-sensitive matching, whole-word matching, regular expressions, regex timeout protection, and navigation to matching documents/source lines.
 
-- Case-insensitive search by default
-- Case-sensitive matching
-- Whole-word matching
-- Regular expressions
-- Regex timeout protection
-- Double-click navigation to matching documents and source lines
+Searches can be saved as Collections.
 
 ## Book styles
 
-`styles/book.style` keeps presentation separate from manuscript content. The current style editor exposes page dimensions, margins, body font, font size, line spacing, paragraph indentation/spacing, and justification.
+`styles/book.style` keeps presentation separate from manuscript content. The style editor exposes page dimensions, margins, body font, font size, line spacing, paragraph indentation/spacing, and justification. The same style model feeds live preview and final publishing.
 
-The LaTeX generator consumes the same style model for live preview and final publishing.
+## Realtime PDF preview and publishing
 
-## Realtime PDF preview
+The PDF inspector is a real generated PDF preview:
 
-The PDF inspector is a real generated PDF preview.
+1. Editor input is debounced.
+2. Obsolete preview compilation is cancelled.
+3. Current in-memory manuscript text is converted from semantic AST to LaTeX.
+4. LuaLaTeX performs a fast one-pass preview build.
+5. PDFium renders the requested page in Typescribe.
 
-While editing:
+Final **Publish PDF** uses two LuaLaTeX passes for stable references/page numbering.
 
-1. Typescribe waits about 550 ms after the latest keystroke.
-2. An older preview compilation is cancelled.
-3. The current in-memory editor buffer is compiled with LuaLaTeX without waiting for autosave.
-4. A one-pass preview writes `build/live-preview.pdf`.
-5. PDFium renders the current page inside Typescribe.
-
-The preview supports page navigation and zoom. Selection, heading focus, style changes, binder ordering, and compile inclusion changes can trigger a fresh scoped preview.
-
-## PDF publishing
-
-```text
-Manuscript files / editor buffer
-    ↓
-Typescribe parser
-    ↓
-Semantic AST
-    ↓
-Book style
-    ↓
-LaTeX generator
-    ↓
-LuaLaTeX
-    ↓
-PDF
-```
-
-Live preview uses one LuaLaTeX pass for responsiveness. **Publish PDF** uses two passes for stable references/page numbering.
-
-Typescribe resolves LuaLaTeX in this order:
-
-1. `TYPESCRIBE_LUALATEX`
-2. Typescribe-managed TinyTeX runtime
-3. `lualatex` on `PATH`
-
-If unavailable, Typescribe can download a pinned full TinyTeX 2026.09 archive, verify its SHA-256 digest, install it in local application data, and continue without a separate manual TeX installation.
-
-LuaLaTeX is launched with shell escape disabled.
+Typescribe resolves LuaLaTeX from `TYPESCRIBE_LUALATEX`, then its managed TinyTeX runtime, then system `PATH`. If unavailable, the application can download and SHA-256 verify a pinned full TinyTeX runtime. LuaLaTeX runs with shell escape disabled.
 
 ## Project format
 
@@ -208,6 +200,7 @@ my-book/
   typescribe.yaml
   .typescribe/
     binder.tsv
+    authoring.tsv
     snapshots/
       <persistent-document-id>/
         <snapshot-id>.md
@@ -222,7 +215,7 @@ my-book/
     live-preview.pdf
 ```
 
-Generated `.tex` and `.pdf` files are outputs, not canonical manuscript content.
+Canonical writing remains in manuscript files. `.typescribe/` contains Typescribe-specific planning state. Generated `.tex` and `.pdf` files are outputs.
 
 ## Development
 
@@ -233,41 +226,34 @@ dotnet restore Typescribe.slnx
 dotnet run --project src/Typescribe.Desktop/Typescribe.Desktop.csproj
 ```
 
-A TeX installation is not required just to build or open the editor. PDF preview/publishing can install the verified portable LuaLaTeX runtime from inside Typescribe when first needed.
+A TeX installation is not required just to build/open the editor. PDF features can install the verified portable LuaLaTeX runtime on first use.
 
 ## Portable Native AOT releases
 
-### Windows x64
-
 ```powershell
+# Windows x64
 ./scripts/publish.ps1 -Rid win-x64
 ```
 
-### Linux
-
 ```bash
+# Linux
 ./scripts/publish.sh linux-x64
-# or
 ./scripts/publish.sh linux-arm64
-```
 
-### macOS
-
-```bash
+# macOS
 ./scripts/publish.sh osx-arm64
-# or
 ./scripts/publish.sh osx-x64
 ```
 
-Native AOT output is operating-system/architecture-specific. End users do not need the .NET runtime.
+Native AOT output is OS/architecture-specific; end users do not need the .NET runtime.
 
 ## Current limitations
 
-Typescribe is still an early implementation. Larger remaining gaps include persisted workspace-layout preferences, Corkboard drag/drop directly on cards, a spreadsheet-style project Outliner, project/session/daily writing targets, snapshot compare/diff, rich-text WYSIWYM editing, precise cursor-to-PDF synchronization, virtualized multi-page PDF scrolling/thumbnails, figures/assets in the AST, tables, footnotes, citations/bibliography, cross-references, comments/track changes, EPUB/DOCX export, undoable filesystem binder operations, plugin sandboxing, and structured compiler diagnostics mapped to manuscript source lines.
+Typescribe is still an early implementation. Remaining larger gaps include persisted workspace-layout preferences, editable/sortable Outliner cells, freeform Corkboard layouts/card stacks, robust annotation anchor remapping after edits, rich-text WYSIWYM editing, precise cursor-to-PDF synchronization, virtualized multi-page PDF scrolling/thumbnails, figures/assets in the AST, tables, footnotes, citations/bibliography, cross-references, track changes, EPUB/DOCX export, undoable filesystem binder operations, plugin sandboxing, and structured LuaLaTeX diagnostics mapped to manuscript source lines.
 
 ## Security and privacy defaults
 
-Typescribe keeps manuscript work local. Project-relative paths are canonicalized before file access, saves use atomic replacement, binder drag/drop rejects cyclic tree moves, publishing uses generated LaTeX rather than manuscript-provided shell commands, LuaLaTeX runs with `-no-shell-escape`, and downloaded TinyTeX archives are checksum-verified. No manuscript telemetry or upload path is present.
+Typescribe keeps manuscript work local. Project-relative paths are canonicalized before access, saves use atomic replacement, binder/Corkboard drag operations reject invalid moves, comments and metadata do not modify manuscript prose, LuaLaTeX runs with `-no-shell-escape`, and downloaded TinyTeX archives are checksum-verified. No manuscript telemetry/upload path is present.
 
 ## Repository notes
 
