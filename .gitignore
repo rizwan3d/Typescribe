@@ -1,0 +1,10 @@
+bin/
+obj/
+out/
+artifacts/
+.vs/
+.idea/
+*.user
+*.suo
+src/Typescribe.Infrastructure/tools/typst
+src/Typescribe.Infrastructure/tools/typst.exe
