@@ -14,11 +14,31 @@ Typescribe is a local-first, cross-platform C# desktop application for long-form
 
 WPF is intentionally not used because it is Windows-only.
 
+## Desktop writing workspace
+
+Typescribe uses a resizable three-pane writing workspace designed for long-form projects:
+
+- **Binder / Search** on the left
+- **Source editor** in the center
+- **PDF Preview / Outline** inspector on the right
+
+A desktop menu bar provides File, Edit, View, Insert, Format, Project, Publish, and Help menus. A compact toolbar keeps common actions such as New, Open, Save, Add Chapter, Search, Book Style, Preview, and Publish immediately available. Binder and inspector panes can be hidden when a distraction-reduced writing layout is preferred.
+
+Common shortcuts include save, open, new project, project search, bold, italic, and binder rename. Binder actions are also available from a context menu.
+
 ## Implemented v0.1 workflows
 
 ### Binder
 
-The binder is backed by the manuscript filesystem and a small `.typescribe/binder.tsv` metadata file. It supports chapters, parts, folders, nested creation based on the selected container, rename, delete, move up/down, include/exclude from compilation, and persistent ordering/display titles.
+The binder is backed by the manuscript filesystem and a small `.typescribe/binder.tsv` metadata file. It supports chapters, parts, folders, nested creation based on the selected container, rename, delete, include/exclude from compilation, persistent ordering/display titles, and drag/drop reorganization.
+
+Drag/drop changes the actual project structure rather than only rearranging the screen:
+
+- Drop near the top of an item to move **before** it.
+- Drop near the bottom to move **after** it.
+- Drop in the middle of a folder or part to move **inside** it.
+- Moving a folder reparents its full subtree and updates project-relative paths.
+- Cyclic moves, such as moving a folder into one of its descendants, are rejected.
 
 The manuscript files remain normal files under `manuscript/` and can be edited outside Typescribe.
 
@@ -51,9 +71,25 @@ $$
 
 These structures are represented in the Typescribe AST rather than passed directly to LuaLaTeX.
 
+The Insert and Format menus provide quick authoring commands for headings, strong text, emphasis, inline code, quotes, and bullet lists while still storing plain Markdown-like source.
+
+### Outline and selection-aware preview
+
+When a manuscript document is selected, Typescribe builds an outline from its semantic heading nodes. Selecting an outline heading moves the editor caret to that source line and changes the live preview scope to that section.
+
+The live preview scope follows the writing context:
+
+1. Selecting a chapter/document previews that document by default.
+2. Selecting a heading previews that heading and its section.
+3. **Show Full Document** clears heading focus.
+4. **Whole book** switches the live preview to the complete compilation.
+5. Final **Publish PDF** always publishes the complete included book, regardless of the temporary preview scope.
+
+This keeps preview recompilation focused and responsive while still allowing whole-book layout checks when needed.
+
 ### Search
 
-Project search covers document titles and manuscript text and supports case-insensitive search by default, case-sensitive matching, whole-word matching, regular expressions, regex timeout protection, and double-click navigation to matching documents.
+Project search covers document titles and manuscript text and supports case-insensitive search by default, case-sensitive matching, whole-word matching, regular expressions, regex timeout protection, and double-click navigation to matching documents and lines.
 
 ### Basic book styles
 
@@ -63,7 +99,7 @@ The LaTeX generator consumes this style model for both live preview and final pu
 
 ### Realtime PDF preview
 
-The right-hand pane is a real PDF preview, not a semantic-text approximation.
+The inspector contains a real PDF preview, not a semantic-text approximation.
 
 While editing:
 
@@ -73,7 +109,7 @@ While editing:
 4. A fast one-pass build writes `build/live-preview.pdf`.
 5. PDFium renders the current page inside Typescribe.
 
-The preview includes page navigation and zoom controls. Style changes, binder ordering, and include/exclude changes also trigger a new preview build.
+The preview includes page navigation and zoom controls. Style changes, binder ordering, include/exclude changes, document selection, and heading selection also trigger a new scoped preview build.
 
 ### PDF publishing
 
@@ -95,7 +131,7 @@ LuaLaTeX
 PDF
 ```
 
-Live preview uses one LuaLaTeX pass for responsiveness. **Publish Book PDF** uses two passes for stable references/page numbering and writes to the user-selected destination.
+Live preview uses one LuaLaTeX pass for responsiveness. **Publish PDF** uses two passes for stable references/page numbering and writes to the user-selected destination.
 
 Typescribe resolves LuaLaTeX in this order:
 
@@ -194,11 +230,11 @@ Native AOT output is operating-system/architecture-specific. End users do not ne
 
 ## Current limitations
 
-This is still a v0.1 implementation, not the entire product specification. Not yet implemented include drag/drop binder reparenting, source-to-PDF position synchronization, rich-text WYSIWYM editing, figures/assets in the AST, tables, footnotes, citations/bibliography, cross-references, corkboard, outline, comments/track changes, EPUB/DOCX export, snapshots, plugin sandboxing, and structured compiler diagnostics mapped to manuscript source lines.
+This is still a v0.1 implementation, not the entire product specification. Remaining larger gaps include persistent workspace-layout preferences, rich-text WYSIWYM editing, precise cursor-to-PDF synchronization, virtualized multi-page PDF scrolling/thumbnails, figures/assets in the AST, tables, footnotes, citations/bibliography, cross-references, corkboard, rich document metadata/inspector fields, comments/track changes, EPUB/DOCX export, snapshots, plugin sandboxing, undoable filesystem binder operations, and structured compiler diagnostics mapped to manuscript source lines.
 
 ## Security and privacy defaults
 
-Typescribe keeps manuscript work local. Project-relative paths are canonicalized before file access, saves use atomic replacement, publishing uses generated LaTeX rather than manuscript-provided shell commands, LuaLaTeX runs with `-no-shell-escape`, and downloaded TinyTeX archives are checksum-verified. No manuscript telemetry or upload path is present in the v0.1 foundation.
+Typescribe keeps manuscript work local. Project-relative paths are canonicalized before file access, saves use atomic replacement, binder drag/drop rejects cyclic tree moves, publishing uses generated LaTeX rather than manuscript-provided shell commands, LuaLaTeX runs with `-no-shell-escape`, and downloaded TinyTeX archives are checksum-verified. No manuscript telemetry or upload path is present in the v0.1 foundation.
 
 ## Repository notes
 
