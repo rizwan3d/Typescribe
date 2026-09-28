@@ -25,7 +25,25 @@ internal sealed class BinderMetadataStore
             var relativePath = Unescape(fields[2]);
             if (string.IsNullOrWhiteSpace(relativePath)) continue;
             var title = fields.Length >= 4 ? Unescape(fields[3]) : string.Empty;
-            result[Normalize(relativePath)] = new BinderMetadata(kind, included, order++, title);
+            var synopsis = fields.Length >= 5 ? Unescape(fields[4]) : string.Empty;
+            var notes = fields.Length >= 6 ? Unescape(fields[5]) : string.Empty;
+            var status = fields.Length >= 7 ? Unescape(fields[6]) : "Draft";
+            var label = fields.Length >= 8 ? Unescape(fields[7]) : string.Empty;
+            var keywords = fields.Length >= 9 ? Unescape(fields[8]) : string.Empty;
+            var targetWords = fields.Length >= 10 && int.TryParse(fields[9], out var parsedTarget)
+                ? Math.Max(0, parsedTarget)
+                : 0;
+            result[Normalize(relativePath)] = new BinderMetadata(
+                kind,
+                included,
+                order++,
+                title,
+                synopsis,
+                notes,
+                status,
+                label,
+                keywords,
+                targetWords);
         }
         return result;
     }
@@ -33,14 +51,20 @@ internal sealed class BinderMetadataStore
     public Task SaveAsync(BookProject project, CancellationToken cancellationToken = default)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("# kind\tincluded\trelative-path\ttitle");
+        builder.AppendLine("# kind\tincluded\trelative-path\ttitle\tsynopsis\tnotes\tstatus\tlabel\tkeywords\ttarget-words");
         foreach (var node in Flatten(project.Root))
         {
             if (node.RelativePath is null) continue;
             builder.Append(node.Kind).Append('\t')
                 .Append(node.IncludeInCompilation).Append('\t')
                 .Append(Escape(Normalize(node.RelativePath))).Append('\t')
-                .Append(Escape(node.Title)).AppendLine();
+                .Append(Escape(node.Title)).Append('\t')
+                .Append(Escape(node.Synopsis)).Append('\t')
+                .Append(Escape(node.Notes)).Append('\t')
+                .Append(Escape(node.Status)).Append('\t')
+                .Append(Escape(node.Label)).Append('\t')
+                .Append(Escape(node.Keywords)).Append('\t')
+                .Append(node.TargetWords).AppendLine();
         }
         return AtomicFileWriter.WriteTextAsync(GetPath(project.RootPath), builder.ToString(), cancellationToken);
     }
@@ -94,4 +118,14 @@ internal sealed class BinderMetadataStore
     }
 }
 
-internal sealed record BinderMetadata(NodeKind Kind, bool Included, int Order, string Title);
+internal sealed record BinderMetadata(
+    NodeKind Kind,
+    bool Included,
+    int Order,
+    string Title,
+    string Synopsis,
+    string Notes,
+    string Status,
+    string Label,
+    string Keywords,
+    int TargetWords);
