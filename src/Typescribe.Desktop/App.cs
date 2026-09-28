@@ -21,7 +21,7 @@ public sealed class App : AvaloniaApplication
             var repository = new FileSystemProjectRepository();
             var parser = new DocumentParser();
             var renderer = new DocumentRenderer();
-            var publishingEngine = new BundledTypstPublishingEngine();
+            var publishingEngine = new LuaLatexPublishingEngine();
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
             var searchService = new ProjectSearchService(repository);
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
