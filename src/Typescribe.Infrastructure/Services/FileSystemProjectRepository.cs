@@ -196,6 +196,72 @@ public sealed class FileSystemProjectRepository : IProjectRepository
         return true;
     }
 
+    public async Task<bool> ReparentNodeAsync(
+        BookProject project,
+        ProjectNode node,
+        ProjectNode? newParent,
+        int targetIndex,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(node);
+        if (ReferenceEquals(node, project.Root)) return false;
+
+        newParent ??= project.Root;
+        if (!newParent.IsContainer)
+            throw new InvalidOperationException("Binder items can only be dropped into the book, a part, or a folder.");
+        if (ReferenceEquals(node, newParent) || ContainsNode(node, newParent))
+            throw new InvalidOperationException("A binder item cannot be moved inside itself or one of its descendants.");
+
+        var oldParent = FindParent(project.Root, node)
+            ?? throw new InvalidOperationException("The binder item is detached from the project tree.");
+
+        targetIndex = Math.Clamp(targetIndex, 0, newParent.Children.Count);
+        if (ReferenceEquals(oldParent, newParent))
+        {
+            var oldIndex = oldParent.IndexOf(node);
+            if (oldIndex < 0) return false;
+            if (targetIndex > oldIndex) targetIndex--;
+            targetIndex = Math.Clamp(targetIndex, 0, Math.Max(0, oldParent.Children.Count - 1));
+            if (targetIndex == oldIndex) return false;
+
+            oldParent.RemoveChild(node);
+            oldParent.InsertChild(targetIndex, node);
+            await _binderStore.SaveAsync(project, cancellationToken);
+            return true;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var sourcePath = ResolveNodePath(project, node);
+        var destinationDirectory = ReferenceEquals(newParent, project.Root)
+            ? Path.Combine(project.RootPath, ManuscriptFolder)
+            : ResolveNodePath(project, newParent);
+        Directory.CreateDirectory(destinationDirectory);
+
+        var fileName = Path.GetFileName(sourcePath);
+        var destinationPath = Path.Combine(destinationDirectory, fileName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            destinationPath = node.IsContainer
+                ? CreateUniquePath(destinationDirectory, fileName, extension: null)
+                : CreateUniquePath(destinationDirectory, Path.GetFileNameWithoutExtension(fileName), Path.GetExtension(fileName));
+        }
+
+        var oldRelative = BinderMetadataStore.Normalize(node.RelativePath
+            ?? throw new InvalidOperationException("The binder item has no project path."));
+
+        if (node.IsContainer) Directory.Move(sourcePath, destinationPath);
+        else File.Move(sourcePath, destinationPath);
+
+        oldParent.RemoveChild(node);
+        newParent.InsertChild(targetIndex, node);
+
+        var newRelative = BinderMetadataStore.Normalize(Path.GetRelativePath(project.RootPath, destinationPath));
+        RepathSubtree(node, oldRelative, newRelative);
+        await _binderStore.SaveAsync(project, cancellationToken);
+        return true;
+    }
+
     public async Task SetCompilationIncludedAsync(
         BookProject project,
         ProjectNode node,
@@ -270,6 +336,15 @@ public sealed class FileSystemProjectRepository : IProjectRepository
             if (parent is not null) return parent;
         }
         return null;
+    }
+
+    private static bool ContainsNode(ProjectNode root, ProjectNode target)
+    {
+        foreach (var child in root.Children)
+        {
+            if (ReferenceEquals(child, target) || ContainsNode(child, target)) return true;
+        }
+        return false;
     }
 
     private static void PopulateTree(
