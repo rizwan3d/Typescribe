@@ -26,6 +26,7 @@ internal sealed class AuthoringFeatureCoordinator
     public int DailyWords => Math.Max(0, ProjectWords - State.DailyBaselineWords);
     public double ProjectProgress => Progress(ProjectWords, State.ProjectTargetWords);
     public double DailyProgress => Progress(DailyWords, State.DailyTargetWords);
+    public double SessionProgress => Progress(SessionWords, State.SessionTargetWords);
 
     public async Task OpenAsync(string projectRoot, IEnumerable<BinderRowViewModel> liveRows, CancellationToken cancellationToken = default)
     {
@@ -56,6 +57,16 @@ internal sealed class AuthoringFeatureCoordinator
         _sessionBaseline = Math.Min(sessionBaseline, ProjectWords);
     }
 
+    public Task RefreshStatisticsAsync(CancellationToken cancellationToken = default)
+        => RefreshWordIndexAsync(cancellationToken);
+
+    public int GetIndexedWords(ProjectNode node, string? selectedPersistentId = null, int selectedCurrentWords = 0)
+    {
+        if (string.Equals(node.PersistentId, selectedPersistentId, StringComparison.Ordinal))
+            return Math.Max(0, selectedCurrentWords);
+        return _diskWords.GetValueOrDefault(node.PersistentId);
+    }
+
     public void UpdateSelectedWords(string? persistentId, int currentWords)
     {
         if (string.IsNullOrWhiteSpace(persistentId)) return;
@@ -63,11 +74,12 @@ internal sealed class AuthoringFeatureCoordinator
         ProjectWords = Math.Max(0, _diskWords.Values.Sum() - baseline + Math.Max(0, currentWords));
     }
 
-    public async Task SaveTargetsAsync(int projectTarget, int dailyTarget, CancellationToken cancellationToken = default)
+    public async Task SaveTargetsAsync(int projectTarget, int dailyTarget, int sessionTarget, CancellationToken cancellationToken = default)
     {
         EnsureProject();
         _project!.Authoring.ProjectTargetWords = Math.Max(0, projectTarget);
         _project.Authoring.DailyTargetWords = Math.Max(0, dailyTarget);
+        _project.Authoring.SessionTargetWords = Math.Max(0, sessionTarget);
         await _authoring.SaveAsync(_project, cancellationToken);
     }
 
