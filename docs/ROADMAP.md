@@ -12,29 +12,31 @@
 - Markdown-like parser to canonical semantic AST
 - Inline strong/emphasis/code/link/math
 - Headings, quotes, ordered/unordered lists, code blocks, display math, thematic breaks
-- Editor + semantic live writing preview
-- Debounced autosave with atomic writes
+- Editor with debounced autosave and atomic writes
 - Word count
 - Project title/content search
 - Case-sensitive, whole-word, and regex search
 - Persistent basic book style model/editor
-- Style-aware LaTeX and Typst source generation
+- Style-aware LaTeX source generation
 - LuaLaTeX production compilation
-- Verified portable TinyTeX runtime setup when LuaLaTeX is unavailable
-- Production PDF preview (`build/preview.pdf` opened in the OS viewer)
-- PDF export
+- Verified full TinyTeX runtime setup when LuaLaTeX is unavailable
+- Debounced realtime in-app PDF preview from the current editor buffer
+- Cancellable one-pass preview compilation
+- PDF page rendering with navigation and zoom
+- Two-pass final PDF export
 - LaTeX source export
-- Typst source export
 - Whole-book compilation in binder order
 - Cross-platform compile CI
 
 ## v0.1 follow-up hardening
 
 - Drag/drop binder reparenting
-- Embedded paginated PDF preview canvas
-- Source-to-PDF synchronization
+- Source-to-PDF cursor synchronization
+- Virtualized multi-page PDF scrolling and page thumbnails
+- PDF text selection/search in preview
 - Structured LuaLaTeX diagnostics mapped to manuscript source lines
 - Parser/render/persistence automated test suite
+- Native AOT publish validation in CI
 - Performance fixtures for very large projects
 - Backup and crash recovery
 
