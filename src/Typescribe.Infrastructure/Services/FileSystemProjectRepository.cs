@@ -12,6 +12,7 @@ public sealed class FileSystemProjectRepository : IProjectRepository
 
     private readonly BinderMetadataStore _binderStore = new();
     private readonly BookStyleStore _styleStore = new();
+    private readonly SnapshotStore _snapshotStore = new();
 
     public async Task<BookProject> CreateAsync(string rootPath, string title, CancellationToken cancellationToken = default)
     {
@@ -32,12 +33,10 @@ public sealed class FileSystemProjectRepository : IProjectRepository
         if (!File.Exists(first))
             await AtomicFileWriter.WriteTextAsync(first, $"# {title.Trim()}\n\nStart writing here.\n", cancellationToken);
 
-        var project = await OpenAsync(rootPath, cancellationToken);
-        await _binderStore.SaveAsync(project, cancellationToken);
-        return project;
+        return await OpenAsync(rootPath, cancellationToken);
     }
 
-    public Task<BookProject> OpenAsync(string rootPath, CancellationToken cancellationToken = default)
+    public async Task<BookProject> OpenAsync(string rootPath, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
@@ -46,12 +45,12 @@ public sealed class FileSystemProjectRepository : IProjectRepository
 
         var metadata = ParseManifest(File.ReadAllLines(manifestPath));
         var binderMetadata = _binderStore.Load(fullRoot);
-        var root = new ProjectNode("root", metadata.Title, NodeKind.Book);
+        var root = new ProjectNode("root", metadata.Title, NodeKind.Book, persistentId: "root");
         var manuscriptPath = Path.Combine(fullRoot, ManuscriptFolder);
         Directory.CreateDirectory(manuscriptPath);
         PopulateTree(root, fullRoot, manuscriptPath, binderMetadata);
 
-        return Task.FromResult(new BookProject
+        var project = new BookProject
         {
             RootPath = fullRoot,
             Title = metadata.Title,
@@ -59,7 +58,11 @@ public sealed class FileSystemProjectRepository : IProjectRepository
             Language = metadata.Language,
             Style = _styleStore.Load(fullRoot),
             Root = root
-        });
+        };
+
+        // Re-save on open so legacy binder files acquire stable IDs and the current schema.
+        await _binderStore.SaveAsync(project, cancellationToken);
+        return project;
     }
 
     public Task<string> ReadDocumentAsync(BookProject project, ProjectNode node, CancellationToken cancellationToken = default)
@@ -274,6 +277,56 @@ public sealed class FileSystemProjectRepository : IProjectRepository
         await _binderStore.SaveAsync(project, cancellationToken);
     }
 
+    public async Task SaveNodeMetadataAsync(
+        BookProject project,
+        ProjectNode node,
+        string synopsis,
+        string notes,
+        string status,
+        string label,
+        string keywords,
+        int targetWords,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(node);
+        node.UpdateMetadata(synopsis, notes, status, label, keywords, targetWords);
+        await _binderStore.SaveAsync(project, cancellationToken);
+    }
+
+    public async Task<SnapshotInfo> CreateSnapshotAsync(
+        BookProject project,
+        ProjectNode node,
+        string content,
+        string label,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(node);
+        await _binderStore.SaveAsync(project, cancellationToken);
+        return await _snapshotStore.CreateAsync(project, node, content, label, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<SnapshotInfo>> ListSnapshotsAsync(
+        BookProject project,
+        ProjectNode node,
+        CancellationToken cancellationToken = default)
+        => _snapshotStore.ListAsync(project, node, cancellationToken);
+
+    public Task<string> ReadSnapshotAsync(
+        BookProject project,
+        ProjectNode node,
+        SnapshotInfo snapshot,
+        CancellationToken cancellationToken = default)
+        => _snapshotStore.ReadAsync(project, node, snapshot, cancellationToken);
+
+    public Task DeleteSnapshotAsync(
+        BookProject project,
+        ProjectNode node,
+        SnapshotInfo snapshot,
+        CancellationToken cancellationToken = default)
+        => _snapshotStore.DeleteAsync(project, node, snapshot, cancellationToken);
+
     public async Task SaveStyleAsync(BookProject project, BookStyle style, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -361,10 +414,11 @@ public sealed class FileSystemProjectRepository : IProjectRepository
             metadata.TryGetValue(relative, out var entry);
             var kind = entry?.Kind is NodeKind.Part or NodeKind.Folder ? entry.Kind : NodeKind.Folder;
             var title = !string.IsNullOrWhiteSpace(entry?.Title) ? entry.Title : ToTitle(Path.GetFileName(subdirectory));
-            var folder = new ProjectNode(relative, title, kind, relative)
+            var folder = new ProjectNode(relative, title, kind, relative, entry?.PersistentId)
             {
                 IncludeInCompilation = entry?.Included ?? true
             };
+            ApplyMetadata(folder, entry);
             pending.Add((folder, subdirectory, entry?.Order ?? int.MaxValue));
         }
 
@@ -378,10 +432,11 @@ public sealed class FileSystemProjectRepository : IProjectRepository
             var title = !string.IsNullOrWhiteSpace(entry?.Title)
                 ? entry.Title
                 : ReadTitle(file) ?? ToTitle(Path.GetFileNameWithoutExtension(file));
-            var node = new ProjectNode(relative, title, kind, relative)
+            var node = new ProjectNode(relative, title, kind, relative, entry?.PersistentId)
             {
                 IncludeInCompilation = entry?.Included ?? true
             };
+            ApplyMetadata(node, entry);
             pending.Add((node, null, entry?.Order ?? int.MaxValue));
         }
 
@@ -393,6 +448,18 @@ public sealed class FileSystemProjectRepository : IProjectRepository
             if (item.Directory is not null)
                 PopulateTree(item.Node, projectRoot, item.Directory, metadata);
         }
+    }
+
+    private static void ApplyMetadata(ProjectNode node, BinderMetadata? entry)
+    {
+        if (entry is null) return;
+        node.UpdateMetadata(
+            entry.Synopsis,
+            entry.Notes,
+            entry.Status,
+            entry.Label,
+            entry.Keywords,
+            entry.TargetWords);
     }
 
     private static string? ReadTitle(string file)
