@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Styling;
@@ -33,6 +34,16 @@ public sealed class App : AvaloniaApplication
             var searchService = new ProjectSearchService(repository);
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
             var window = new StudioWorkspaceWindow(viewModel);
+
+            // The old command strip duplicated menu, Binder, and workspace commands.
+            // Collapse it before first render so the app opens directly into the studio.
+            if (window.Content is Grid root && root.RowDefinitions.Count >= 4)
+            {
+                var toolbar = root.Children.OfType<Control>().FirstOrDefault(control => Grid.GetRow(control) == 1);
+                if (toolbar is not null) toolbar.IsVisible = false;
+                root.RowDefinitions[1].Height = new GridLength(0);
+            }
+
             StudioUxPolish.Apply(window);
             StudioAuthoringEnhancements.Apply(window);
             desktop.MainWindow = window;
