@@ -5,12 +5,25 @@ using Typescribe.Domain.Models;
 namespace Typescribe.Application.Services;
 
 /// <summary>
-/// Keeps the semantic renderer as the source of truth while normalizing package combinations
-/// that are unsafe with LuaLaTeX + unicode-math. In particular, amssymb/amsfonts redefine
-/// symbols that unicode-math owns (for example \eth), which can abort compilation.
+/// Keeps the semantic renderer as the source of truth while normalizing the generated
+/// LuaLaTeX package stack for OpenType/Unicode math. unicode-math owns the symbol table,
+/// so legacy AMS symbol/font packages are removed to avoid command redefinition errors.
 /// </summary>
 public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
 {
+    private static readonly HashSet<string> ManagedMathPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "amsmath",
+        "mathtools",
+        "unicode-math"
+    };
+
+    private static readonly HashSet<string> IncompatibleUnicodeMathPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "amssymb",
+        "amsfonts"
+    };
+
     private readonly DocumentRenderer _inner = new();
 
     public string RenderPreview(DocumentAst document) => _inner.RenderPreview(document);
@@ -22,52 +35,101 @@ public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
     {
         if (string.IsNullOrEmpty(latex)) return latex;
 
-        var lines = latex.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var output = new StringBuilder(latex.Length + 64);
-        var wroteAmsMath = false;
-        var wroteMathtools = false;
+        var normalized = latex.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        var output = new StringBuilder(normalized.Length + 128);
+        var managedMathStackWritten = false;
 
         foreach (var line in lines)
         {
             var trimmed = line.Trim();
 
-            // The legacy renderer emitted these three together. unicode-math already owns
-            // the AMS symbol namespace, so keep the equation/layout packages but not amssymb.
-            if (string.Equals(trimmed, "\\usepackage{amsmath,amssymb,mathtools}", StringComparison.Ordinal))
+            if (string.Equals(trimmed, "\\usepackage{fontspec}", StringComparison.Ordinal))
             {
-                if (!wroteAmsMath)
-                {
-                    output.AppendLine("\\usepackage{amsmath}");
-                    wroteAmsMath = true;
-                }
-                if (!wroteMathtools)
-                {
-                    output.AppendLine("\\usepackage{mathtools}");
-                    wroteMathtools = true;
-                }
+                AppendLine(output, line);
+                AppendManagedMathStack(output);
+                managedMathStackWritten = true;
                 continue;
             }
 
-            // Extra packages are user-configurable. Do not allow a project style to
-            // accidentally reintroduce the same unicode-math symbol conflict.
-            if (string.Equals(trimmed, "\\usepackage{amssymb}", StringComparison.Ordinal) ||
-                string.Equals(trimmed, "\\usepackage{amsfonts}", StringComparison.Ordinal))
+            if (TryNormalizePackageLine(line, managedMathStackWritten, out var packageLine))
+            {
+                if (packageLine.Length > 0) AppendLine(output, packageLine);
                 continue;
-
-            if (string.Equals(trimmed, "\\usepackage{amsmath}", StringComparison.Ordinal))
-            {
-                if (wroteAmsMath) continue;
-                wroteAmsMath = true;
-            }
-            else if (string.Equals(trimmed, "\\usepackage{mathtools}", StringComparison.Ordinal))
-            {
-                if (wroteMathtools) continue;
-                wroteMathtools = true;
             }
 
-            output.AppendLine(line);
+            AppendLine(output, line);
         }
 
-        return output.ToString();
+        // DocumentRenderer always emits fontspec today, but keep the normalizer defensive
+        // so future renderer changes still receive a valid math stack.
+        if (!managedMathStackWritten)
+        {
+            var prefix = new StringBuilder();
+            AppendManagedMathStack(prefix);
+            prefix.Append(output);
+            output = prefix;
+        }
+
+        return output.ToString().TrimEnd('\n') + Environment.NewLine;
+    }
+
+    private static bool TryNormalizePackageLine(string line, bool managedMathStackWritten, out string normalized)
+    {
+        normalized = line;
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith("\\usepackage", StringComparison.Ordinal)) return false;
+
+        var open = line.IndexOf('{');
+        if (open < 0) return false;
+        var close = line.IndexOf('}', open + 1);
+        if (close <= open) return false;
+
+        var packages = line[(open + 1)..close]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (packages.Length == 0) return false;
+
+        var changed = false;
+        var kept = new List<string>(packages.Length);
+        foreach (var package in packages)
+        {
+            if (IncompatibleUnicodeMathPackages.Contains(package))
+            {
+                changed = true;
+                continue;
+            }
+
+            if (managedMathStackWritten && ManagedMathPackages.Contains(package))
+            {
+                changed = true;
+                continue;
+            }
+
+            kept.Add(package);
+        }
+
+        if (!changed) return false;
+        if (kept.Count == 0)
+        {
+            normalized = string.Empty;
+            return true;
+        }
+
+        normalized = line[..(open + 1)] + string.Join(',', kept) + line[close..];
+        return true;
+    }
+
+    private static void AppendManagedMathStack(StringBuilder output)
+    {
+        output.AppendLine("% Typescribe managed LuaLaTeX math stack");
+        output.AppendLine("\\usepackage{amsmath}");
+        output.AppendLine("\\usepackage{mathtools}");
+        output.AppendLine("\\usepackage{unicode-math}");
+    }
+
+    private static void AppendLine(StringBuilder output, string line)
+    {
+        output.Append(line);
+        output.Append('\n');
     }
 }
