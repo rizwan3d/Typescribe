@@ -134,6 +134,12 @@ internal sealed class NavigatorStability
                 SyncBinder(incoming);
         }
 
+        RestoreStableBinderSource();
+    }
+
+    private void RestoreStableBinderSource()
+    {
+        if (_binder is null) return;
         _restoringBinder = true;
         try
         {
@@ -156,17 +162,15 @@ internal sealed class NavigatorStability
         if (_disposed || _binder is null) return;
 
         // Give StudioScriveningsFeatures first chance to publish its newly-computed visible
-        // source. If it already did, BinderPropertyChanged has synchronized it. Otherwise
-        // reconcile here so add/delete/move operations never leave stale or missing rows.
+        // source. If it already did, consume that source directly. Otherwise reconcile the
+        // stable view with the master tree so add/delete/move operations never lose rows.
         if (!ReferenceEquals(_binder.ItemsSource, _binderItems) &&
             !ReferenceEquals(_binder.ItemsSource, _viewModel.BinderRows))
         {
-            BinderPropertyChanged(_binder, new AvaloniaPropertyChangedEventArgs<IEnumerable?>(
-                _binder,
-                ItemsControl.ItemsSourceProperty,
-                default,
-                new Optional<IEnumerable?>(_binder.ItemsSource),
-                BindingPriority.LocalValue));
+            var incoming = Rows(_binder.ItemsSource);
+            if (incoming.Length > 0 || _viewModel.BinderRows.Count == 0)
+                SyncBinder(incoming);
+            RestoreStableBinderSource();
             return;
         }
 
