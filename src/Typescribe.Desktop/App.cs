@@ -56,6 +56,7 @@ public sealed class App : AvaloniaApplication
             StudioAuthoringEnhancements.Apply(window, viewModel);
             StudioNavigationPolish.Apply(window, viewModel);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
+            BookmarkNavigationPolish.Apply(window, viewModel);
 
             // Native hierarchical Project Explorer. It replaces the legacy flat Binder visual.
             ProjectExplorerFeature.Apply(window, viewModel, repository, parser);
