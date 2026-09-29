@@ -114,7 +114,12 @@ internal sealed class ManuscriptEditorUpgrade
 
         editor.ApplyProxyText(proxy.Text ?? string.Empty, resetDecorations: true);
         foreach (var className in proxy.Classes)
+        {
+            // Avalonia pseudoclasses (for example :empty, :focus, :pointerover)
+            // are framework-owned state and may only be changed by the control itself.
+            if (string.IsNullOrWhiteSpace(className) || className[0] == ':') continue;
             if (!editor.Classes.Contains(className)) editor.Classes.Add(className);
+        }
         if (!editor.Classes.Contains("manuscript-editor")) editor.Classes.Add("manuscript-editor");
 
         var row = Grid.GetRow(proxy);
