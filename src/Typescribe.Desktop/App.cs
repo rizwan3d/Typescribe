@@ -34,6 +34,7 @@ public sealed class App : AvaloniaApplication
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
             var window = new StudioWorkspaceWindow(viewModel);
             StudioUxPolish.Apply(window);
+            StudioAuthoringEnhancements.Apply(window);
             desktop.MainWindow = window;
         }
 
