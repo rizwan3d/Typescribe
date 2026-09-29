@@ -2,7 +2,6 @@ using System.IO.Compression;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -15,7 +14,7 @@ namespace Typescribe.Desktop;
 
 /// <summary>
 /// Long-form writing workspace features inspired by professional authoring tools.
-/// The implementation keeps Typescribe's own platform-neutral UI and plain-text files.
+/// Binder rendering and navigation are owned exclusively by ProjectExplorerFeature.
 /// </summary>
 internal sealed class StudioScriveningsFeatures
 {
@@ -37,12 +36,10 @@ internal sealed class StudioScriveningsFeatures
     private readonly DispatcherTimer _stateSaveTimer;
     private readonly Dictionary<string, ScriveningDocumentState> _scriveningEditors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _saveTimers = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _collapsedNodes = new(StringComparer.Ordinal);
     private readonly List<BookmarkEntry> _bookmarks = [];
     private readonly Dictionary<string, Dictionary<int, int>> _revisionLines = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _labelColors = new(StringComparer.Ordinal);
 
-    private ListBox? _binder;
     private TextBox? _mainEditor;
     private TabControl? _leftTabs;
     private TabControl? _centerTabs;
@@ -71,16 +68,12 @@ internal sealed class StudioScriveningsFeatures
     private string? _workspaceStatePath;
     private string? _lastSelectionId;
     private string? _loadedScopeKey;
-    private BinderRowViewModel[]? _visibleBinderRows;
-    private string? _binderViewKey;
-    private int _binderVisualVersion;
     private int _revisionLevel;
     private DateTime _lastBackupUtc = DateTime.MinValue;
 
     private bool _splitVisible;
     private bool _splitVertical = true;
     private bool _syncingEditors;
-    private bool _applyingBinder;
     private bool _menuInjected;
     private bool _bookmarksInjected;
     private bool _scriveningsInjected;
@@ -159,7 +152,6 @@ internal sealed class StudioScriveningsFeatures
         if (_disposed) return;
         var controls = _window.GetVisualDescendants().OfType<Control>().ToArray();
 
-        _binder ??= controls.OfType<ListBox>().FirstOrDefault(static list => list.ContextMenu is not null);
         _mainEditor ??= controls.OfType<TextBox>().FirstOrDefault(static box => box.AcceptsReturn && box.AcceptsTab);
         _menu ??= controls.OfType<Menu>().FirstOrDefault();
 
@@ -183,11 +175,10 @@ internal sealed class StudioScriveningsFeatures
         InjectBookmarksTab();
         InjectMenus();
         EnsureProjectWorkspace();
-        ApplyBinderView(force: true);
         ApplyLabelColorsToCorkboard();
         UpdateMainRevisionAccent();
 
-        _discoveryComplete = _binder is not null && _mainEditor is not null && _leftTabs is not null &&
+        _discoveryComplete = _mainEditor is not null && _leftTabs is not null &&
                              _centerTabs is not null && _menu is not null &&
                              _scriveningsInjected && _bookmarksInjected && _menuInjected;
         if (_discoveryComplete) _window.LayoutUpdated -= OnLayoutUpdated;
@@ -197,8 +188,6 @@ internal sealed class StudioScriveningsFeatures
     {
         if (_disposed) return;
         await EnsureProjectWorkspaceAsync();
-        EnsureSelectedRowVisible();
-        ApplyBinderView(force: false);
         ApplyLabelColorsToCorkboard();
         UpdateMainRevisionAccent();
 
@@ -206,6 +195,7 @@ internal sealed class StudioScriveningsFeatures
         if (!string.Equals(selectedId, _lastSelectionId, StringComparison.Ordinal))
         {
             _lastSelectionId = selectedId;
+            RefreshBookmarks();
             if (_viewModel.SelectedIsContainer && _scriveningsTab is not null && _centerTabs is not null)
             {
                 _centerTabs.SelectedItem = _scriveningsTab;
@@ -241,8 +231,6 @@ internal sealed class StudioScriveningsFeatures
         _splitNode = null;
         _splitSavedText = string.Empty;
         _lastBackupUtc = NewestBackupUtc(project.RootPath);
-        _binderVisualVersion++;
-        ApplyBinderView(force: true);
     }
 
     private void InjectScriveningsTab()
@@ -794,149 +782,6 @@ internal sealed class StudioScriveningsFeatures
         finally { _syncingEditors = false; }
     }
 
-    private void ApplyBinderView(bool force)
-    {
-        if (_binder is null || _applyingBinder) return;
-        var visible = VisibleBinderRows().ToArray();
-        var key = $"{_binderVisualVersion}:" + string.Join('|', visible.Select(static row => row.Node.PersistentId));
-        var sourceWasReplaced = !ReferenceEquals(_binder.ItemsSource, _visibleBinderRows);
-        if (!force && !sourceWasReplaced && string.Equals(key, _binderViewKey, StringComparison.Ordinal))
-        {
-            if (_viewModel.SelectedRow is { } existingSelection && visible.Contains(existingSelection))
-                _binder.SelectedItem = existingSelection;
-            return;
-        }
-
-        _applyingBinder = true;
-        try
-        {
-            _visibleBinderRows = visible;
-            _binderViewKey = key;
-            _binder.ItemsSource = _visibleBinderRows;
-            _binder.ItemTemplate = new FuncDataTemplate<BinderRowViewModel>((row, _) => BuildBinderRow(row), supportsRecycling: true);
-            var selected = _viewModel.SelectedRow;
-            if (selected is not null && visible.Contains(selected)) _binder.SelectedItem = selected;
-        }
-        finally { _applyingBinder = false; }
-    }
-
-    private IEnumerable<BinderRowViewModel> VisibleBinderRows()
-    {
-        int? collapsedDepth = null;
-        foreach (var row in _viewModel.BinderRows)
-        {
-            if (collapsedDepth is { } depth)
-            {
-                if (row.Depth > depth) continue;
-                collapsedDepth = null;
-            }
-
-            yield return row;
-            if (row.Node.IsContainer && _collapsedNodes.Contains(row.Node.PersistentId))
-                collapsedDepth = row.Depth;
-        }
-    }
-
-    private Grid BuildBinderRow(BinderRowViewModel row)
-    {
-        var toggle = new Button
-        {
-            Content = row.Node.IsContainer ? (_collapsedNodes.Contains(row.Node.PersistentId) ? "▸" : "▾") : string.Empty,
-            Width = 22,
-            MinWidth = 22,
-            Padding = new Thickness(2),
-            BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent,
-            IsEnabled = row.Node.IsContainer
-        };
-        toggle.Click += (_, _) => ToggleCollapse(row);
-
-        var swatch = new Border
-        {
-            Width = 4,
-            Height = 20,
-            CornerRadius = new CornerRadius(2),
-            Background = LabelBrush(row.Node),
-            Opacity = string.IsNullOrWhiteSpace(row.Node.Label) && !_labelColors.ContainsKey(row.Node.PersistentId) ? 0 : 1,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var icon = new TextBlock
-        {
-            Text = BinderIcon(row.Node.Kind),
-            Width = 20,
-            Opacity = 0.72,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var title = new TextBlock
-        {
-            Text = row.Node.Title,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            FontWeight = row.Node.IsContainer ? FontWeight.SemiBold : FontWeight.Normal,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var revision = new TextBlock
-        {
-            Text = RevisionSummaryShort(row.Node.PersistentId),
-            FontSize = 10,
-            Opacity = 0.62,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 0)
-        };
-        var compile = new TextBlock
-        {
-            Text = row.Node.IncludeInCompilation ? "●" : "○",
-            FontSize = 9,
-            Opacity = row.Node.IncludeInCompilation ? 0.78 : 0.3,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,*,Auto,Auto"),
-            Margin = new Thickness(Math.Clamp(row.Depth, 0, 10) * 13, 0, 0, 0)
-        };
-        grid.Children.Add(toggle);
-        Grid.SetColumn(swatch, 1); swatch.Margin = new Thickness(2, 0, 5, 0); grid.Children.Add(swatch);
-        Grid.SetColumn(icon, 2); grid.Children.Add(icon);
-        Grid.SetColumn(title, 3); grid.Children.Add(title);
-        Grid.SetColumn(revision, 4); grid.Children.Add(revision);
-        Grid.SetColumn(compile, 5); grid.Children.Add(compile);
-        return grid;
-    }
-
-    private void ToggleCollapse(BinderRowViewModel row)
-    {
-        if (!row.Node.IsContainer) return;
-        if (!_collapsedNodes.Add(row.Node.PersistentId)) _collapsedNodes.Remove(row.Node.PersistentId);
-        _binderVisualVersion++;
-        ScheduleStateSave();
-        ApplyBinderView(force: true);
-    }
-
-    private void EnsureSelectedRowVisible()
-    {
-        var selected = _viewModel.SelectedRow;
-        if (selected is null || selected.Depth == 0) return;
-        var all = _viewModel.BinderRows;
-        var index = all.IndexOf(selected);
-        if (index < 0) return;
-        var changed = false;
-        var neededDepth = selected.Depth - 1;
-        for (var cursor = index - 1; cursor >= 0 && neededDepth >= 0; cursor--)
-        {
-            var row = all[cursor];
-            if (row.Depth != neededDepth) continue;
-            changed |= _collapsedNodes.Remove(row.Node.PersistentId);
-            neededDepth--;
-        }
-        if (changed)
-        {
-            _binderVisualVersion++;
-            ScheduleStateSave();
-        }
-    }
-
     private void InjectBookmarksTab()
     {
         if (_bookmarksInjected || _leftTabs is null) return;
@@ -1003,7 +848,8 @@ internal sealed class StudioScriveningsFeatures
     private async Task NavigateSelectedBookmarkAsync()
     {
         if (_bookmarkList?.SelectedItem is not BookmarkEntry bookmark) return;
-        var row = _viewModel.BinderRows.FirstOrDefault(row => string.Equals(row.Node.PersistentId, bookmark.PersistentId, StringComparison.Ordinal));
+        var row = _viewModel.BinderRows.FirstOrDefault(row =>
+            string.Equals(row.Node.PersistentId, bookmark.PersistentId, StringComparison.Ordinal));
         if (row is null) return;
         await _viewModel.SelectAsync(row);
         if (_centerTabs is not null) _centerTabs.SelectedIndex = 0;
@@ -1030,7 +876,10 @@ internal sealed class StudioScriveningsFeatures
     private void RefreshBookmarks()
     {
         if (_bookmarkList is null) return;
-        var titles = _viewModel.BinderRows.ToDictionary(static row => row.Node.PersistentId, static row => row.Node.Title, StringComparer.Ordinal);
+        var titles = _viewModel.BinderRows.ToDictionary(
+            static row => row.Node.PersistentId,
+            static row => row.Node.Title,
+            StringComparer.Ordinal);
         _bookmarkList.ItemsSource = _bookmarks
             .Where(bookmark => titles.ContainsKey(bookmark.PersistentId))
             .Select(bookmark => bookmark with { DisplayTitle = $"{titles[bookmark.PersistentId]}  •  {bookmark.Label}" })
@@ -1086,21 +935,13 @@ internal sealed class StudioScriveningsFeatures
         search.Focus();
         var selected = await dialog.ShowDialog<GoToEntry?>(_window);
         if (selected is null) return;
-        var row = _viewModel.BinderRows.FirstOrDefault(row => string.Equals(row.Node.PersistentId, selected.PersistentId, StringComparison.Ordinal));
+        var row = _viewModel.BinderRows.FirstOrDefault(row =>
+            string.Equals(row.Node.PersistentId, selected.PersistentId, StringComparison.Ordinal));
         if (row is not null) await SelectNodeAsync(row);
     }
 
     private async Task SelectNodeAsync(BinderRowViewModel row)
-    {
-        await _viewModel.SelectAsync(row);
-        EnsureSelectedRowVisible();
-        ApplyBinderView(force: true);
-        if (_binder is not null)
-        {
-            _binder.SelectedItem = row;
-            _binder.ScrollIntoView(row);
-        }
-    }
+        => await _viewModel.SelectAsync(row);
 
     private void MainEditorTextChanged(object? sender, TextChangedEventArgs e)
     {
@@ -1120,9 +961,7 @@ internal sealed class StudioScriveningsFeatures
             _revisionLines[persistentId] = lines;
         }
         lines[Math.Max(1, line)] = Math.Clamp(level, 1, 5);
-        _binderVisualVersion++;
         ScheduleStateSave();
-        ApplyBinderView(force: true);
     }
 
     private void UpdateScriveningVisuals(ScriveningDocumentState state)
@@ -1184,12 +1023,6 @@ internal sealed class StudioScriveningsFeatures
         return $"R{lines.Values.Max()} • {lines.Count} line{(lines.Count == 1 ? string.Empty : "s")}";
     }
 
-    private string RevisionSummaryShort(string persistentId)
-    {
-        if (!_revisionLines.TryGetValue(persistentId, out var lines) || lines.Count == 0) return string.Empty;
-        return $"R{lines.Values.Max()}";
-    }
-
     private void InjectMenus()
     {
         if (_menuInjected || _menu?.ItemsSource is not IEnumerable<object> top) return;
@@ -1211,15 +1044,6 @@ internal sealed class StudioScriveningsFeatures
                 ApplySplitLayout();
                 if (_splitVisible) await EnsureSplitDocumentAsync();
             }));
-            items.Add(Command("Expand All Binder Groups", () =>
-            {
-                _collapsedNodes.Clear();
-                _binderVisualVersion++;
-                ScheduleStateSave();
-                ApplyBinderView(force: true);
-                return Task.CompletedTask;
-            }));
-            items.Add(Command("Collapse Binder Groups", () => { CollapseAllContainers(); return Task.CompletedTask; }));
             view.ItemsSource = items.ToArray();
         }
 
@@ -1279,10 +1103,8 @@ internal sealed class StudioScriveningsFeatures
         {
             var id = _viewModel.SelectedRow?.Node.PersistentId;
             if (id is not null) _revisionLines.Remove(id);
-            _binderVisualVersion++;
             ScheduleStateSave();
             UpdateAllRevisionAccents();
-            ApplyBinderView(force: true);
             return Task.CompletedTask;
         }));
         menu.ItemsSource = items.ToArray();
@@ -1302,9 +1124,7 @@ internal sealed class StudioScriveningsFeatures
         if (node is null) return;
         if (string.IsNullOrWhiteSpace(color)) _labelColors.Remove(node.PersistentId);
         else _labelColors[node.PersistentId] = color;
-        _binderVisualVersion++;
         ScheduleStateSave();
-        ApplyBinderView(force: true);
         ApplyLabelColorsToCorkboard();
         if (_scriveningEditors.TryGetValue(node.PersistentId, out var state)) UpdateScriveningVisuals(state);
     }
@@ -1350,15 +1170,6 @@ internal sealed class StudioScriveningsFeatures
             hash *= 16777619;
         }
         return (int)(hash % (uint)Math.Max(1, count));
-    }
-
-    private void CollapseAllContainers()
-    {
-        foreach (var row in _viewModel.BinderRows.Where(static row => row.Node.IsContainer))
-            _collapsedNodes.Add(row.Node.PersistentId);
-        _binderVisualVersion++;
-        ScheduleStateSave();
-        ApplyBinderView(force: true);
     }
 
     private void ShowScrivenings()
@@ -1498,7 +1309,6 @@ internal sealed class StudioScriveningsFeatures
 
     private void LoadWorkspaceState()
     {
-        _collapsedNodes.Clear();
         _bookmarks.Clear();
         _revisionLines.Clear();
         _labelColors.Clear();
@@ -1512,9 +1322,8 @@ internal sealed class StudioScriveningsFeatures
                 if (parts.Length == 0) continue;
                 switch (parts[0])
                 {
-                    case "collapsed" when parts.Length >= 2:
-                        _collapsedNodes.Add(parts[1]);
-                        break;
+                    // Legacy collapsed Binder entries are intentionally ignored. ProjectExplorer
+                    // stores expansion state independently in project-explorer.tsv.
                     case "labelcolor" when parts.Length >= 3:
                         _labelColors[parts[1]] = parts[2];
                         break;
@@ -1557,9 +1366,7 @@ internal sealed class StudioScriveningsFeatures
         try
         {
             var builder = new StringBuilder();
-            builder.AppendLine("# Typescribe workspace state v1");
-            foreach (var id in _collapsedNodes.Order(StringComparer.Ordinal))
-                builder.Append("collapsed\t").Append(id).AppendLine();
+            builder.AppendLine("# Typescribe workspace state v2");
             foreach (var pair in _labelColors.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
                 builder.Append("labelcolor\t").Append(pair.Key).Append('\t').Append(pair.Value).AppendLine();
             foreach (var document in _revisionLines.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
@@ -1625,19 +1432,6 @@ internal sealed class StudioScriveningsFeatures
 
     private static KeyModifiers PrimaryModifier()
         => OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
-
-    private static string BinderIcon(NodeKind kind) => kind switch
-    {
-        NodeKind.Book => "▣",
-        NodeKind.Part => "◆",
-        NodeKind.Folder => "▸",
-        NodeKind.Chapter => "▤",
-        NodeKind.Section => "§",
-        NodeKind.Scene => "▪",
-        NodeKind.Research => "⌕",
-        NodeKind.Note => "✎",
-        _ => "•"
-    };
 
     private static int LineFromCaret(TextBox editor)
         => LineColumn(editor.Text ?? string.Empty, Math.Clamp(editor.CaretIndex, 0, (editor.Text ?? string.Empty).Length)).Line;
