@@ -15,11 +15,6 @@ using Typescribe.Domain.Models;
 
 namespace Typescribe.Desktop;
 
-/// <summary>
-/// UI for the publishing capabilities that are deliberately kept out of the permanent
-/// studio chrome: book design, advanced LuaLaTeX settings, equation construction, and
-/// language-tagged code insertion / editor coloring.
-/// </summary>
 internal sealed class AdvancedTypesettingFeatures
 {
     private readonly StudioWorkspaceWindow _window;
@@ -51,6 +46,7 @@ internal sealed class AdvancedTypesettingFeatures
 
     private void OnOpened(object? sender, EventArgs e) => ScheduleDiscover();
     private void OnLayoutUpdated(object? sender, EventArgs e) => ScheduleDiscover();
+
     private void OnStateChanged(object? sender, EventArgs e)
     {
         foreach (var colorizer in _codeColorizers.Values) colorizer.RefreshTheme();
@@ -83,9 +79,6 @@ internal sealed class AdvancedTypesettingFeatures
             _lastEditor ??= editor;
         }
 
-        // Once the main editor exists the expensive layout discovery can stop. Dynamic
-        // Scrivenings editors still trigger view-model state transitions and are discovered
-        // when necessary without walking the visual tree on every layout pass forever.
         if (_menuInjected && _codeColorizers.Count > 0)
             _window.LayoutUpdated -= OnLayoutUpdated;
     }
@@ -104,10 +97,11 @@ internal sealed class AdvancedTypesettingFeatures
         if (insert is null || project is null) return;
 
         var insertItems = MenuItems(insert.ItemsSource);
-        if (!insertItems.OfType<MenuItem>().Any(item => HeaderEquals(item, "Equation…")))
+        if (!insertItems.OfType<MenuItem>().Any(item => HeaderEquals(item, "Advanced Equation…")))
         {
             insertItems.Add(new Separator());
-            insertItems.Add(Command("Advanced _Equation…", ShowEquationEditorAsync, new KeyGesture(Key.E, PrimaryModifier() | KeyModifiers.Shift)));
+            insertItems.Add(Command("Advanced _Equation…", ShowEquationEditorAsync,
+                new KeyGesture(Key.E, PrimaryModifier() | KeyModifiers.Shift)));
             insertItems.Add(Command("_Code Block…", ShowCodeBlockEditorAsync));
             insert.ItemsSource = insertItems.ToArray();
         }
@@ -127,16 +121,16 @@ internal sealed class AdvancedTypesettingFeatures
     {
         if (!_viewModel.HasDocument) return;
         var active = ResolveEditor();
-        var selectedText = active is null || active.SelectionLength <= 0
+        var selected = active is null || active.SelectionLength <= 0
             ? string.Empty
             : active.Document.GetText(active.SelectionStart, active.SelectionLength);
 
         var source = new TextBox
         {
-            Text = selectedText,
+            Text = selected,
             AcceptsReturn = true,
             AcceptsTab = true,
-            MinHeight = 110,
+            MinHeight = 115,
             FontFamily = new FontFamily("monospace"),
             TextWrapping = TextWrapping.Wrap
         };
@@ -147,46 +141,34 @@ internal sealed class AdvancedTypesettingFeatures
             Text = RenderMathPreview(source.Text ?? string.Empty),
             FontSize = 20,
             TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(14),
-            VerticalAlignment = VerticalAlignment.Center
+            Margin = new Thickness(14)
         };
         source.TextChanged += (_, _) => preview.Text = RenderMathPreview(source.Text ?? string.Empty);
 
-        void InsertSnippet(string snippet, int caretBack = 0)
+        void InsertSnippet(string snippet)
         {
             var text = source.Text ?? string.Empty;
-            var start = Math.Clamp(source.SelectionStart, 0, text.Length);
-            var end = Math.Clamp(source.SelectionEnd, start, text.Length);
+            var start = Math.Clamp(Math.Min(source.SelectionStart, source.SelectionEnd), 0, text.Length);
+            var end = Math.Clamp(Math.Max(source.SelectionStart, source.SelectionEnd), start, text.Length);
             source.Text = text[..start] + snippet + text[end..];
-            source.CaretIndex = Math.Clamp(start + snippet.Length - caretBack, 0, source.Text.Length);
+            source.CaretIndex = start + snippet.Length;
             source.SelectionStart = source.CaretIndex;
             source.SelectionEnd = source.CaretIndex;
             source.Focus();
         }
 
-        var structures = Palette(
+        var structures = CreatePalette(InsertSnippet,
             ("Fraction", "\\frac{a}{b}"), ("√ Root", "\\sqrt{x}"), ("Power", "x^{n}"), ("Subscript", "x_{i}"),
             ("Integral", "\\int_{a}^{b} f(x)\\,dx"), ("Sum", "\\sum_{i=1}^{n} x_i"),
             ("Product", "\\prod_{i=1}^{n} x_i"), ("Limit", "\\lim_{x \\to 0} f(x)"),
             ("2×2 Matrix", "\\begin{bmatrix}a & b \\\\ c & d\\end{bmatrix}"),
             ("Cases", "\\begin{cases}a, & x < 0 \\\\ b, & x \\ge 0\\end{cases}"),
             ("Aligned", "\\begin{aligned}a &= b + c \\\\ d &= e + f\\end{aligned}"));
-        foreach (var button in structures.Children.OfType<Button>())
-        {
-            var snippet = button.Tag?.ToString() ?? string.Empty;
-            button.Click += (_, _) => InsertSnippet(snippet);
-        }
-
-        var symbols = Palette(
+        var symbols = CreatePalette(InsertSnippet,
             ("α", "\\alpha"), ("β", "\\beta"), ("γ", "\\gamma"), ("δ", "\\delta"), ("θ", "\\theta"),
             ("λ", "\\lambda"), ("μ", "\\mu"), ("π", "\\pi"), ("σ", "\\sigma"), ("φ", "\\phi"), ("ω", "\\omega"),
             ("∞", "\\infty"), ("≤", "\\le"), ("≥", "\\ge"), ("≠", "\\ne"), ("±", "\\pm"),
             ("×", "\\times"), ("→", "\\to"), ("∂", "\\partial"), ("∇", "\\nabla"), ("∈", "\\in"));
-        foreach (var button in symbols.Children.OfType<Button>())
-        {
-            var snippet = button.Tag?.ToString() ?? string.Empty;
-            button.Click += (_, _) => InsertSnippet(snippet);
-        }
 
         var tabs = new TabControl
         {
@@ -198,30 +180,23 @@ internal sealed class AdvancedTypesettingFeatures
             SelectedIndex = 0,
             MinHeight = 145
         };
-
         var cancel = new Button { Content = "Cancel", MinWidth = 90 };
         var insert = new Button { Content = "Insert Equation", MinWidth = 120 };
         insert.Classes.Add("primary");
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, insert } };
-        var modes = new StackPanel { Orientation = Orientation.Horizontal, Children = { display, inline } };
-        var previewBorder = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), MinHeight = 78, Child = preview };
-
-        var content = new StackPanel
+        var buttons = new StackPanel
         {
-            Margin = new Thickness(18),
-            Spacing = 10,
-            Children =
-            {
-                new TextBlock { Text = "Equation Builder", FontSize = 20, FontWeight = FontWeight.SemiBold },
-                new TextBlock { Text = "Build with the palette or type any LuaLaTeX math expression directly.", Opacity = 0.72 },
-                modes,
-                tabs,
-                new TextBlock { Text = "LaTeX source", FontWeight = FontWeight.SemiBold },
-                source,
-                new TextBlock { Text = "Readable preview", FontWeight = FontWeight.SemiBold },
-                previewBorder,
-                buttons
-            }
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { cancel, insert }
+        };
+        var modes = new StackPanel { Orientation = Orientation.Horizontal, Children = { display, inline } };
+        var previewBorder = new Border
+        {
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            MinHeight = 78,
+            Child = preview
         };
         var dialog = new Window
         {
@@ -231,37 +206,48 @@ internal sealed class AdvancedTypesettingFeatures
             MinWidth = 620,
             MinHeight = 560,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = content
+            Content = new StackPanel
+            {
+                Margin = new Thickness(18),
+                Spacing = 10,
+                Children =
+                {
+                    new TextBlock { Text = "Equation Builder", FontSize = 20, FontWeight = FontWeight.SemiBold },
+                    new TextBlock { Text = "Build with the palette or type any LuaLaTeX math expression directly.", Opacity = 0.72 },
+                    modes,
+                    tabs,
+                    new TextBlock { Text = "LaTeX source", FontWeight = FontWeight.SemiBold },
+                    source,
+                    new TextBlock { Text = "Readable preview", FontWeight = FontWeight.SemiBold },
+                    previewBorder,
+                    buttons
+                }
+            }
         };
-        cancel.Click += (_, _) => dialog.Close<EquationResult?>(null);
+        cancel.Click += (_, _) => dialog.Close(null);
         insert.Click += (_, _) =>
         {
             var latex = (source.Text ?? string.Empty).Trim();
-            if (latex.Length > 0) dialog.Close<EquationResult?>(new EquationResult(latex, inline.IsChecked == true));
+            if (latex.Length > 0) dialog.Close(new EquationResult(latex, inline.IsChecked == true));
         };
         source.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(PrimaryModifier()))
-            {
-                e.Handled = true;
-                var latex = (source.Text ?? string.Empty).Trim();
-                if (latex.Length > 0) dialog.Close<EquationResult?>(new EquationResult(latex, inline.IsChecked == true));
-            }
+            if (e.Key != Key.Enter || !e.KeyModifiers.HasFlag(PrimaryModifier())) return;
+            e.Handled = true;
+            var latex = (source.Text ?? string.Empty).Trim();
+            if (latex.Length > 0) dialog.Close(new EquationResult(latex, inline.IsChecked == true));
         };
 
         var result = await dialog.ShowDialog<EquationResult?>(_window);
         if (result is null) return;
-        var insertion = result.Inline
-            ? $"${result.Latex}$"
-            : $"\n$$\n{result.Latex}\n$$\n";
-        InsertAtCaret(insertion);
+        InsertAtCaret(result.Inline ? $"${result.Latex}$" : $"\n$$\n{result.Latex}\n$$\n");
     }
 
     private async Task ShowCodeBlockEditorAsync()
     {
         if (!_viewModel.HasDocument) return;
         var active = ResolveEditor();
-        var selectedText = active is null || active.SelectionLength <= 0
+        var selected = active is null || active.SelectionLength <= 0
             ? string.Empty
             : active.Document.GetText(active.SelectionStart, active.SelectionLength);
 
@@ -273,7 +259,7 @@ internal sealed class AdvancedTypesettingFeatures
         var language = new ComboBox { ItemsSource = languages, SelectedIndex = 0, MinWidth = 180 };
         var code = new TextBox
         {
-            Text = selectedText,
+            Text = selected,
             AcceptsReturn = true,
             AcceptsTab = true,
             TextWrapping = TextWrapping.NoWrap,
@@ -283,18 +269,23 @@ internal sealed class AdvancedTypesettingFeatures
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
-        var style = _viewModel.CurrentStyle;
         try
         {
-            code.Background = new SolidColorBrush(Color.Parse(style.CodeBackgroundHex));
-            code.Foreground = new SolidColorBrush(Color.Parse(style.CodeTextHex));
+            code.Background = new SolidColorBrush(Color.Parse(_viewModel.CurrentStyle.CodeBackgroundHex));
+            code.Foreground = new SolidColorBrush(Color.Parse(_viewModel.CurrentStyle.CodeTextHex));
         }
         catch { }
 
         var cancel = new Button { Content = "Cancel", MinWidth = 90 };
         var insert = new Button { Content = "Insert Code Block", MinWidth = 130 };
         insert.Classes.Add("primary");
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, insert } };
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { cancel, insert }
+        };
         var dialog = new Window
         {
             Title = "Insert Code Block",
@@ -310,15 +301,15 @@ internal sealed class AdvancedTypesettingFeatures
                 Children =
                 {
                     new TextBlock { Text = "Code Block", FontSize = 20, FontWeight = FontWeight.SemiBold },
-                    new TextBlock { Text = "The language becomes the fenced-code tag and is used for PDF syntax highlighting.", Opacity = 0.72 },
+                    new TextBlock { Text = "The language becomes the fenced-code tag used by editor and PDF syntax highlighting.", Opacity = 0.72 },
                     Field("Language", language),
                     code,
                     buttons
                 }
             }
         };
-        cancel.Click += (_, _) => dialog.Close<CodeInsert?>(null);
-        insert.Click += (_, _) => dialog.Close<CodeInsert?>(new CodeInsert(LanguageTag(language.SelectedItem?.ToString()), code.Text ?? string.Empty));
+        cancel.Click += (_, _) => dialog.Close(null);
+        insert.Click += (_, _) => dialog.Close(new CodeInsert(LanguageTag(language.SelectedItem?.ToString()), code.Text ?? string.Empty));
         var result = await dialog.ShowDialog<CodeInsert?>(_window);
         if (result is null) return;
         var fence = result.Language.Length == 0 ? "```" : $"```{result.Language}";
@@ -330,52 +321,34 @@ internal sealed class AdvancedTypesettingFeatures
         if (!_viewModel.HasProject) return;
         var current = _viewModel.CurrentStyle;
 
-        var name = Input(current.Name);
-        var docClass = Input(current.DocumentClass);
-        var classOptions = Input(current.DocumentClassOptions);
+        var name = Input(current.Name); var docClass = Input(current.DocumentClass); var classOptions = Input(current.DocumentClassOptions);
         var width = Input(current.PageWidthInches); var height = Input(current.PageHeightInches);
-        var mt = Input(current.MarginTopInches); var mb = Input(current.MarginBottomInches);
-        var mi = Input(current.MarginInnerInches); var mo = Input(current.MarginOuterInches);
-        var toc = Check("Include table of contents", current.IncludeTableOfContents);
-        var tocDepth = Input(current.TableOfContentsDepth); var secDepth = Input(current.SectionNumberDepth);
+        var mt = Input(current.MarginTopInches); var mb = Input(current.MarginBottomInches); var mi = Input(current.MarginInnerInches); var mo = Input(current.MarginOuterInches);
+        var toc = Check("Include table of contents", current.IncludeTableOfContents); var tocDepth = Input(current.TableOfContentsDepth); var secDepth = Input(current.SectionNumberDepth);
         var openRight = Check("Open chapters on right-hand pages", current.OpenChaptersOnRight);
 
-        var bodyFont = Input(current.BodyFontFamily); var headingFont = Input(current.HeadingFontFamily);
-        var monoFont = Input(current.MonospaceFontFamily); var mathFont = Input(current.MathFontFamily);
-        var bodySize = Input(current.BodyFontSizePoints); var lineSpacing = Input(current.LineSpacing);
-        var parIndent = Input(current.ParagraphIndentEm); var parSpacing = Input(current.ParagraphSpacingPoints);
-        var justify = Check("Justify body text", current.JustifyBody);
-        var bodyColor = Input(current.BodyColorHex); var headingColor = Input(current.HeadingColorHex);
-        var linkColor = Input(current.LinkColorHex); var colorLinks = Check("Use colored hyperlinks", current.ColorLinks);
-        var chapterSize = Input(current.ChapterFontSizePoints); var sectionSize = Input(current.SectionFontSizePoints);
-        var subsectionSize = Input(current.SubsectionFontSizePoints); var subsubSize = Input(current.SubsubsectionFontSizePoints);
-        var chapterBefore = Input(current.ChapterBeforeSpacingPoints); var chapterAfter = Input(current.ChapterAfterSpacingPoints);
-        var sectionBefore = Input(current.SectionBeforeSpacingPoints); var sectionAfter = Input(current.SectionAfterSpacingPoints);
-        var quoteSize = Input(current.QuoteFontSizePoints); var quoteIndent = Input(current.QuoteIndentEm);
-        var quoteItalic = Check("Italicize block quotes", current.QuoteItalic);
-        var listSpacing = Input(current.ListItemSpacingPoints); var captionSize = Input(current.CaptionFontSizePoints);
-        var footnoteSize = Input(current.FootnoteFontSizePoints);
+        var bodyFont = Input(current.BodyFontFamily); var headingFont = Input(current.HeadingFontFamily); var monoFont = Input(current.MonospaceFontFamily); var mathFont = Input(current.MathFontFamily);
+        var bodySize = Input(current.BodyFontSizePoints); var lineSpacing = Input(current.LineSpacing); var parIndent = Input(current.ParagraphIndentEm); var parSpacing = Input(current.ParagraphSpacingPoints);
+        var justify = Check("Justify body text", current.JustifyBody); var bodyColor = Input(current.BodyColorHex); var headingColor = Input(current.HeadingColorHex); var linkColor = Input(current.LinkColorHex); var colorLinks = Check("Use colored hyperlinks", current.ColorLinks);
+        var chapterSize = Input(current.ChapterFontSizePoints); var sectionSize = Input(current.SectionFontSizePoints); var subsectionSize = Input(current.SubsectionFontSizePoints); var subsubSize = Input(current.SubsubsectionFontSizePoints);
+        var chapterBefore = Input(current.ChapterBeforeSpacingPoints); var chapterAfter = Input(current.ChapterAfterSpacingPoints); var sectionBefore = Input(current.SectionBeforeSpacingPoints); var sectionAfter = Input(current.SectionAfterSpacingPoints);
+        var quoteSize = Input(current.QuoteFontSizePoints); var quoteIndent = Input(current.QuoteIndentEm); var quoteItalic = Check("Italicize block quotes", current.QuoteItalic);
+        var listSpacing = Input(current.ListItemSpacingPoints); var captionSize = Input(current.CaptionFontSizePoints); var footnoteSize = Input(current.FootnoteFontSizePoints);
 
-        var codeSize = Input(current.CodeFontSizePoints);
-        var codeBg = Input(current.CodeBackgroundHex); var codeText = Input(current.CodeTextHex);
-        var codeKeyword = Input(current.CodeKeywordHex); var codeString = Input(current.CodeStringHex);
-        var codeComment = Input(current.CodeCommentHex); var codeFrame = Input(current.CodeFrameHex);
+        var codeSize = Input(current.CodeFontSizePoints); var codeBg = Input(current.CodeBackgroundHex); var codeText = Input(current.CodeTextHex);
+        var codeKeyword = Input(current.CodeKeywordHex); var codeString = Input(current.CodeStringHex); var codeComment = Input(current.CodeCommentHex); var codeFrame = Input(current.CodeFrameHex);
         var codeNumbers = Check("Show line numbers in published code blocks", current.CodeLineNumbers);
 
-        var hfSize = Input(current.HeaderFooterFontSizePoints);
-        var hl = Input(current.HeaderLeft); var hc = Input(current.HeaderCenter); var hr = Input(current.HeaderRight);
-        var fl = Input(current.FooterLeft); var fc = Input(current.FooterCenter); var fr = Input(current.FooterRight);
-        var pageNumbers = Check("Show page numbers", current.ShowPageNumbers);
-        var microtype = Check("Enable microtypographic protrusion and expansion", current.EnableMicrotype);
-        var widows = Check("Aggressively avoid widows and orphans", current.AvoidWidowsAndOrphans);
-        var packages = Multiline(current.ExtraPackages, 90, "Package names separated by commas/new lines, e.g. csquotes,booktabs");
+        var hfSize = Input(current.HeaderFooterFontSizePoints); var hl = Input(current.HeaderLeft); var hc = Input(current.HeaderCenter); var hr = Input(current.HeaderRight);
+        var fl = Input(current.FooterLeft); var fc = Input(current.FooterCenter); var fr = Input(current.FooterRight); var pageNumbers = Check("Show page numbers", current.ShowPageNumbers);
+        var microtype = Check("Enable microtypographic protrusion and expansion", current.EnableMicrotype); var widows = Check("Aggressively avoid widows and orphans", current.AvoidWidowsAndOrphans);
+        var packages = Multiline(current.ExtraPackages, 90, "Package names separated by commas or new lines, e.g. csquotes,booktabs");
         var preamble = Multiline(current.CustomPreamble, 190, "Raw LuaLaTeX preamble commands. Advanced users only.");
 
         var pageForm = Form(
             ("Style name", name), ("Document class", docClass), ("Class options", classOptions),
-            ("Page width (in)", width), ("Page height (in)", height),
-            ("Top margin (in)", mt), ("Bottom margin (in)", mb), ("Inner margin (in)", mi), ("Outer margin (in)", mo),
-            ("TOC depth", tocDepth), ("Number sections through", secDepth));
+            ("Page width (in)", width), ("Page height (in)", height), ("Top margin (in)", mt), ("Bottom margin (in)", mb),
+            ("Inner margin (in)", mi), ("Outer margin (in)", mo), ("TOC depth", tocDepth), ("Number sections through", secDepth));
         pageForm.Children.Add(toc); pageForm.Children.Add(openRight);
 
         var typeForm = Form(
@@ -383,33 +356,28 @@ internal sealed class AdvancedTypesettingFeatures
             ("Body size (pt)", bodySize), ("Line spacing", lineSpacing), ("Paragraph indent (em)", parIndent), ("Paragraph spacing (pt)", parSpacing),
             ("Body color", bodyColor), ("Heading color", headingColor), ("Link color", linkColor),
             ("Chapter size (pt)", chapterSize), ("Section size (pt)", sectionSize), ("Subsection size (pt)", subsectionSize), ("Subsubsection size (pt)", subsubSize),
-            ("Chapter space before (pt)", chapterBefore), ("Chapter space after (pt)", chapterAfter),
-            ("Section space before (pt)", sectionBefore), ("Section space after (pt)", sectionAfter),
-            ("Quote size (pt)", quoteSize), ("Quote indent (em)", quoteIndent), ("List item spacing (pt)", listSpacing),
-            ("Caption size (pt)", captionSize), ("Footnote size (pt)", footnoteSize));
+            ("Chapter space before (pt)", chapterBefore), ("Chapter space after (pt)", chapterAfter), ("Section space before (pt)", sectionBefore), ("Section space after (pt)", sectionAfter),
+            ("Quote size (pt)", quoteSize), ("Quote indent (em)", quoteIndent), ("List item spacing (pt)", listSpacing), ("Caption size (pt)", captionSize), ("Footnote size (pt)", footnoteSize));
         typeForm.Children.Add(justify); typeForm.Children.Add(colorLinks); typeForm.Children.Add(quoteItalic);
 
         var codeForm = Form(
-            ("Code size (pt)", codeSize), ("Background color", codeBg), ("Text color", codeText),
-            ("Keyword color", codeKeyword), ("String color", codeString), ("Comment color", codeComment), ("Frame color", codeFrame));
+            ("Code size (pt)", codeSize), ("Background color", codeBg), ("Text color", codeText), ("Keyword color", codeKeyword),
+            ("String color", codeString), ("Comment color", codeComment), ("Frame color", codeFrame));
         codeForm.Children.Add(codeNumbers);
         codeForm.Children.Add(new TextBlock
         {
-            Text = "Fenced blocks such as ```csharp, ```python, and ```sql are published with language-aware listings styling.",
+            Text = "Language-tagged fenced blocks such as ```csharp, ```python and ```sql use these colors in the editor and published PDF.",
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.72,
             Margin = new Thickness(0, 8)
         });
 
         var latexForm = Form(
-            ("Header/footer size (pt)", hfSize),
-            ("Header left", hl), ("Header center", hc), ("Header right", hr),
+            ("Header/footer size (pt)", hfSize), ("Header left", hl), ("Header center", hc), ("Header right", hr),
             ("Footer left", fl), ("Footer center", fc), ("Footer right", fr));
         latexForm.Children.Add(pageNumbers); latexForm.Children.Add(microtype); latexForm.Children.Add(widows);
-        latexForm.Children.Add(new TextBlock { Text = "Additional packages", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
-        latexForm.Children.Add(packages);
-        latexForm.Children.Add(new TextBlock { Text = "Custom preamble", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
-        latexForm.Children.Add(preamble);
+        latexForm.Children.Add(Label("Additional packages")); latexForm.Children.Add(packages);
+        latexForm.Children.Add(Label("Custom preamble")); latexForm.Children.Add(preamble);
 
         var tabs = new TabControl
         {
@@ -423,7 +391,13 @@ internal sealed class AdvancedTypesettingFeatures
         var cancel = new Button { Content = "Cancel", MinWidth = 90 };
         var save = new Button { Content = "Save Book Design", MinWidth = 130 };
         save.Classes.Add("primary");
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, save } };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { cancel, save }
+        };
         var root = new Grid { RowDefinitions = new RowDefinitions("*,Auto,Auto"), Margin = new Thickness(16) };
         root.Children.Add(tabs);
         Grid.SetRow(error, 1); error.Margin = new Thickness(4, 8); root.Children.Add(error);
@@ -444,11 +418,10 @@ internal sealed class AdvancedTypesettingFeatures
         {
             try
             {
-                var updated = current with
+                var updated = (current with
                 {
                     Name = Required(name, "Style name"), DocumentClass = Required(docClass, "Document class"), DocumentClassOptions = classOptions.Text?.Trim() ?? string.Empty,
-                    PageWidthInches = Number(width, "Page width"), PageHeightInches = Number(height, "Page height"),
-                    MarginTopInches = Number(mt, "Top margin"), MarginBottomInches = Number(mb, "Bottom margin"), MarginInnerInches = Number(mi, "Inner margin"), MarginOuterInches = Number(mo, "Outer margin"),
+                    PageWidthInches = Number(width, "Page width"), PageHeightInches = Number(height, "Page height"), MarginTopInches = Number(mt, "Top margin"), MarginBottomInches = Number(mb, "Bottom margin"), MarginInnerInches = Number(mi, "Inner margin"), MarginOuterInches = Number(mo, "Outer margin"),
                     IncludeTableOfContents = toc.IsChecked == true, TableOfContentsDepth = Integer(tocDepth, "TOC depth"), SectionNumberDepth = Integer(secDepth, "Section number depth"), OpenChaptersOnRight = openRight.IsChecked == true,
                     BodyFontFamily = Required(bodyFont, "Body font"), HeadingFontFamily = Required(headingFont, "Heading font"), MonospaceFontFamily = Required(monoFont, "Monospace font"), MathFontFamily = Required(mathFont, "Math font"),
                     BodyFontSizePoints = Number(bodySize, "Body size"), LineSpacing = Number(lineSpacing, "Line spacing"), ParagraphIndentEm = Number(parIndent, "Paragraph indent"), ParagraphSpacingPoints = Number(parSpacing, "Paragraph spacing"), JustifyBody = justify.IsChecked == true,
@@ -459,7 +432,8 @@ internal sealed class AdvancedTypesettingFeatures
                     CodeFontSizePoints = Number(codeSize, "Code size"), CodeBackgroundHex = Required(codeBg, "Code background"), CodeTextHex = Required(codeText, "Code text"), CodeKeywordHex = Required(codeKeyword, "Keyword color"), CodeStringHex = Required(codeString, "String color"), CodeCommentHex = Required(codeComment, "Comment color"), CodeFrameHex = Required(codeFrame, "Frame color"), CodeLineNumbers = codeNumbers.IsChecked == true,
                     HeaderFooterFontSizePoints = Number(hfSize, "Header/footer size"), HeaderLeft = hl.Text ?? string.Empty, HeaderCenter = hc.Text ?? string.Empty, HeaderRight = hr.Text ?? string.Empty, FooterLeft = fl.Text ?? string.Empty, FooterCenter = fc.Text ?? string.Empty, FooterRight = fr.Text ?? string.Empty, ShowPageNumbers = pageNumbers.IsChecked == true,
                     EnableMicrotype = microtype.IsChecked == true, AvoidWidowsAndOrphans = widows.IsChecked == true, ExtraPackages = packages.Text ?? string.Empty, CustomPreamble = preamble.Text ?? string.Empty
-                }.Validate();
+                }).Validate();
+
                 await _viewModel.UpdateStyleAsync(updated);
                 foreach (var colorizer in _codeColorizers.Values) colorizer.RefreshTheme();
                 dialog.Close();
@@ -493,9 +467,7 @@ internal sealed class AdvancedTypesettingFeatures
             editor.Focus();
             return;
         }
-
-        var text = _viewModel.EditorText ?? string.Empty;
-        _viewModel.UpdateEditorText(text + insertion);
+        _viewModel.UpdateEditorText((_viewModel.EditorText ?? string.Empty) + insertion);
     }
 
     private MenuItem Command(string header, Func<Task> action, KeyGesture? gesture = null)
@@ -509,11 +481,16 @@ internal sealed class AdvancedTypesettingFeatures
         return item;
     }
 
-    private static WrapPanel Palette(params (string Label, string Latex)[] entries)
+    private static WrapPanel CreatePalette(Action<string> insert, params (string Label, string Latex)[] entries)
     {
         var panel = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8) };
-        foreach (var (label, latex) in entries)
-            panel.Children.Add(new Button { Content = label, Tag = latex, Margin = new Thickness(3), MinWidth = 54 });
+        foreach (var entry in entries)
+        {
+            var snippet = entry.Latex;
+            var button = new Button { Content = entry.Label, Margin = new Thickness(3), MinWidth = 54 };
+            button.Click += (_, _) => insert(snippet);
+            panel.Children.Add(button);
+        }
         return panel;
     }
 
@@ -527,7 +504,8 @@ internal sealed class AdvancedTypesettingFeatures
             ("\\infty", "∞"), ("\\le", "≤"), ("\\ge", "≥"), ("\\ne", "≠"), ("\\pm", "±"), ("\\times", "×"),
             ("\\to", "→"), ("\\partial", "∂"), ("\\nabla", "∇"), ("\\in", "∈"), ("\\cdot", "·")
         ];
-        foreach (var replacement in replacements) result = result.Replace(replacement.From, replacement.To, StringComparison.Ordinal);
+        foreach (var replacement in replacements)
+            result = result.Replace(replacement.From, replacement.To, StringComparison.Ordinal);
         return string.IsNullOrWhiteSpace(result) ? "Equation preview appears here" : result;
     }
 
@@ -540,17 +518,23 @@ internal sealed class AdvancedTypesettingFeatures
     };
 
     private static List<object> MenuItems(object? source)
-        => source is IEnumerable enumerable ? enumerable.Cast<object?>().Where(static item => item is not null).Cast<object>().ToList() : [];
+        => source is IEnumerable enumerable
+            ? enumerable.Cast<object?>().Where(static item => item is not null).Cast<object>().ToList()
+            : [];
 
     private static bool HeaderEquals(MenuItem item, string text)
-        => string.Equals((item.Header?.ToString() ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).Replace("&&", "&", StringComparison.Ordinal), text, StringComparison.OrdinalIgnoreCase);
+        => string.Equals((item.Header?.ToString() ?? string.Empty)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace("&&", "&", StringComparison.Ordinal), text, StringComparison.OrdinalIgnoreCase);
 
-    private static KeyModifiers PrimaryModifier() => OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+    private static KeyModifiers PrimaryModifier()
+        => OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
 
     private static TextBox Input(string value) => new() { Text = value };
     private static TextBox Input(double value) => new() { Text = value.ToString("0.###", CultureInfo.InvariantCulture) };
     private static TextBox Input(int value) => new() { Text = value.ToString(CultureInfo.InvariantCulture) };
     private static CheckBox Check(string label, bool value) => new() { Content = label, IsChecked = value, Margin = new Thickness(0, 4) };
+
     private static TextBox Multiline(string value, double height, string watermark) => new()
     {
         Text = value,
@@ -573,21 +557,24 @@ internal sealed class AdvancedTypesettingFeatures
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("210,*") };
         grid.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
-        Grid.SetColumn(input, 1); grid.Children.Add(input);
+        Grid.SetColumn(input, 1);
+        grid.Children.Add(input);
         return grid;
     }
 
-    private static TabItem DesignTab(string title, Control content)
-        => new()
+    private static TextBlock Label(string text)
+        => new() { Text = text, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) };
+
+    private static TabItem DesignTab(string title, Control content) => new()
+    {
+        Header = title,
+        Content = new ScrollViewer
         {
-            Header = title,
-            Content = new ScrollViewer
-            {
-                Content = content,
-                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
-            }
-        };
+            Content = content,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
+        }
+    };
 
     private static string Required(TextBox input, string label)
     {
@@ -699,17 +686,17 @@ internal sealed class AdvancedTypesettingFeatures
             _codeLines.Clear();
             _fenceLines.Clear();
             string? language = null;
-            foreach (var line in _editor.Document.Lines)
+            for (var number = 1; number <= _editor.Document.LineCount; number++)
             {
+                var line = _editor.Document.GetLineByNumber(number);
                 var text = _editor.Document.GetText(line).Trim();
                 if (text.StartsWith("```", StringComparison.Ordinal))
                 {
-                    _fenceLines.Add(line.LineNumber);
-                    if (language is null) language = text[3..].Trim().ToLowerInvariant();
-                    else language = null;
+                    _fenceLines.Add(number);
+                    language = language is null ? text[3..].Trim().ToLowerInvariant() : null;
                     continue;
                 }
-                if (language is not null) _codeLines[line.LineNumber] = language;
+                if (language is not null) _codeLines[number] = language;
             }
             _editor.TextArea.TextView.Redraw();
         }
@@ -718,7 +705,8 @@ internal sealed class AdvancedTypesettingFeatures
         {
             if (_fenceLines.Contains(line.LineNumber))
             {
-                if (line.Length > 0) ChangeLinePart(line.Offset, line.EndOffset, element => element.TextRunProperties.SetForegroundBrush(_comment));
+                if (line.Length > 0)
+                    ChangeLinePart(line.Offset, line.EndOffset, element => element.TextRunProperties.SetForegroundBrush(_comment));
                 return;
             }
             if (!_codeLines.TryGetValue(line.LineNumber, out var language) || line.Length <= 0) return;
@@ -729,10 +717,9 @@ internal sealed class AdvancedTypesettingFeatures
                 element.TextRunProperties.SetForegroundBrush(_text);
                 element.TextRunProperties.SetBackgroundBrush(_background);
             });
-
             ApplyStrings(line.Offset, text);
-            ApplyComment(line.Offset, text, language);
             ApplyKeywords(line.Offset, text, language);
+            ApplyComment(line.Offset, text, language);
         }
 
         private void ApplyStrings(int lineStart, string text)
@@ -740,26 +727,26 @@ internal sealed class AdvancedTypesettingFeatures
             var quote = '\0';
             var start = -1;
             var escaped = false;
-            for (var i = 0; i < text.Length; i++)
+            for (var index = 0; index < text.Length; index++)
             {
-                var ch = text[i];
+                var ch = text[index];
                 if (start < 0)
                 {
-                    if (ch is '\'' or '"') { quote = ch; start = i; }
+                    if (ch is '\'' or '"') { quote = ch; start = index; }
                     continue;
                 }
                 if (escaped) { escaped = false; continue; }
                 if (ch == '\\') { escaped = true; continue; }
                 if (ch != quote) continue;
-                var end = i + 1;
-                ChangeLinePart(lineStart + start, lineStart + end, element => element.TextRunProperties.SetForegroundBrush(_string));
+                ChangeLinePart(lineStart + start, lineStart + index + 1,
+                    element => element.TextRunProperties.SetForegroundBrush(_string));
                 start = -1;
             }
         }
 
         private void ApplyComment(int lineStart, string text, string language)
         {
-            var marker = language switch
+            var marker = NormalizeLanguage(language) switch
             {
                 "python" or "bash" or "powershell" => "#",
                 "sql" => "--",
@@ -768,13 +755,13 @@ internal sealed class AdvancedTypesettingFeatures
             };
             var index = text.IndexOf(marker, StringComparison.Ordinal);
             if (index >= 0)
-                ChangeLinePart(lineStart + index, lineStart + text.Length, element => element.TextRunProperties.SetForegroundBrush(_comment));
+                ChangeLinePart(lineStart + index, lineStart + text.Length,
+                    element => element.TextRunProperties.SetForegroundBrush(_comment));
         }
 
         private void ApplyKeywords(int lineStart, string text, string language)
         {
-            language = NormalizeLanguage(language);
-            if (!Keywords.TryGetValue(language, out var keywords)) return;
+            if (!Keywords.TryGetValue(NormalizeLanguage(language), out var keywords)) return;
             var index = 0;
             while (index < text.Length)
             {
@@ -782,9 +769,9 @@ internal sealed class AdvancedTypesettingFeatures
                 if (index >= text.Length) break;
                 var start = index++;
                 while (index < text.Length && (char.IsLetterOrDigit(text[index]) || text[index] == '_')) index++;
-                var token = text[start..index];
-                if (keywords.Contains(token))
-                    ChangeLinePart(lineStart + start, lineStart + index, element => element.TextRunProperties.SetForegroundBrush(_keyword));
+                if (keywords.Contains(text[start..index]))
+                    ChangeLinePart(lineStart + start, lineStart + index,
+                        element => element.TextRunProperties.SetForegroundBrush(_keyword));
             }
         }
 
