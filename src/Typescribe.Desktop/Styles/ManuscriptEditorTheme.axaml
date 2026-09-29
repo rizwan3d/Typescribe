@@ -1,0 +1,63 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:avaloniaedit="using:AvaloniaEdit"
+        xmlns:editing="using:AvaloniaEdit.Editing">
+  <Styles.Resources>
+    <ResourceDictionary>
+      <SolidColorBrush x:Key="TextAreaSelectionBrush" Color="#5965D8" Opacity="0.42" />
+
+      <ControlTheme x:Key="{x:Type avaloniaedit:TextEditor}" TargetType="avaloniaedit:TextEditor">
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}">
+              <ScrollViewer Name="PART_ScrollViewer"
+                            Focusable="False"
+                            VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"
+                            HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                            VerticalContentAlignment="Top"
+                            HorizontalContentAlignment="Left"
+                            Padding="{TemplateBinding Padding}" />
+            </Border>
+          </ControlTemplate>
+        </Setter>
+      </ControlTheme>
+
+      <ControlTheme x:Key="{x:Type editing:TextArea}" TargetType="editing:TextArea">
+        <Setter Property="SelectionBrush" Value="{DynamicResource TextAreaSelectionBrush}" />
+        <Setter Property="Template">
+          <ControlTemplate>
+            <DockPanel Focusable="False" Background="{TemplateBinding Background}">
+              <ItemsControl DockPanel.Dock="Left"
+                            Focusable="False"
+                            ItemsSource="{TemplateBinding LeftMargins}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+              </ItemsControl>
+              <Panel>
+                <ContentPresenter Name="PART_CP"
+                                  Cursor="IBeam"
+                                  Focusable="False"
+                                  Background="{TemplateBinding Background}" />
+                <TextBlock Name="PART_Watermark"
+                           Opacity="0.5"
+                           Text="{TemplateBinding Watermark}"
+                           Foreground="{TemplateBinding Foreground}">
+                  <TextBlock.IsVisible>
+                    <Binding RelativeSource="{RelativeSource TemplatedParent}"
+                             Path="Document.Text"
+                             Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                  </TextBlock.IsVisible>
+                </TextBlock>
+              </Panel>
+            </DockPanel>
+          </ControlTemplate>
+        </Setter>
+      </ControlTheme>
+    </ResourceDictionary>
+  </Styles.Resources>
+</Styles>
