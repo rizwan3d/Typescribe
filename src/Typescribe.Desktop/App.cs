@@ -48,11 +48,10 @@ public sealed class App : AvaloniaApplication
             }
 
             StudioUxPolish.Apply(window);
-            StudioAuthoringEnhancements.Apply(window);
+            StudioAuthoringEnhancements.Apply(window, viewModel);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
 
-            // Native hierarchical Project Explorer. It replaces the legacy flat Binder visual
-            // after authoring features capture their compatibility selection bridge.
+            // Native hierarchical Project Explorer. It replaces the legacy flat Binder visual.
             ProjectExplorerFeature.Apply(window, viewModel, repository, parser);
             PdfAutoFitEnhancement.Apply(window);
 
