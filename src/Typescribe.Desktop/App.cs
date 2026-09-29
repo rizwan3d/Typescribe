@@ -52,6 +52,7 @@ public sealed class App : AvaloniaApplication
             StudioUxPolish.Apply(window);
             StudioAuthoringEnhancements.Apply(window);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
+            ScrivenerBinderEnhancements.Apply(window, viewModel, repository);
             LeftPanelStability.Apply(window, viewModel);
 
             // Run last: the earlier studio layers retain their existing TextBox proxies,
