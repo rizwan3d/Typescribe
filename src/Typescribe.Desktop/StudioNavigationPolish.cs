@@ -27,18 +27,17 @@ internal sealed class StudioNavigationPolish
     private readonly TextBox _quickSearch = new()
     {
         Name = "ProjectSearchBox",
-        Width = 360,
+        Width = 340,
         MinWidth = 240,
         Height = 30,
         Watermark = "Search project (Ctrl+F)",
         VerticalAlignment = VerticalAlignment.Center,
         HorizontalAlignment = HorizontalAlignment.Left,
-        Margin = new Thickness(10, 2, 8, 2)
+        Margin = new Thickness(8, 2, 12, 2)
     };
 
-    private Grid? _root;
     private Menu? _menu;
-    private StackPanel? _topBar;
+    private Grid? _topBar;
     private bool _findMenuHooked;
     private bool _disposed;
 
@@ -60,7 +59,11 @@ internal sealed class StudioNavigationPolish
     private void Attach()
     {
         _quickSearch.KeyDown += QuickSearchKeyDown;
-        _window.AddHandler(InputElement.KeyDownEvent, WindowPreviewKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+        _window.AddHandler(
+            InputElement.KeyDownEvent,
+            WindowPreviewKeyDown,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         _window.Opened += WindowOpened;
         _window.LayoutUpdated += WindowLayoutUpdated;
         _window.Closed += WindowClosed;
@@ -85,27 +88,32 @@ internal sealed class StudioNavigationPolish
     {
         if (_topBar is not null || _window.Content is not Grid root) return;
 
-        _root = root;
         _menu = root.Children
             .OfType<Menu>()
             .FirstOrDefault(control => Grid.GetRow(control) == 0);
         if (_menu is null) return;
 
-        // Put the native Menu and the search box in one horizontal container. StackPanel measures
-        // the Menu at its natural content width, so the search box is guaranteed to render directly
-        // after Help instead of competing with a full-width Menu or relying on overlay coordinates.
+        // A horizontal StackPanel measures children without constraining the stacking direction.
+        // Use an explicit Grid instead: the Menu gets its natural width (with a safety cap), the
+        // project search always owns a fixed visible column, and the rest of the row absorbs space.
         root.Children.Remove(_menu);
         _menu.HorizontalAlignment = HorizontalAlignment.Left;
-        _menu.VerticalAlignment = VerticalAlignment.Center;
+        _menu.VerticalAlignment = VerticalAlignment.Stretch;
+        _menu.MaxWidth = 560;
 
-        _topBar = new StackPanel
+        _topBar = new Grid
         {
             Name = "TopMenuSearchBar",
-            Orientation = Orientation.Horizontal,
+            ColumnDefinitions = new ColumnDefinitions("Auto,360,*"),
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Center,
-            Children = { _menu, _quickSearch }
+            VerticalAlignment = VerticalAlignment.Stretch
         };
+
+        Grid.SetColumn(_menu, 0);
+        _topBar.Children.Add(_menu);
+
+        Grid.SetColumn(_quickSearch, 1);
+        _topBar.Children.Add(_quickSearch);
 
         Grid.SetRow(_topBar, 0);
         root.Children.Add(_topBar);
@@ -141,9 +149,8 @@ internal sealed class StudioNavigationPolish
                 StringComparison.OrdinalIgnoreCase));
         if (findItem is null) return;
 
-        // StudioWorkspaceWindow originally binds Ctrl+F to the removed left-panel Search tab.
-        // Remove that accelerator so the tunnel handler below exclusively owns Ctrl+F.
-        findItem.InputGesture = null;
+        // InputGesture is only the displayed shortcut hint in Avalonia. Keep it visible and
+        // defer focus to the new project-search control after the existing menu action finishes.
         findItem.Click += (_, _) => FocusQuickSearchDeferred();
         _findMenuHooked = true;
     }
@@ -157,8 +164,12 @@ internal sealed class StudioNavigationPolish
 
     private void WindowPreviewKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.F || (e.KeyModifiers & KeyModifiers.Control) == 0) return;
+        var primaryModifier = e.KeyModifiers.HasFlag(KeyModifiers.Control) ||
+                              e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+        if (e.Key != Key.F || !primaryModifier) return;
 
+        // Tunnel routing runs before the legacy bubbling WindowKeyDown handler, so the hidden
+        // left Search tab cannot steal Ctrl/Cmd+F focus.
         e.Handled = true;
         FocusQuickSearchDeferred();
     }
