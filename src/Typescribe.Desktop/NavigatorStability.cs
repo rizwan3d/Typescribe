@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Avalonia;
 using Avalonia.Controls;
@@ -9,26 +10,30 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Coordinates the left navigator without becoming a second owner of its data.
-/// StudioScriveningsFeatures owns the filtered Binder view and Bookmarks contents; the base
-/// workspace still briefly rebinds the Binder to BinderRows during state refreshes. This
-/// guard remembers the Scrivenings view, immediately restores it after those transient
-/// rebinds, and keeps selection stable by persistent document id. Bookmarks are never
-/// rebound here; only their selection is restored after their owner refreshes them.
+/// Presents the Binder through one stable collection and coalesces incoming view changes to
+/// approximately one display frame. StudioScriveningsFeatures remains the owner of collapse /
+/// expand semantics; this class only prevents its array publications (and the base window's
+/// transient BinderRows assignment) from tearing down ListBox containers between frames.
+/// Bookmarks are not rebound here; only their selection is restored after their owner refreshes.
 /// </summary>
 internal sealed class NavigatorStability
 {
+    private static readonly TimeSpan BinderFrameInterval = TimeSpan.FromMilliseconds(1000d / 60d);
+
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
+    private readonly ObservableCollection<BinderRowViewModel> _frameRows = [];
+    private readonly DispatcherTimer _binderFrameTimer;
 
     private ListBox? _binder;
     private TabControl? _leftTabs;
     private ListBox? _bookmarkList;
-    private IEnumerable<BinderRowViewModel>? _preferredBinderSource;
+    private BinderRowViewModel[]? _pendingBinderRows;
     private string? _selectedPersistentId;
     private int _bookmarkSelectedIndex = -1;
     private int _bookmarkRestoreIndex = -1;
     private bool _restoringBinder;
+    private bool _binderFrameScheduled;
     private bool _bookmarkRestorePending;
     private bool _discoverScheduled;
     private bool _disposed;
@@ -37,6 +42,8 @@ internal sealed class NavigatorStability
     {
         _window = window;
         _viewModel = viewModel;
+        _binderFrameTimer = new DispatcherTimer { Interval = BinderFrameInterval };
+        _binderFrameTimer.Tick += BinderFrameTick;
     }
 
     public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
@@ -66,18 +73,9 @@ internal sealed class NavigatorStability
         {
             if (_disposed) return;
 
-            // Keep the user's live ListBox selection authoritative while an async SelectAsync
-            // operation is completing. Once the ListBox has temporarily lost its selection,
-            // fall back to the view-model's persistent id.
-            if (_binder?.SelectedItem is BinderRowViewModel liveSelection)
-                _selectedPersistentId = liveSelection.Node.PersistentId;
-            else if (_viewModel.SelectedRow is { } selected)
-                _selectedPersistentId = selected.Node.PersistentId;
-            else if (_viewModel.BinderRows.Count == 0)
-                _selectedPersistentId = null;
-
-            RestorePreferredBinderSource();
-            SynchronizeBinderSelection();
+            CaptureLiveSelection();
+            RestoreStableBinderSource();
+            ScheduleBinderFrame();
             if (_bookmarkList is null) ScheduleDiscover();
         }, DispatcherPriority.Background);
 
@@ -89,10 +87,9 @@ internal sealed class NavigatorStability
                 string.Equals(row.Node.PersistentId, _selectedPersistentId, StringComparison.Ordinal)))
             _selectedPersistentId = _viewModel.SelectedRow?.Node.PersistentId;
 
-        // Do not manufacture another Binder source here. The Scrivenings feature will publish
-        // the correct filtered source after structural/collapse changes; preserving its source
-        // object between updates avoids container teardown and visible flashing.
-        Dispatcher.UIThread.Post(SynchronizeBinderSelection, DispatcherPriority.Background);
+        // Do not publish BinderRows directly. The Scrivenings owner will publish the correct
+        // collapsed/expanded projection; wait for that proposal and commit it on the next frame.
+        ScheduleBinderFrame();
     }
 
     private void ScheduleDiscover()
@@ -132,12 +129,19 @@ internal sealed class NavigatorStability
     private void AttachBinder(ListBox binder)
     {
         _binder = binder;
-        _preferredBinderSource = binder.ItemsSource as IEnumerable<BinderRowViewModel> ?? _viewModel.BinderRows;
         _selectedPersistentId = (binder.SelectedItem as BinderRowViewModel)?.Node.PersistentId ??
                                 _viewModel.SelectedRow?.Node.PersistentId;
+
+        var initialRows = (binder.ItemsSource as IEnumerable<BinderRowViewModel>)?.ToArray() ??
+                          _viewModel.BinderRows.ToArray();
+        ReconcileBinderRows(initialRows);
+
+        _restoringBinder = true;
+        try { binder.ItemsSource = _frameRows; }
+        finally { _restoringBinder = false; }
+
         binder.PropertyChanged += BinderPropertyChanged;
         binder.SelectionChanged += BinderSelectionChanged;
-        RestorePreferredBinderSource();
         SynchronizeBinderSelection();
     }
 
@@ -147,33 +151,20 @@ internal sealed class NavigatorStability
             return;
 
         var source = _binder.ItemsSource;
-        if (ReferenceEquals(source, _preferredBinderSource)) return;
+        if (ReferenceEquals(source, _frameRows)) return;
 
-        if (ReferenceEquals(source, _viewModel.BinderRows))
-        {
-            // StudioWorkspaceWindow performs this assignment on every state refresh. It is not
-            // an Expand All request and must not tear down the filtered Scrivenings view.
-            if (_preferredBinderSource is not null && !ReferenceEquals(_preferredBinderSource, _viewModel.BinderRows))
-                RestorePreferredBinderSource();
-            else
-                _preferredBinderSource = _viewModel.BinderRows;
+        CaptureLiveSelection();
 
-            SynchronizeBinderSelection();
-            return;
-        }
+        // The base window assigns BinderRows during every state refresh. That assignment is
+        // transient and must never become the rendered source. Non-canonical enumerable sources
+        // are the intentional collapse/expand projection published by Scrivenings.
+        if (!ReferenceEquals(source, _viewModel.BinderRows) && source is IEnumerable<BinderRowViewModel> proposal)
+            _pendingBinderRows = proposal.ToArray();
 
-        if (source is IEnumerable<BinderRowViewModel> proposal)
-        {
-            // A non-canonical source is the view intentionally published by
-            // StudioScriveningsFeatures (collapse/expand/structure). Adopt that exact object so
-            // the feature sees its own source on the next update and does not rebuild the Binder.
-            _preferredBinderSource = proposal;
-            SynchronizeBinderSelection();
-            return;
-        }
-
-        RestorePreferredBinderSource();
-        SynchronizeBinderSelection();
+        // Restore the permanent source synchronously. Layout/render happens later, so Avalonia
+        // never paints the intermediate array and the visible Binder does not flash.
+        RestoreStableBinderSource();
+        ScheduleBinderFrame();
     }
 
     private void BinderSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -185,35 +176,102 @@ internal sealed class NavigatorStability
             return;
         }
 
-        // ItemsSource swaps can briefly clear selection. Do not let that transient null become
-        // the user's navigation state; restore after the current UI operation completes.
-        Dispatcher.UIThread.Post(SynchronizeBinderSelection, DispatcherPriority.Background);
+        // Source churn can briefly clear selection inside the same UI operation. Recover on the
+        // next frame rather than allowing that transient null to become navigation state.
+        ScheduleBinderFrame();
     }
 
-    private void RestorePreferredBinderSource()
+    private void CaptureLiveSelection()
     {
-        if (_binder is null || _preferredBinderSource is null ||
-            ReferenceEquals(_binder.ItemsSource, _preferredBinderSource))
-            return;
+        if (_binder?.SelectedItem is BinderRowViewModel liveSelection)
+            _selectedPersistentId = liveSelection.Node.PersistentId;
+        else if (_viewModel.SelectedRow is { } selected)
+            _selectedPersistentId = selected.Node.PersistentId;
+        else if (_viewModel.BinderRows.Count == 0)
+            _selectedPersistentId = null;
+    }
 
+    private void RestoreStableBinderSource()
+    {
+        if (_binder is null || ReferenceEquals(_binder.ItemsSource, _frameRows)) return;
         _restoringBinder = true;
-        try { _binder.ItemsSource = _preferredBinderSource; }
+        try { _binder.ItemsSource = _frameRows; }
         finally { _restoringBinder = false; }
     }
+
+    private void ScheduleBinderFrame()
+    {
+        if (_disposed || _binderFrameScheduled) return;
+        _binderFrameScheduled = true;
+        _binderFrameTimer.Start();
+    }
+
+    private void BinderFrameTick(object? sender, EventArgs e)
+    {
+        _binderFrameTimer.Stop();
+        _binderFrameScheduled = false;
+        if (_disposed) return;
+
+        if (_pendingBinderRows is { } pending)
+        {
+            _pendingBinderRows = null;
+            ReconcileBinderRows(pending);
+        }
+
+        RestoreStableBinderSource();
+        SynchronizeBinderSelection();
+    }
+
+    private void ReconcileBinderRows(IReadOnlyList<BinderRowViewModel> target)
+    {
+        // Incremental insert/move/remove operations preserve ListBox containers and scroll state.
+        // Avoid Clear()/Reset: a reset is what produces the visible white flash on large Binders.
+        for (var index = 0; index < target.Count; index++)
+        {
+            var desired = target[index];
+            if (index < _frameRows.Count && SameNode(_frameRows[index], desired))
+            {
+                if (!ReferenceEquals(_frameRows[index], desired))
+                    _frameRows[index] = desired;
+                continue;
+            }
+
+            var existingIndex = FindRowIndex(desired.Node.PersistentId, index + 1);
+            if (existingIndex >= 0)
+            {
+                _frameRows.Move(existingIndex, index);
+                if (!ReferenceEquals(_frameRows[index], desired))
+                    _frameRows[index] = desired;
+            }
+            else
+            {
+                _frameRows.Insert(index, desired);
+            }
+        }
+
+        while (_frameRows.Count > target.Count)
+            _frameRows.RemoveAt(_frameRows.Count - 1);
+    }
+
+    private int FindRowIndex(string persistentId, int startIndex)
+    {
+        for (var index = Math.Max(0, startIndex); index < _frameRows.Count; index++)
+            if (string.Equals(_frameRows[index].Node.PersistentId, persistentId, StringComparison.Ordinal))
+                return index;
+        return -1;
+    }
+
+    private static bool SameNode(BinderRowViewModel left, BinderRowViewModel right)
+        => string.Equals(left.Node.PersistentId, right.Node.PersistentId, StringComparison.Ordinal);
 
     private void SynchronizeBinderSelection()
     {
         if (_disposed || _binder is null) return;
 
-        var targetId = (_binder.SelectedItem as BinderRowViewModel)?.Node.PersistentId ??
-                       _selectedPersistentId ??
-                       _viewModel.SelectedRow?.Node.PersistentId;
+        var targetId = _selectedPersistentId ?? _viewModel.SelectedRow?.Node.PersistentId;
         if (targetId is null) return;
 
-        var rows = (_binder.ItemsSource as IEnumerable<BinderRowViewModel>) ??
-                   _preferredBinderSource ??
-                   _viewModel.BinderRows;
-        var target = rows.FirstOrDefault(row =>
+        var target = _frameRows.FirstOrDefault(row =>
             string.Equals(row.Node.PersistentId, targetId, StringComparison.Ordinal));
         if (target is null) return;
 
@@ -245,8 +303,6 @@ internal sealed class NavigatorStability
     {
         if (_disposed || _bookmarkList is null || e.Property != ItemsControl.ItemsSourceProperty) return;
 
-        // The Bookmarks owner is allowed to replace its array. Rebinding it again here was the
-        // source of the old double-refresh flicker. Preserve only the selection position.
         _bookmarkRestoreIndex = _bookmarkSelectedIndex >= 0
             ? _bookmarkSelectedIndex
             : _bookmarkList.SelectedIndex;
@@ -305,6 +361,8 @@ internal sealed class NavigatorStability
     private void OnClosed(object? sender, EventArgs e)
     {
         _disposed = true;
+        _binderFrameTimer.Stop();
+        _binderFrameTimer.Tick -= BinderFrameTick;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
