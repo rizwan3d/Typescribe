@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
@@ -107,8 +108,6 @@ public sealed partial class BookDesignDialog : Window
         }
         catch (Exception ex)
         {
-            // Event handlers are async-void at the Avalonia boundary. Keep validation, IO and
-            // preview failures inside the dialog rather than allowing them to crash the app.
             SetError(ex.Message);
         }
     }
@@ -255,7 +254,6 @@ public sealed partial class BookDesignDialog : Window
             Background = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.Parse("#D1D5DB")),
             BorderThickness = new Thickness(1),
-            BoxShadow = new BoxShadows(new BoxShadow { Blur = 18, Opacity = 0.18, OffsetY = 4 }),
             Child = _previewContent,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Top,
