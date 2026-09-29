@@ -27,10 +27,6 @@ public sealed partial class BookDesignDialog : Window
         => DataContext as BookDesignEditorViewModel
            ?? throw new InvalidOperationException("Book Design editor model is unavailable.");
 
-    private TextBlock ErrorText
-        => this.FindControl<TextBlock>("ErrorText")
-           ?? throw new InvalidOperationException("Book Design error surface is unavailable.");
-
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
     private async void OnApplyClick(object? sender, RoutedEventArgs e)
