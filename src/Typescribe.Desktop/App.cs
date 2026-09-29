@@ -33,7 +33,7 @@ public sealed class App : AvaloniaApplication
         {
             var repository = new TrackingProjectRepository(new FileSystemProjectRepository());
             var parser = new DocumentParser();
-            var renderer = new DocumentRenderer();
+            var renderer = new LuaLatexSafeDocumentRenderer();
             var publishingEngine = new LuaLatexPublishingEngine();
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
             var searchService = new ProjectSearchService(repository);
@@ -53,12 +53,13 @@ public sealed class App : AvaloniaApplication
             StudioAuthoringEnhancements.Apply(window);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
             ScrivenerBinderEnhancements.Apply(window, viewModel, repository);
-            LeftPanelStability.Apply(window, viewModel);
+            NavigatorStability.Apply(window, viewModel);
 
             // The bridge runs before the advanced tools so the latter can target the real
             // AvaloniaEdit manuscript surface for equation/code insertion and highlighting.
             ManuscriptEditorUpgrade.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
+            BookDesignFeature.Apply(window, viewModel);
             desktop.MainWindow = window;
         }
 
