@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -6,7 +5,6 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
-using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -21,9 +19,12 @@ using Typescribe.Domain.Models;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Native hierarchical project explorer. This replaces the legacy flat Binder visual with a
-/// single TreeView owner, stable node identities, event-driven structural reconciliation and
-/// semantic heading children. Ordinary editor/preview state changes never rebuild the tree.
+/// Native hierarchical project explorer for Typescribe.
+///
+/// This is intentionally event driven: project structure changes update project nodes,
+/// semantic outline changes update only one document's heading branch, and selection changes
+/// never rebuild the tree. Ordinary typing, autosave, PDF preview and inspector updates do not
+/// touch this control unless the actual heading structure changes.
 /// </summary>
 internal sealed class ProjectExplorerFeature
 {
@@ -66,8 +67,10 @@ internal sealed class ProjectExplorerFeature
         Opacity = 0.72
     };
 
-    private ListBox? _legacyBinder;
-    private Grid? _legacyHostGrid;
+    // The old ListBox is removed from the visual tree. It remains temporarily referenced only so
+    // older authoring modules that captured it before replacement can continue receiving the
+    // workspace's selection updates while those modules are migrated away from Binder UI access.
+    private ListBox? _legacySelectionBridge;
     private Grid? _host;
     private CancellationTokenSource? _indexCts;
     private ExplorerNode? _projectRoot;
@@ -98,7 +101,7 @@ internal sealed class ProjectExplorerFeature
 
         _tree.ItemsSource = _roots;
         _tree.ItemTemplate = new FuncTreeDataTemplate<ExplorerNode>(
-            (node, _) => BuildHeader(node),
+            static (node, _) => new ExplorerNodeHeader(node),
             static node => node.Children);
         _tree.SelectionChanged += TreeSelectionChanged;
         _tree.ContainerPrepared += TreeContainerPrepared;
@@ -109,7 +112,6 @@ internal sealed class ProjectExplorerFeature
         DragDrop.SetAllowDrop(_tree, true);
         DragDrop.AddDragOverHandler(_tree, TreeDragOver);
         DragDrop.AddDropHandler(_tree, TreeDrop);
-
         _tree.ContextMenu = BuildContextMenu();
     }
 
@@ -129,10 +131,6 @@ internal sealed class ProjectExplorerFeature
         window.Closed += feature.WindowClosed;
         viewModel.BinderRows.CollectionChanged += feature.BinderRowsChanged;
         viewModel.OutlineItems.CollectionChanged += feature.OutlineItemsChanged;
-
-        // Authoring/Scrivenings are composed before this feature and discover the legacy ListBox
-        // asynchronously. Queue replacement after their first discovery pass, then remove the old
-        // visual completely. Their captured reference remains a nonvisual compatibility bridge.
         feature.ScheduleAttach();
     }
 
@@ -146,6 +144,8 @@ internal sealed class ProjectExplorerFeature
     {
         if (_disposed || _attachScheduled || _host is not null) return;
         _attachScheduled = true;
+
+        // Give authoring modules that still discover the old ListBox one initial layout pass.
         Dispatcher.UIThread.Post(() =>
         {
             Dispatcher.UIThread.Post(() =>
@@ -160,19 +160,18 @@ internal sealed class ProjectExplorerFeature
     {
         if (_disposed || _host is not null || _window.Content is not Control content) return;
 
-        _legacyBinder = content.GetVisualDescendants()
+        var legacy = content.GetVisualDescendants()
             .OfType<ListBox>()
             .FirstOrDefault(static list => list.ContextMenu is not null);
-        if (_legacyBinder is null) return;
-        if (_legacyBinder.GetVisualParent() is not Grid parent) return;
+        if (legacy is null || legacy.GetVisualParent() is not Grid parent) return;
 
-        _legacyHostGrid = parent;
-        var row = Grid.GetRow(_legacyBinder);
-        var column = Grid.GetColumn(_legacyBinder);
-        var rowSpan = Grid.GetRowSpan(_legacyBinder);
-        var columnSpan = Grid.GetColumnSpan(_legacyBinder);
+        _legacySelectionBridge = legacy;
+        _legacySelectionBridge.SelectionChanged += LegacySelectionChanged;
 
-        _legacyBinder.SelectionChanged += LegacySelectionChanged;
+        var row = Grid.GetRow(legacy);
+        var column = Grid.GetColumn(legacy);
+        var rowSpan = Grid.GetRowSpan(legacy);
+        var columnSpan = Grid.GetColumnSpan(legacy);
 
         _host = BuildHost();
         Grid.SetRow(_host, row);
@@ -180,7 +179,7 @@ internal sealed class ProjectExplorerFeature
         Grid.SetRowSpan(_host, rowSpan);
         Grid.SetColumnSpan(_host, columnSpan);
 
-        parent.Children.Remove(_legacyBinder);
+        parent.Children.Remove(legacy);
         parent.Children.Add(_host);
 
         UpdateProjectIdentity(force: true);
@@ -269,7 +268,9 @@ internal sealed class ProjectExplorerFeature
         Dispatcher.UIThread.Post(() =>
         {
             _outlineSyncScheduled = false;
-            if (!_disposed) ApplySelectedOutlineSnapshot();
+            if (_disposed) return;
+            SyncSelectionFromModel();
+            ApplySelectedOutlineSnapshot();
         }, DispatcherPriority.Background);
     }
 
@@ -301,13 +302,12 @@ internal sealed class ProjectExplorerFeature
         {
             [_projectRoot.Key] = []
         };
-        var levels = new List<ExplorerNode>();
-        var liveProjectKeys = new HashSet<string>(StringComparer.Ordinal);
+        var ancestors = new List<ExplorerNode>();
+        var liveIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var row in _viewModel.BinderRows)
         {
-            var key = ProjectKey(row.Node.PersistentId);
-            liveProjectKeys.Add(key);
+            liveIds.Add(row.Node.PersistentId);
             if (!_projectNodes.TryGetValue(row.Node.PersistentId, out var node))
             {
                 node = ExplorerNode.CreateProjectNode(row);
@@ -319,22 +319,22 @@ internal sealed class ProjectExplorerFeature
                 node.UpdateProjectRow(row);
             }
 
-            while (levels.Count > row.Depth) levels.RemoveAt(levels.Count - 1);
-            var parent = row.Depth == 0 || levels.Count == 0 ? _projectRoot : levels[^1];
+            while (ancestors.Count > row.Depth) ancestors.RemoveAt(ancestors.Count - 1);
+            var parent = row.Depth == 0 || ancestors.Count == 0 ? _projectRoot : ancestors[^1];
             node.Parent = parent;
             if (!desiredByParent.TryGetValue(parent.Key, out var siblings))
                 desiredByParent[parent.Key] = siblings = [];
             siblings.Add(node);
             desiredByParent.TryAdd(node.Key, []);
 
-            if (levels.Count == row.Depth) levels.Add(node);
-            else levels[row.Depth] = node;
+            if (ancestors.Count == row.Depth) ancestors.Add(node);
+            else ancestors[row.Depth] = node;
         }
 
         ReconcileCollection(_projectRoot.Children, desiredByParent[_projectRoot.Key]);
         ReconcileProjectChildrenRecursive(_projectRoot, desiredByParent);
 
-        foreach (var removed in _projectNodes.Where(pair => !liveProjectKeys.Contains(ProjectKey(pair.Key))).Select(static pair => pair.Key).ToArray())
+        foreach (var removed in _projectNodes.Keys.Where(id => !liveIds.Contains(id)).ToArray())
         {
             _projectNodes.Remove(removed);
             _headingIndex.Remove(removed);
@@ -345,7 +345,7 @@ internal sealed class ProjectExplorerFeature
             ? "PROJECT EXPLORER"
             : $"PROJECT EXPLORER  ·  {project.Title}";
 
-        SyncSelectionFromLegacyOrModel();
+        SyncSelectionFromModel();
         _ = IndexDocumentsAsync();
     }
 
@@ -450,7 +450,9 @@ internal sealed class ProjectExplorerFeature
         foreach (var root in desiredRoots) ReconcileHeadingBranch(root, desiredChildren);
 
         var prefix = $"heading:{documentNode.PersistentId}:";
-        foreach (var stale in _headingNodes.Keys.Where(key => key.StartsWith(prefix, StringComparison.Ordinal) && !liveKeys.Contains(key)).ToArray())
+        foreach (var stale in _headingNodes.Keys
+                     .Where(key => key.StartsWith(prefix, StringComparison.Ordinal) && !liveKeys.Contains(key))
+                     .ToArray())
             _headingNodes.Remove(stale);
     }
 
@@ -503,7 +505,10 @@ internal sealed class ProjectExplorerFeature
                 if (token.IsCancellationRequested) return;
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    var expand = string.Equals(_viewModel.SelectedRow?.Node.PersistentId, row.Node.PersistentId, StringComparison.Ordinal);
+                    var expand = string.Equals(
+                        _viewModel.SelectedRow?.Node.PersistentId,
+                        row.Node.PersistentId,
+                        StringComparison.Ordinal);
                     ApplyHeadings(row.Node.PersistentId, headings, expand);
                 });
             }
@@ -558,7 +563,10 @@ internal sealed class ProjectExplorerFeature
 
             var row = node.Row;
             if (row is null) return;
-            if (string.Equals(_viewModel.SelectedRow?.Node.PersistentId, row.Node.PersistentId, StringComparison.Ordinal))
+            if (string.Equals(
+                    _viewModel.SelectedRow?.Node.PersistentId,
+                    row.Node.PersistentId,
+                    StringComparison.Ordinal))
                 return;
             await _viewModel.SelectAsync(row);
         }
@@ -589,20 +597,18 @@ internal sealed class ProjectExplorerFeature
     }
 
     private void LegacySelectionChanged(object? sender, SelectionChangedEventArgs e)
-        => SyncSelectionFromLegacyOrModel();
+        => SyncSelectionFromModel();
 
-    private void SyncSelectionFromLegacyOrModel()
+    private void SyncSelectionFromModel()
     {
         if (_disposed || _tree.SelectedItem is ExplorerNode { Kind: ExplorerNodeKind.Heading } selectedHeading &&
             string.Equals(selectedHeading.OwnerDocumentId, _viewModel.SelectedRow?.Node.PersistentId, StringComparison.Ordinal))
             return;
 
-        var id = (_legacyBinder?.SelectedItem as BinderRowViewModel)?.Node.PersistentId
-                 ?? _viewModel.SelectedRow?.Node.PersistentId;
+        var id = _viewModel.SelectedRow?.Node.PersistentId;
         if (string.IsNullOrWhiteSpace(id) || string.Equals(id, _lastModelSelectionId, StringComparison.Ordinal)) return;
         _lastModelSelectionId = id;
-        if (!_projectNodes.TryGetValue(id, out var node)) return;
-        SelectAndReveal(node);
+        if (_projectNodes.TryGetValue(id, out var node)) SelectAndReveal(node);
     }
 
     private void SelectAndReveal(ExplorerNode node)
@@ -617,7 +623,7 @@ internal sealed class ProjectExplorerFeature
         _syncingTreeSelection = true;
         try { _tree.SelectedItem = node; }
         finally { _syncingTreeSelection = false; }
-        Dispatcher.UIThread.Post(() => _tree.ScrollIntoView(node), DispatcherPriority.Background);
+        // AutoScrollToSelectedItem is enabled; no private TreeView container APIs are required.
     }
 
     private void RevealActiveDocument()
@@ -645,7 +651,6 @@ internal sealed class ProjectExplorerFeature
         if (e.Container is not TreeViewItem item || item.DataContext is not ExplorerNode node) return;
         item.IsExpanded = node.IsExpanded;
         item.MinHeight = 24;
-        item.HorizontalContentAlignment = HorizontalAlignment.Stretch;
     }
 
     private void TreeItemExpanded(object? sender, RoutedEventArgs e)
@@ -673,7 +678,7 @@ internal sealed class ProjectExplorerFeature
 
     private void TreePointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        var container = _tree.GetContainerFromEventSource(e.Source);
+        var container = FindTreeViewItem(e.Source);
         if (container?.DataContext is not ExplorerNode node) return;
         var point = e.GetCurrentPoint(_tree);
 
@@ -731,7 +736,7 @@ internal sealed class ProjectExplorerFeature
             return;
         }
 
-        var container = _tree.GetContainerFromEventSource(e.Source);
+        var container = FindTreeViewItem(e.Source);
         var y = container is null ? 0 : e.GetPosition(container).Y;
         var height = Math.Max(1, container?.Bounds.Height ?? 1);
         var into = target.Row.Node.IsContainer && y >= height * 0.25 && y <= height * 0.75;
@@ -748,8 +753,15 @@ internal sealed class ProjectExplorerFeature
         }
     }
 
-    private ExplorerNode? ExplorerNodeFromEventSource(object? source)
-        => _tree.GetContainerFromEventSource(source)?.DataContext as ExplorerNode;
+    private static TreeViewItem? FindTreeViewItem(object? source)
+    {
+        if (source is TreeViewItem item) return item;
+        if (source is not Control control) return null;
+        return control.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault();
+    }
+
+    private static ExplorerNode? ExplorerNodeFromEventSource(object? source)
+        => FindTreeViewItem(source)?.DataContext as ExplorerNode;
 
     private void ClearDragCandidate()
     {
@@ -772,7 +784,7 @@ internal sealed class ProjectExplorerFeature
                 new Separator(),
                 ContextAction("Move Up", () => _viewModel.MoveSelectedAsync(-1)),
                 ContextAction("Move Down", () => _viewModel.MoveSelectedAsync(1)),
-                ContextAction("Include / Exclude", _viewModel.ToggleSelectedCompilationAsync),
+                ContextAction("Include / Exclude", () => _viewModel.ToggleSelectedCompilationAsync()),
                 new Separator(),
                 ContextAction("Collapse All", () => { CollapseAll(); return Task.CompletedTask; }),
                 ContextAction("Reveal Active", () => { RevealActiveDocument(); return Task.CompletedTask; })
@@ -800,7 +812,11 @@ internal sealed class ProjectExplorerFeature
     private async Task RenameSelectedAsync()
     {
         if (!_viewModel.HasSelection) return;
-        var title = await DesktopDialogService.PromptAsync(_window, "Rename Binder Item", "Title", _viewModel.SelectedTitle);
+        var title = await DesktopDialogService.PromptAsync(
+            _window,
+            "Rename Binder Item",
+            "Title",
+            _viewModel.SelectedTitle);
         if (title is not null) await _viewModel.RenameSelectedAsync(title);
     }
 
@@ -813,65 +829,6 @@ internal sealed class ProjectExplorerFeature
             $"Delete '{_viewModel.SelectedTitle}' and its on-disk content?",
             "Delete");
         if (confirmed) await _viewModel.DeleteSelectedAsync();
-    }
-
-    private Control BuildHeader(ExplorerNode node)
-    {
-        var accent = new Border
-        {
-            Width = 3,
-            Height = 16,
-            CornerRadius = new CornerRadius(1),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 6, 0)
-        };
-        accent.Bind(Border.BackgroundProperty, new Binding(nameof(ExplorerNode.AccentBrush)));
-
-        var icon = new TextBlock
-        {
-            Width = 24,
-            TextAlignment = TextAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            FontSize = node.Kind == ExplorerNodeKind.Heading ? 10 : 13,
-            Opacity = node.Kind == ExplorerNodeKind.Heading ? 0.7 : 0.86
-        };
-        icon.Bind(TextBlock.TextProperty, new Binding(nameof(ExplorerNode.Icon)));
-
-        var title = new TextBlock
-        {
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center,
-            FontSize = node.Kind == ExplorerNodeKind.Heading ? 12 : 13,
-            FontWeight = node.Kind == ExplorerNodeKind.ProjectRoot ? FontWeight.SemiBold : FontWeight.Normal,
-            Opacity = node.Kind == ExplorerNodeKind.Heading ? 0.78 : 1
-        };
-        title.Bind(TextBlock.TextProperty, new Binding(nameof(ExplorerNode.Title)));
-
-        var trailing = new TextBlock
-        {
-            FontSize = 10,
-            Opacity = 0.6,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 4, 0)
-        };
-        trailing.Bind(TextBlock.TextProperty, new Binding(nameof(ExplorerNode.TrailingText)));
-
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"),
-            MinHeight = 23,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        grid.Children.Add(accent);
-        Grid.SetColumn(icon, 1);
-        grid.Children.Add(icon);
-        Grid.SetColumn(title, 2);
-        grid.Children.Add(title);
-        Grid.SetColumn(trailing, 3);
-        grid.Children.Add(trailing);
-        ToolTip.SetTip(grid, node.ToolTipText);
-        return grid;
     }
 
     private void UpdateProjectIdentity(bool force)
@@ -899,7 +856,10 @@ internal sealed class ProjectExplorerFeature
         if (node.Kind == ExplorerNodeKind.ProjectRoot) return true;
         if (_expandedKeys.Contains(node.Key)) return true;
         if (!_hasStoredExpansionState)
+        {
+            if (node.Kind == ExplorerNodeKind.Heading) return true;
             return node.Kind == ExplorerNodeKind.ProjectNode && node.Row?.Node.IsContainer == true;
+        }
         return false;
     }
 
@@ -928,13 +888,14 @@ internal sealed class ProjectExplorerFeature
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_statePath)!);
-            var content = string.Join(Environment.NewLine,
+            var content = string.Join(
+                Environment.NewLine,
                 _expandedKeys.Order(StringComparer.Ordinal).Select(static key => $"expanded\t{key}"));
             File.WriteAllText(_statePath, content.Length == 0 ? string.Empty : content + Environment.NewLine);
         }
         catch
         {
-            // UI state persistence must never break navigation.
+            // Explorer UI state persistence must never break navigation.
         }
     }
 
@@ -954,7 +915,8 @@ internal sealed class ProjectExplorerFeature
         _window.Closed -= WindowClosed;
         _viewModel.BinderRows.CollectionChanged -= BinderRowsChanged;
         _viewModel.OutlineItems.CollectionChanged -= OutlineItemsChanged;
-        if (_legacyBinder is not null) _legacyBinder.SelectionChanged -= LegacySelectionChanged;
+        if (_legacySelectionBridge is not null)
+            _legacySelectionBridge.SelectionChanged -= LegacySelectionChanged;
         _tree.SelectionChanged -= TreeSelectionChanged;
         _tree.ContainerPrepared -= TreeContainerPrepared;
         _tree.PointerPressed -= TreePointerPressed;
@@ -988,7 +950,8 @@ internal sealed class ProjectExplorerFeature
     {
         if (text.Length == 0) return 1;
         var count = 1;
-        foreach (var ch in text) if (ch == '\n') count++;
+        foreach (var ch in text)
+            if (ch == '\n') count++;
         return count;
     }
 
@@ -1067,7 +1030,9 @@ internal sealed class ProjectExplorerFeature
         {
             ExplorerNodeKind.ProjectRoot => _title,
             ExplorerNodeKind.Heading => _heading is null ? _title : $"H{_heading.Level} · line {_heading.SourceLine}",
-            _ => Row is null ? _title : $"{Row.Node.Kind} · {Row.Node.Status} · {(Row.Node.IncludeInCompilation ? "included" : "excluded")}" 
+            _ => Row is null
+                ? _title
+                : $"{Row.Node.Kind} · {Row.Node.Status} · {(Row.Node.IncludeInCompilation ? "included" : "excluded")}" 
         };
 
         public static ExplorerNode CreateProjectRoot(string title, string rootPath)
@@ -1107,7 +1072,10 @@ internal sealed class ProjectExplorerFeature
             Row = row;
             Set(ref _title, row.Node.Title, nameof(Title));
             Set(ref _icon, NodeIcon(row.Node.Kind), nameof(Icon));
-            Set(ref _trailingText, row.Node.IsDocument ? (row.Node.IncludeInCompilation ? "●" : "○") : string.Empty, nameof(TrailingText));
+            Set(
+                ref _trailingText,
+                row.Node.IsDocument ? (row.Node.IncludeInCompilation ? "●" : "○") : string.Empty,
+                nameof(TrailingText));
             Set(ref _accentBrush, LabelBrush(row.Node), nameof(AccentBrush));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToolTipText)));
         }
@@ -1125,6 +1093,90 @@ internal sealed class ProjectExplorerFeature
             if (EqualityComparer<T>.Default.Equals(field, value)) return;
             field = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+    }
+
+    /// <summary>
+    /// Small AOT-safe header view. It observes the strongly typed explorer node directly rather
+    /// than using reflection bindings, so Native AOT does not need dynamic binding metadata.
+    /// </summary>
+    private sealed class ExplorerNodeHeader : Grid
+    {
+        private readonly ExplorerNode _node;
+        private readonly Border _accent;
+        private readonly TextBlock _icon;
+        private readonly TextBlock _title;
+        private readonly TextBlock _trailing;
+
+        public ExplorerNodeHeader(ExplorerNode node)
+        {
+            _node = node;
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto");
+            MinHeight = 23;
+            HorizontalAlignment = HorizontalAlignment.Stretch;
+            VerticalAlignment = VerticalAlignment.Center;
+
+            _accent = new Border
+            {
+                Width = 3,
+                Height = 16,
+                CornerRadius = new CornerRadius(1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            _icon = new TextBlock
+            {
+                Width = 24,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _title = new TextBlock
+            {
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _trailing = new TextBlock
+            {
+                FontSize = 10,
+                Opacity = 0.6,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 4, 0)
+            };
+
+            Children.Add(_accent);
+            Grid.SetColumn(_icon, 1);
+            Children.Add(_icon);
+            Grid.SetColumn(_title, 2);
+            Children.Add(_title);
+            Grid.SetColumn(_trailing, 3);
+            Children.Add(_trailing);
+
+            Refresh();
+            _node.PropertyChanged += NodePropertyChanged;
+            DetachedFromVisualTree += HeaderDetached;
+        }
+
+        private void NodePropertyChanged(object? sender, PropertyChangedEventArgs e)
+            => Refresh();
+
+        private void HeaderDetached(object? sender, VisualTreeAttachmentEventArgs e)
+        {
+            _node.PropertyChanged -= NodePropertyChanged;
+            DetachedFromVisualTree -= HeaderDetached;
+        }
+
+        private void Refresh()
+        {
+            _accent.Background = _node.AccentBrush;
+            _icon.Text = _node.Icon;
+            _icon.FontSize = _node.Kind == ExplorerNodeKind.Heading ? 10 : 13;
+            _icon.Opacity = _node.Kind == ExplorerNodeKind.Heading ? 0.7 : 0.86;
+            _title.Text = _node.Title;
+            _title.FontSize = _node.Kind == ExplorerNodeKind.Heading ? 12 : 13;
+            _title.FontWeight = _node.Kind == ExplorerNodeKind.ProjectRoot ? FontWeight.SemiBold : FontWeight.Normal;
+            _title.Opacity = _node.Kind == ExplorerNodeKind.Heading ? 0.78 : 1;
+            _trailing.Text = _node.TrailingText;
+            ToolTip.SetTip(this, _node.ToolTipText);
         }
     }
 }
