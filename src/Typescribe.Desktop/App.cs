@@ -40,8 +40,6 @@ public sealed class App : AvaloniaApplication
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
             var window = new StudioWorkspaceWindow(viewModel);
 
-            // The old command strip duplicated menu, Binder, and workspace commands.
-            // Collapse it before first render so the app opens directly into the studio.
             if (window.Content is Grid root && root.RowDefinitions.Count >= 4)
             {
                 var toolbar = root.Children.OfType<Control>().FirstOrDefault(control => Grid.GetRow(control) == 1);
@@ -55,9 +53,8 @@ public sealed class App : AvaloniaApplication
             ScrivenerBinderEnhancements.Apply(window, viewModel, repository);
             NavigatorStability.Apply(window, viewModel);
             BinderHeadingVisibility.Apply(window, viewModel);
+            PdfAutoFitEnhancement.Apply(window);
 
-            // The bridge runs before the advanced tools so the latter can target the real
-            // AvaloniaEdit manuscript surface for equation/code insertion and highlighting.
             ManuscriptEditorUpgrade.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             BookDesignFeature.Apply(window, viewModel);
