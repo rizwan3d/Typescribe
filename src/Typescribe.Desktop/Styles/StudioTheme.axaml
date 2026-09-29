@@ -101,6 +101,22 @@
     <Setter Property="Padding" Value="7,5" />
   </Style>
 
+  <Style Selector="Window.typescribe-studio Button.explorer-tool-button">
+    <Setter Property="MinWidth" Value="26" />
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="Padding" Value="2,0" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio Button.explorer-tool-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
   <Style Selector="Window.typescribe-studio TextBox">
     <Setter Property="MinHeight" Value="32" />
     <Setter Property="Padding" Value="9,6" />
@@ -163,41 +179,31 @@
     <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
   </Style>
 
-  <Style Selector="Window.typescribe-studio ListBox.binder-list ListBoxItem">
-    <Setter Property="Padding" Value="6,5" />
-    <Setter Property="Margin" Value="4,1" />
-  </Style>
-
-  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder">
-    <Setter Property="Padding" Value="4,5" />
-  </Style>
-
-  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder ListBoxItem">
-    <Setter Property="Padding" Value="5,4" />
-    <Setter Property="Margin" Value="2,1" />
-    <Setter Property="MinHeight" Value="29" />
-  </Style>
-
-  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder Button.binder-heading">
-    <Setter Property="MinHeight" Value="24" />
-    <Setter Property="Padding" Value="5,2" />
-    <Setter Property="Margin" Value="0" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="BorderBrush" Value="Transparent" />
+  <Style Selector="Window.typescribe-studio TreeView.project-explorer-tree">
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="2" />
   </Style>
 
-  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder Button.binder-heading:pointerover">
+  <Style Selector="Window.typescribe-studio TreeView.project-explorer-tree TreeViewItem">
+    <Setter Property="MinHeight" Value="25" />
+    <Setter Property="Padding" Value="2,0" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio TreeView.project-explorer-tree TreeViewItem:pointerover">
     <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
   </Style>
 
-  <Style Selector="Window.typescribe-studio TextBlock.binder-icon">
-    <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
+  <Style Selector="Window.typescribe-studio TreeView.project-explorer-tree TreeViewItem:selected">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
   </Style>
 
-  <Style Selector="Window.typescribe-studio TextBlock.binder-compile-state">
-    <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
+  <Style Selector="Window.typescribe-studio Grid.project-explorer-toolbar">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
   </Style>
 
   <Style Selector="Window.typescribe-studio TabControl">
