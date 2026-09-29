@@ -12,13 +12,15 @@ internal static class AtomicFileWriter
         var directory = Path.GetDirectoryName(fullPath) ?? throw new InvalidOperationException("The destination has no parent directory.");
         Directory.CreateDirectory(directory);
 
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+        var stagingDirectory = ResolveStagingDirectory(directory);
+        Directory.CreateDirectory(stagingDirectory);
+        var tempPath = Path.Combine(stagingDirectory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            // Backups enumerate the project while metadata may be written. Allow a concurrent
-            // read of the temporary file so the archive walk cannot fail with a sharing
-            // violation. The writer still has exclusive write ownership; only reads/deletes
-            // are shared, and the final destination is replaced atomically after flush/close.
+            // Typescribe project writes stage under .typescribe/backups/.atomic, which the
+            // project backup walk already excludes. Shared read/delete access is still allowed
+            // as a second line of defence for non-project writes that must stage beside their
+            // destination.
             await using (var stream = new FileStream(
                 tempPath,
                 FileMode.CreateNew,
@@ -39,6 +41,21 @@ internal static class AtomicFileWriter
         {
             TryDeleteTemporaryFile(tempPath);
         }
+    }
+
+    private static string ResolveStagingDirectory(string destinationDirectory)
+    {
+        var current = new DirectoryInfo(destinationDirectory);
+        while (current is not null)
+        {
+            var metadataDirectory = Path.Combine(current.FullName, ".typescribe");
+            if (Directory.Exists(metadataDirectory))
+                return Path.Combine(metadataDirectory, "backups", ".atomic");
+
+            current = current.Parent;
+        }
+
+        return destinationDirectory;
     }
 
     private static void ReplaceAtomically(string tempPath, string destinationPath)
