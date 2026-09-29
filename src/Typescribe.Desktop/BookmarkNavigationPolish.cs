@@ -36,10 +36,6 @@ internal sealed class BookmarkNavigationPolish
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(viewModel);
 
-        // The left navigation chrome is installed from the same late-bound workspace hook so it
-        // can safely enhance ProjectExplorerFeature after that feature mounts its native tree.
-        ProjectExplorerChromePolish.Apply(window, viewModel);
-
         var polish = new BookmarkNavigationPolish(window, viewModel);
         window.Opened += polish.OnOpened;
         window.LayoutUpdated += polish.OnLayoutUpdated;
