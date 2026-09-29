@@ -1,0 +1,151 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Typescribe.Desktop.ViewModels"
+        x:Class="Typescribe.Desktop.BookDesignDialog"
+        x:DataType="vm:BookDesignEditorViewModel"
+        x:CompileBindings="True"
+        Title="Book Design &amp; LaTeX"
+        Width="900" Height="780"
+        MinWidth="720" MinHeight="560"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="18">
+    <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+      <TextBlock Text="Book Design &amp; LaTeX" FontSize="22" FontWeight="SemiBold" />
+      <TextBlock Text="Edit the project style as a working copy. Apply updates preview/PDF output; Save &amp; Close also closes this dialog."
+                 Opacity="0.7" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <TabControl Grid.Row="1">
+      <TabItem Header="Page">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="12" Spacing="8">
+            <TextBlock Text="Document" FontSize="16" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="210,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="Style name" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Name, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Document class" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding DocumentClass, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="Class options" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding DocumentClassOptions, Mode=TwoWay}" />
+              <TextBlock Grid.Row="3" Text="Page width (in)" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PageWidthInches, Mode=TwoWay}" />
+              <TextBlock Grid.Row="4" Text="Page height (in)" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding PageHeightInches, Mode=TwoWay}" />
+              <TextBlock Grid.Row="5" Text="Top margin (in)" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding MarginTopInches, Mode=TwoWay}" />
+              <TextBlock Grid.Row="6" Text="Bottom margin (in)" VerticalAlignment="Center" /><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding MarginBottomInches, Mode=TwoWay}" />
+              <TextBlock Grid.Row="7" Text="Inner margin (in)" VerticalAlignment="Center" /><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding MarginInnerInches, Mode=TwoWay}" />
+              <TextBlock Grid.Row="8" Text="Outer margin (in)" VerticalAlignment="Center" /><TextBox Grid.Row="8" Grid.Column="1" Text="{Binding MarginOuterInches, Mode=TwoWay}" />
+              <StackPanel Grid.Row="9" Grid.ColumnSpan="2" Spacing="6" Margin="0,6,0,0">
+                <CheckBox Content="Include table of contents" IsChecked="{Binding IncludeTableOfContents, Mode=TwoWay}" />
+                <CheckBox Content="Open chapters on right-hand pages" IsChecked="{Binding OpenChaptersOnRight, Mode=TwoWay}" />
+              </StackPanel>
+            </Grid>
+            <Grid ColumnDefinitions="210,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="TOC depth" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding TableOfContentsDepth, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Number sections through" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding SectionNumberDepth, Mode=TwoWay}" />
+            </Grid>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Typography">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="12" Spacing="12">
+            <TextBlock Text="Fonts &amp; body" FontSize="16" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="Body font" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding BodyFontFamily, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Heading font" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding HeadingFontFamily, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="Monospace font" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MonospaceFontFamily, Mode=TwoWay}" />
+              <TextBlock Grid.Row="3" Text="Math font" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MathFontFamily, Mode=TwoWay}" />
+              <TextBlock Grid.Row="4" Text="Body size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding BodyFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="5" Text="Line spacing" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding LineSpacing, Mode=TwoWay}" />
+              <TextBlock Grid.Row="6" Text="Paragraph indent (em)" VerticalAlignment="Center" /><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding ParagraphIndentEm, Mode=TwoWay}" />
+              <TextBlock Grid.Row="7" Text="Paragraph spacing (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding ParagraphSpacingPoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="8" Text="Body color" VerticalAlignment="Center" /><TextBox Grid.Row="8" Grid.Column="1" Text="{Binding BodyColorHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="9" Text="Heading color" VerticalAlignment="Center" /><TextBox Grid.Row="9" Grid.Column="1" Text="{Binding HeadingColorHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="10" Text="Link color" VerticalAlignment="Center" /><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding LinkColorHex, Mode=TwoWay}" />
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="16"><CheckBox Content="Justify body" IsChecked="{Binding JustifyBody, Mode=TwoWay}" /><CheckBox Content="Colored hyperlinks" IsChecked="{Binding ColorLinks, Mode=TwoWay}" /></StackPanel>
+
+            <TextBlock Text="Headings" FontSize="16" FontWeight="SemiBold" Margin="0,6,0,0" />
+            <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="Chapter size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ChapterFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Section size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding SectionFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="Subsection size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SubsectionFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="3" Text="Subsubsection size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding SubsubsectionFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="4" Text="Chapter space before (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding ChapterBeforeSpacingPoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="5" Text="Chapter space after (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding ChapterAfterSpacingPoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="6" Text="Section space before (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding SectionBeforeSpacingPoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="7" Text="Section space after (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding SectionAfterSpacingPoints, Mode=TwoWay}" />
+            </Grid>
+
+            <TextBlock Text="Quotes, lists &amp; notes" FontSize="16" FontWeight="SemiBold" Margin="0,6,0,0" />
+            <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="Quote size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding QuoteFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Quote indent (em)" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding QuoteIndentEm, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="List item spacing (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ListItemSpacingPoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="3" Text="Caption size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding CaptionFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="4" Text="Footnote size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding FootnoteFontSizePoints, Mode=TwoWay}" />
+            </Grid>
+            <CheckBox Content="Italicize block quotes" IsChecked="{Binding QuoteItalic, Mode=TwoWay}" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Code">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="12" Spacing="10">
+            <TextBlock Text="Published code blocks" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock Text="These colors are also used by the manuscript editor for fenced blocks such as ```csharp and ```python." Opacity="0.7" TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="Code size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding CodeFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Background" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding CodeBackgroundHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="Text" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CodeTextHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="3" Text="Keywords" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding CodeKeywordHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="4" Text="Strings" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CodeStringHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="5" Text="Comments" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding CodeCommentHex, Mode=TwoWay}" />
+              <TextBlock Grid.Row="6" Text="Frame" VerticalAlignment="Center" /><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding CodeFrameHex, Mode=TwoWay}" />
+            </Grid>
+            <CheckBox Content="Show line numbers in published code blocks" IsChecked="{Binding CodeLineNumbers, Mode=TwoWay}" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Headers &amp; Footer">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="12" Spacing="10">
+            <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="7">
+              <TextBlock Grid.Row="0" Text="Header/footer size (pt)" VerticalAlignment="Center" /><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding HeaderFooterFontSizePoints, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Header left" VerticalAlignment="Center" /><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding HeaderLeft, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="Header center" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding HeaderCenter, Mode=TwoWay}" />
+              <TextBlock Grid.Row="3" Text="Header right" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding HeaderRight, Mode=TwoWay}" />
+              <TextBlock Grid.Row="4" Text="Footer left" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding FooterLeft, Mode=TwoWay}" />
+              <TextBlock Grid.Row="5" Text="Footer center" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding FooterCenter, Mode=TwoWay}" />
+              <TextBlock Grid.Row="6" Text="Footer right" VerticalAlignment="Center" /><TextBox Grid.Row="6" Grid.Column="1" Text="{Binding FooterRight, Mode=TwoWay}" />
+            </Grid>
+            <CheckBox Content="Show page numbers when center footer is empty" IsChecked="{Binding ShowPageNumbers, Mode=TwoWay}" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Advanced LaTeX">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="12" Spacing="10">
+            <CheckBox Content="Enable microtypographic protrusion and expansion" IsChecked="{Binding EnableMicrotype, Mode=TwoWay}" />
+            <CheckBox Content="Aggressively avoid widows and orphans" IsChecked="{Binding AvoidWidowsAndOrphans, Mode=TwoWay}" />
+            <TextBlock Text="Additional packages" FontWeight="SemiBold" Margin="0,8,0,0" />
+            <TextBlock Text="One package per line (or comma separated). amssymb and amsfonts are filtered because unicode-math owns those symbols under LuaLaTeX." Opacity="0.7" TextWrapping="Wrap" />
+            <TextBox Text="{Binding ExtraPackages, Mode=TwoWay}" AcceptsReturn="True" AcceptsTab="True" MinHeight="120" TextWrapping="Wrap" FontFamily="monospace" />
+            <TextBlock Text="Custom preamble" FontWeight="SemiBold" Margin="0,8,0,0" />
+            <TextBlock Text="Raw LuaLaTeX commands inserted after Typescribe's safe core package set. Advanced users only." Opacity="0.7" TextWrapping="Wrap" />
+            <TextBox Text="{Binding CustomPreamble, Mode=TwoWay}" AcceptsReturn="True" AcceptsTab="True" MinHeight="240" TextWrapping="Wrap" FontFamily="monospace" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+
+    <TextBlock x:Name="ErrorText" Grid.Row="2" Foreground="#D65C65" TextWrapping="Wrap" Margin="4,10,4,4" />
+
+    <Grid Grid.Row="3" ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,10,0,0">
+      <Button Grid.Column="0" Content="Reset Defaults" Click="OnResetClick" />
+      <Button Grid.Column="2" Content="Cancel" MinWidth="90" Click="OnCancelClick" />
+      <Button Grid.Column="3" Content="Apply" MinWidth="90" Margin="8,0,0,0" Click="OnApplyClick" />
+      <Button Grid.Column="4" Content="Save &amp; Close" Classes="primary" MinWidth="120" Margin="8,0,0,0" Click="OnSaveClick" />
+    </Grid>
+  </Grid>
+</Window>
