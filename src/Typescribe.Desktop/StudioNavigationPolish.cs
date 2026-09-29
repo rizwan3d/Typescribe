@@ -32,12 +32,13 @@ internal sealed class StudioNavigationPolish
         Height = 30,
         Watermark = "Search project (Ctrl+F)",
         VerticalAlignment = VerticalAlignment.Center,
-        HorizontalAlignment = HorizontalAlignment.Left
+        HorizontalAlignment = HorizontalAlignment.Left,
+        Margin = new Thickness(10, 2, 8, 2)
     };
 
     private Grid? _root;
     private Menu? _menu;
-    private Border? _searchHost;
+    private StackPanel? _topBar;
     private bool _findMenuHooked;
     private bool _disposed;
 
@@ -70,9 +71,7 @@ internal sealed class StudioNavigationPolish
 
     private void WindowLayoutUpdated(object? sender, EventArgs e)
     {
-        if (_disposed) return;
-        ApplyLayout();
-        PositionSearchNextToMenu();
+        if (!_disposed) ApplyLayout();
     }
 
     private void ApplyLayout()
@@ -84,44 +83,32 @@ internal sealed class StudioNavigationPolish
 
     private void EnsureTopSearch()
     {
-        if (_window.Content is not Grid root) return;
+        if (_topBar is not null || _window.Content is not Grid root) return;
 
-        _root ??= root;
-        _menu ??= root.Children
+        _root = root;
+        _menu = root.Children
             .OfType<Menu>()
             .FirstOrDefault(control => Grid.GetRow(control) == 0);
+        if (_menu is null) return;
 
-        if (_menu is null || _searchHost is not null) return;
+        // Put the native Menu and the search box in one horizontal container. StackPanel measures
+        // the Menu at its natural content width, so the search box is guaranteed to render directly
+        // after Help instead of competing with a full-width Menu or relying on overlay coordinates.
+        root.Children.Remove(_menu);
+        _menu.HorizontalAlignment = HorizontalAlignment.Left;
+        _menu.VerticalAlignment = VerticalAlignment.Center;
 
-        // Keep the native menu exactly where StudioWorkspaceWindow created it.  The previous
-        // implementation re-parented the Menu into another Grid; Avalonia can measure a Menu
-        // as the full available row width, which pushed the search control off-screen.
-        _searchHost = new Border
+        _topBar = new StackPanel
         {
-            Name = "ProjectSearchHost",
-            Width = 376,
-            Height = 34,
-            Padding = new Thickness(8, 2),
-            HorizontalAlignment = HorizontalAlignment.Left,
+            Name = "TopMenuSearchBar",
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Center,
-            Child = _quickSearch,
-            ZIndex = 20
+            Children = { _menu, _quickSearch }
         };
 
-        Grid.SetRow(_searchHost, 0);
-        root.Children.Add(_searchHost);
-        PositionSearchNextToMenu();
-    }
-
-    private void PositionSearchNextToMenu()
-    {
-        if (_menu is null || _searchHost is null) return;
-
-        // Bounds is valid after the first measure.  The fallback matches the current menu width
-        // closely enough to make the control visible on the first frame, then LayoutUpdated
-        // snaps it directly beside Help at the real measured width.
-        var menuWidth = _menu.Bounds.Width > 1 ? _menu.Bounds.Width : 500;
-        _searchHost.Margin = new Thickness(menuWidth + 8, 0, 0, 0);
+        Grid.SetRow(_topBar, 0);
+        root.Children.Add(_topBar);
     }
 
     private void RemoveLegacyLeftTabs()
@@ -154,8 +141,9 @@ internal sealed class StudioNavigationPolish
                 StringComparison.OrdinalIgnoreCase));
         if (findItem is null) return;
 
-        // The original command still targets the old left Search tab.  Defer our focus so this
-        // handler always wins after that command has finished.
+        // StudioWorkspaceWindow originally binds Ctrl+F to the removed left-panel Search tab.
+        // Remove that accelerator so the tunnel handler below exclusively owns Ctrl+F.
+        findItem.InputGesture = null;
         findItem.Click += (_, _) => FocusQuickSearchDeferred();
         _findMenuHooked = true;
     }
@@ -171,8 +159,6 @@ internal sealed class StudioNavigationPolish
     {
         if (e.Key != Key.F || (e.KeyModifiers & KeyModifiers.Control) == 0) return;
 
-        // Tunnel handling runs before StudioWorkspaceWindow's legacy bubbling Ctrl+F handler,
-        // preventing focus from being sent to the now-hidden left-panel Search box.
         e.Handled = true;
         FocusQuickSearchDeferred();
     }
