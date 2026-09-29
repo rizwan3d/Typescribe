@@ -1,7 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:avaloniaedit="using:AvaloniaEdit"
-        xmlns:editing="using:AvaloniaEdit.Editing">
+        xmlns:editing="using:AvaloniaEdit.Editing"
+        xmlns:local="using:Typescribe.Desktop.Editing">
   <Styles.Resources>
     <ResourceDictionary>
       <SolidColorBrush x:Key="TextAreaSelectionBrush" Color="#5965D8" Opacity="0.42" />
@@ -24,8 +25,18 @@
         </Setter>
       </ControlTheme>
 
+      <!-- ManuscriptEditor derives from AvaloniaEdit.TextEditor. Avalonia control themes
+           are keyed by control type, so explicitly inherit the base editor theme rather
+           than relying on implicit theme lookup for the derived Typescribe control. -->
+      <ControlTheme x:Key="{x:Type local:ManuscriptEditor}"
+                    TargetType="local:ManuscriptEditor"
+                    BasedOn="{StaticResource {x:Type avaloniaedit:TextEditor}}">
+        <Setter Property="Focusable" Value="True" />
+      </ControlTheme>
+
       <ControlTheme x:Key="{x:Type editing:TextArea}" TargetType="editing:TextArea">
         <Setter Property="SelectionBrush" Value="{DynamicResource TextAreaSelectionBrush}" />
+        <Setter Property="Focusable" Value="True" />
         <Setter Property="Template">
           <ControlTemplate>
             <DockPanel Focusable="False" Background="{TemplateBinding Background}">
