@@ -2,6 +2,7 @@ using System.Collections;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.VisualTree;
 using Typescribe.Desktop.ViewModels;
@@ -28,15 +29,15 @@ internal sealed class StudioNavigationPolish
         Name = "ProjectSearchBox",
         Width = 360,
         MinWidth = 240,
+        Height = 30,
         Watermark = "Search project (Ctrl+F)",
         VerticalAlignment = VerticalAlignment.Center,
-        HorizontalAlignment = HorizontalAlignment.Left,
-        Margin = new Thickness(10, 2, 8, 2)
+        HorizontalAlignment = HorizontalAlignment.Left
     };
 
     private Grid? _root;
-    private Grid? _topBar;
     private Menu? _menu;
+    private Border? _searchHost;
     private bool _findMenuHooked;
     private bool _disposed;
 
@@ -58,6 +59,7 @@ internal sealed class StudioNavigationPolish
     private void Attach()
     {
         _quickSearch.KeyDown += QuickSearchKeyDown;
+        _window.AddHandler(InputElement.KeyDownEvent, WindowPreviewKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
         _window.Opened += WindowOpened;
         _window.LayoutUpdated += WindowLayoutUpdated;
         _window.Closed += WindowClosed;
@@ -68,7 +70,9 @@ internal sealed class StudioNavigationPolish
 
     private void WindowLayoutUpdated(object? sender, EventArgs e)
     {
-        if (!_disposed) ApplyLayout();
+        if (_disposed) return;
+        ApplyLayout();
+        PositionSearchNextToMenu();
     }
 
     private void ApplyLayout()
@@ -80,32 +84,44 @@ internal sealed class StudioNavigationPolish
 
     private void EnsureTopSearch()
     {
-        if (_topBar is not null || _window.Content is not Grid root) return;
+        if (_window.Content is not Grid root) return;
 
-        var menu = root.Children
+        _root ??= root;
+        _menu ??= root.Children
             .OfType<Menu>()
             .FirstOrDefault(control => Grid.GetRow(control) == 0);
-        if (menu is null) return;
 
-        root.Children.Remove(menu);
-        _root = root;
-        _root.KeyDown += RootKeyDown;
-        _menu = menu;
-        menu.HorizontalAlignment = HorizontalAlignment.Left;
+        if (_menu is null || _searchHost is not null) return;
 
-        var topBar = new Grid
+        // Keep the native menu exactly where StudioWorkspaceWindow created it.  The previous
+        // implementation re-parented the Menu into another Grid; Avalonia can measure a Menu
+        // as the full available row width, which pushed the search control off-screen.
+        _searchHost = new Border
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            Name = "ProjectSearchHost",
+            Width = 376,
+            Height = 34,
+            Padding = new Thickness(8, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = _quickSearch
         };
-        topBar.Children.Add(menu);
 
-        Grid.SetColumn(_quickSearch, 1);
-        topBar.Children.Add(_quickSearch);
+        Grid.SetRow(_searchHost, 0);
+        Panel.SetZIndex(_searchHost, 20);
+        root.Children.Add(_searchHost);
+        PositionSearchNextToMenu();
+    }
 
-        Grid.SetRow(topBar, 0);
-        root.Children.Add(topBar);
-        _topBar = topBar;
+    private void PositionSearchNextToMenu()
+    {
+        if (_menu is null || _searchHost is null) return;
+
+        // Bounds is valid after the first measure.  The fallback matches the current menu width
+        // closely enough to make the control visible on the first frame, then LayoutUpdated
+        // snaps it directly beside Help at the real measured width.
+        var menuWidth = _menu.Bounds.Width > 1 ? _menu.Bounds.Width : 500;
+        _searchHost.Margin = new Thickness(menuWidth + 8, 0, 0, 0);
     }
 
     private void RemoveLegacyLeftTabs()
@@ -138,6 +154,8 @@ internal sealed class StudioNavigationPolish
                 StringComparison.OrdinalIgnoreCase));
         if (findItem is null) return;
 
+        // The original command still targets the old left Search tab.  Defer our focus so this
+        // handler always wins after that command has finished.
         findItem.Click += (_, _) => FocusQuickSearchDeferred();
         _findMenuHooked = true;
     }
@@ -149,12 +167,14 @@ internal sealed class StudioNavigationPolish
         await RunQuickSearchAsync();
     }
 
-    private void RootKeyDown(object? sender, KeyEventArgs e)
+    private void WindowPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.F || (e.KeyModifiers & KeyModifiers.Control) == 0) return;
+
+        // Tunnel handling runs before StudioWorkspaceWindow's legacy bubbling Ctrl+F handler,
+        // preventing focus from being sent to the now-hidden left-panel Search box.
         e.Handled = true;
-        _quickSearch.Focus();
-        _quickSearch.SelectAll();
+        FocusQuickSearchDeferred();
     }
 
     private void FocusQuickSearchDeferred()
@@ -248,7 +268,7 @@ internal sealed class StudioNavigationPolish
     {
         _disposed = true;
         _quickSearch.KeyDown -= QuickSearchKeyDown;
-        if (_root is not null) _root.KeyDown -= RootKeyDown;
+        _window.RemoveHandler(InputElement.KeyDownEvent, WindowPreviewKeyDown);
         _window.Opened -= WindowOpened;
         _window.LayoutUpdated -= WindowLayoutUpdated;
         _window.Closed -= WindowClosed;
