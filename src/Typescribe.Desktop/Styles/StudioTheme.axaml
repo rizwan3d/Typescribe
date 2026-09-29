@@ -113,6 +113,21 @@
     <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
   </Style>
 
+  <Style Selector="Window.typescribe-studio TextBox.document-title-editor">
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="Padding" Value="2,1" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="FontSize" Value="18" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio TextBox.document-title-editor:focus">
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+  </Style>
+
   <Style Selector="Window.typescribe-studio TextBox.editor-canvas">
     <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
     <Setter Property="Padding" Value="30,24" />
@@ -151,6 +166,30 @@
   <Style Selector="Window.typescribe-studio ListBox.binder-list ListBoxItem">
     <Setter Property="Padding" Value="6,5" />
     <Setter Property="Margin" Value="4,1" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder">
+    <Setter Property="Padding" Value="4,5" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder ListBoxItem">
+    <Setter Property="Padding" Value="5,4" />
+    <Setter Property="Margin" Value="2,1" />
+    <Setter Property="MinHeight" Value="29" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder Button.binder-heading">
+    <Setter Property="MinHeight" Value="24" />
+    <Setter Property="Padding" Value="5,2" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="CornerRadius" Value="4" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ListBox.scrivener-binder Button.binder-heading:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
   </Style>
 
   <Style Selector="Window.typescribe-studio TextBlock.binder-icon">
