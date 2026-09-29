@@ -26,7 +26,7 @@ public sealed class App : AvaloniaApplication
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var repository = new FileSystemProjectRepository();
+            var repository = new TrackingProjectRepository(new FileSystemProjectRepository());
             var parser = new DocumentParser();
             var renderer = new DocumentRenderer();
             var publishingEngine = new LuaLatexPublishingEngine();
@@ -46,6 +46,7 @@ public sealed class App : AvaloniaApplication
 
             StudioUxPolish.Apply(window);
             StudioAuthoringEnhancements.Apply(window);
+            StudioScriveningsFeatures.Apply(window, viewModel, repository);
             desktop.MainWindow = window;
         }
 
