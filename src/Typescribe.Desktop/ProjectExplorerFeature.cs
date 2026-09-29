@@ -242,14 +242,14 @@ internal sealed class ProjectExplorerFeature
 
         if (root is Panel panel)
         {
-            foreach (var child in panel.Children)
-                foreach (var descendant in EnumerateControls(child))
+            foreach (var panelChild in panel.Children)
+                foreach (var descendant in EnumerateControls(panelChild))
                     yield return descendant;
         }
 
-        if (root is Decorator { Child: Control child })
+        if (root is Decorator { Child: Control decoratorChild })
         {
-            foreach (var descendant in EnumerateControls(child))
+            foreach (var descendant in EnumerateControls(decoratorChild))
                 yield return descendant;
         }
 
@@ -406,7 +406,7 @@ internal sealed class ProjectExplorerFeature
         ExplorerNode parent,
         IReadOnlyDictionary<string, List<ExplorerNode>> desiredByParent)
     {
-        foreach (var child in parent.Children.Where(static child => child.Kind == ExplorerNodeKind.ProjectNode).ToArray())
+        foreach (var child in parent.Children.Where(static node => node.Kind == ExplorerNodeKind.ProjectNode).ToArray())
         {
             if (child.Row?.Node.IsContainer == true)
             {
