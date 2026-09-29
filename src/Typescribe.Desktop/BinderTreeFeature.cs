@@ -19,18 +19,15 @@ using Typescribe.Domain.Models;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Single visual owner for the Binder.
+/// Event-driven Binder presenter.
 ///
-/// Older workspace features still assign Binder ItemsSource/ItemTemplate as part of their
-/// state refreshes. This owner pins the real tree at Animation priority, which is intentionally
-/// higher than those LocalValue assignments, so they never become effective values and cannot
-/// tear down ListBox containers between frames. Selection remains a normal DirectProperty; a
-/// short-lived pending-user-selection id prevents an asynchronous state refresh from reverting
-/// a click before WorkspaceViewModel.SelectAsync has finished.
+/// The Binder is rendered once and keeps one permanent ItemsSource and ItemTemplate. It reacts
+/// only to BinderRows collection changes, explicit disclosure actions, selection changes, and
+/// semantic outline collection changes. Ordinary editor StateChanged notifications, autosave,
+/// word count updates and PDF preview updates never enter this component.
 /// </summary>
 internal sealed class BinderTreeFeature
 {
-    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(1000d / 60d);
     private static readonly string[] LabelPalette =
     [
         "#64748B", "#3B82F6", "#8B5CF6", "#F43F5E",
@@ -43,11 +40,11 @@ internal sealed class BinderTreeFeature
     private readonly ObservableCollection<BinderRowViewModel> _visibleRows = [];
     private readonly HashSet<string> _collapsedNodes = new(StringComparer.Ordinal);
     private readonly HashSet<string> _expandedHeadingDocuments = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _headingDisclosureTouched = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OutlineItemViewModel[]> _headingIndex = new(StringComparer.Ordinal);
-    private readonly DispatcherTimer _frameTimer;
+    private readonly Dictionary<string, string> _headingVisualSignatures = new(StringComparer.Ordinal);
 
     private ListBox? _binder;
-    private TabControl? _leftTabs;
     private TabControl? _centerTabs;
     private TabItem? _editorTab;
     private FuncDataTemplate<BinderRowViewModel>? _rowTemplate;
@@ -59,9 +56,9 @@ internal sealed class BinderTreeFeature
     private string? _statePath;
     private string? _selectedPersistentId;
     private string? _pendingUserSelectionId;
-    private int _bookmarkSelectedIndex = -1;
-    private ListBox? _bookmarkList;
-    private bool _frameScheduled;
+    private bool _structureSyncScheduled;
+    private bool _outlineSyncScheduled;
+    private bool _restoringPendingSelection;
     private bool _titleCommitRunning;
     private bool _indexing;
     private bool _disposed;
@@ -74,8 +71,6 @@ internal sealed class BinderTreeFeature
         _window = window;
         _viewModel = viewModel;
         _repository = repository;
-        _frameTimer = new DispatcherTimer { Interval = FrameInterval };
-        _frameTimer.Tick += OnFrameTick;
     }
 
     public static void Apply(
@@ -91,109 +86,90 @@ internal sealed class BinderTreeFeature
         window.Opened += feature.OnOpened;
         window.LayoutUpdated += feature.OnLayoutUpdated;
         window.Closed += feature.OnClosed;
-        viewModel.StateChanged += feature.OnStateChanged;
-        viewModel.BinderRows.CollectionChanged += feature.OnCanonicalRowsChanged;
+        viewModel.BinderRows.CollectionChanged += feature.OnBinderRowsChanged;
+        viewModel.OutlineItems.CollectionChanged += feature.OnOutlineItemsChanged;
 
         feature.TryAttach();
         feature.UpdateProjectState();
-        feature.ScheduleFrame();
+        feature.SynchronizeStructure();
+        feature.ScheduleOutlineSync();
     }
 
     private void OnOpened(object? sender, EventArgs e)
     {
         TryAttach();
-        UpdateProjectState();
-        ScheduleFrame();
+        ScheduleStructureSync();
+        ScheduleOutlineSync();
     }
 
     private void OnLayoutUpdated(object? sender, EventArgs e)
     {
         if (_disposed) return;
-        if (_binder is null || _centerTabs is null || _leftTabs is null || _bookmarkList is null)
+        if (_binder is null || _centerTabs is null || _titleEditor is null)
             TryAttach();
+        if (_binder is not null && _centerTabs is not null && _titleEditor is not null)
+            _window.LayoutUpdated -= OnLayoutUpdated;
     }
 
-    private void OnStateChanged(object? sender, EventArgs e)
-        => Dispatcher.UIThread.Post(() =>
-        {
-            if (_disposed) return;
-            TryAttach();
-            UpdateProjectState();
-            RefreshSelectedHeadingCache();
+    private void OnBinderRowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        => ScheduleStructureSync();
 
-            var viewModelId = _viewModel.SelectedRow?.Node.PersistentId;
-            if (_pendingUserSelectionId is not null)
-            {
-                if (string.Equals(viewModelId, _pendingUserSelectionId, StringComparison.Ordinal))
-                {
-                    _selectedPersistentId = _pendingUserSelectionId;
-                    _pendingUserSelectionId = null;
-                }
-                // Otherwise the click is still in flight. Do not let an unrelated state update
-                // replace the user's visible selection with the previous ViewModel selection.
-            }
-            else
-            {
-                _selectedPersistentId = viewModelId;
-            }
+    private void OnOutlineItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        => ScheduleOutlineSync();
 
-            EnsureSelectedAncestorsExpanded();
-            SynchronizeTitleEditor();
-            ScheduleFrame();
-            _ = IndexMissingDocumentsAsync();
-        }, DispatcherPriority.Background);
-
-    private void OnCanonicalRowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void ScheduleStructureSync()
     {
-        if (_disposed) return;
-        if (_selectedPersistentId is not null && !_viewModel.BinderRows.Any(row =>
-                string.Equals(row.Node.PersistentId, _selectedPersistentId, StringComparison.Ordinal)))
+        if (_disposed || _structureSyncScheduled) return;
+        _structureSyncScheduled = true;
+        Dispatcher.UIThread.Post(() =>
         {
-            _selectedPersistentId = _viewModel.SelectedRow?.Node.PersistentId;
-            _pendingUserSelectionId = null;
-        }
-        ScheduleFrame();
-        _ = IndexMissingDocumentsAsync();
+            _structureSyncScheduled = false;
+            if (!_disposed) SynchronizeStructure();
+        }, DispatcherPriority.Background);
+    }
+
+    private void ScheduleOutlineSync()
+    {
+        if (_disposed || _outlineSyncScheduled) return;
+        _outlineSyncScheduled = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _outlineSyncScheduled = false;
+            if (!_disposed) ApplyCurrentOutlineSnapshot();
+        }, DispatcherPriority.Background);
     }
 
     private void TryAttach()
     {
-        if (_disposed) return;
-        if (_window.Content is not Control content) return;
+        if (_disposed || _window.Content is not Control content) return;
 
         _binder ??= EnumerateControls(content)
             .OfType<ListBox>()
             .FirstOrDefault(static list => list.ContextMenu is not null);
 
-        if (_binder is not null && !_binder.Classes.Contains("binder-tree-v3"))
+        if (_binder is not null && !_binder.Classes.Contains("binder-event-driven"))
             AttachBinder(_binder);
 
-        if (_leftTabs is null || _centerTabs is null)
+        if (_centerTabs is null)
         {
             foreach (var tabs in EnumerateControls(content).OfType<TabControl>())
             {
                 var items = TabItems(tabs).ToArray();
                 var headers = items.Select(static item => item.Header?.ToString() ?? string.Empty).ToArray();
-                if (_leftTabs is null && headers.Contains("Binder", StringComparer.Ordinal))
-                    _leftTabs = tabs;
-                if (_centerTabs is null && headers.Contains("Editor", StringComparer.Ordinal) && headers.Contains("Corkboard", StringComparer.Ordinal))
-                {
-                    _centerTabs = tabs;
-                    _editorTab = items.FirstOrDefault(static item => string.Equals(item.Header?.ToString(), "Editor", StringComparison.Ordinal));
-                }
+                if (!headers.Contains("Editor", StringComparer.Ordinal) || !headers.Contains("Corkboard", StringComparer.Ordinal))
+                    continue;
+                _centerTabs = tabs;
+                _editorTab = items.FirstOrDefault(static item => string.Equals(item.Header?.ToString(), "Editor", StringComparison.Ordinal));
+                break;
             }
         }
 
         EnsureEditableDocumentTitle();
-        AttachBookmarkSelectionGuard();
-
-        if (_binder is not null && _centerTabs is not null && _leftTabs is not null && _bookmarkList is not null)
-            _window.LayoutUpdated -= OnLayoutUpdated;
     }
 
     private void AttachBinder(ListBox binder)
     {
-        if (!binder.Classes.Contains("binder-tree-v3")) binder.Classes.Add("binder-tree-v3");
+        binder.Classes.Add("binder-event-driven");
         if (!binder.Classes.Contains("binder-list")) binder.Classes.Add("binder-list");
         binder.SelectionMode = SelectionMode.Single;
         binder.Focusable = true;
@@ -205,10 +181,10 @@ internal sealed class BinderTreeFeature
 
         _selectedPersistentId = (binder.SelectedItem as BinderRowViewModel)?.Node.PersistentId
                                 ?? _viewModel.SelectedRow?.Node.PersistentId;
-        ReconcileVisibleRows(BuildVisibleRows());
 
-        // ItemsSource and ItemTemplate are StyledProperties. Animation is Avalonia's highest
-        // property priority, so legacy LocalValue writes remain stored but never become visible.
+        // Keep one effective source/template for the entire window lifetime. Older workspace
+        // code may still write local values, but those values never become effective and thus
+        // cannot recreate ListBox containers. This is an ownership guard, not a refresh loop.
         _itemsSourceLease?.Dispose();
         _itemTemplateLease?.Dispose();
         _itemsSourceLease = binder.SetValue(
@@ -220,69 +196,51 @@ internal sealed class BinderTreeFeature
             (IDataTemplate)_rowTemplate,
             BindingPriority.Animation);
 
-        binder.AddHandler(InputElement.PointerPressedEvent, BinderPointerPressedTunnel, RoutingStrategies.Tunnel, handledEventsToo: true);
+        binder.PointerPressed += BinderPointerPressed;
         binder.SelectionChanged += BinderSelectionChanged;
         binder.DoubleTapped += BinderDoubleTapped;
         binder.KeyDown += BinderKeyDown;
-        SynchronizeSelection();
     }
 
-    private void BinderPointerPressedTunnel(object? sender, PointerPressedEventArgs e)
+    private void BinderPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_disposed || _binder is null) return;
-        var point = e.GetCurrentPoint(_binder);
-        if (!point.Properties.IsLeftButtonPressed) return;
-
-        if (IsBinderActionButton(e.Source)) return;
-        var row = FindRowFromSource(e.Source);
+        if (_binder is null || !e.GetCurrentPoint(_binder).Properties.IsLeftButtonPressed) return;
+        var row = FindBinderRow(e.Source);
         if (row is null) return;
-
         _pendingUserSelectionId = row.Node.PersistentId;
         _selectedPersistentId = row.Node.PersistentId;
     }
 
-    private static bool IsBinderActionButton(object? source)
-    {
-        if (source is not Control control) return false;
-        if (control is Button self &&
-            (self.Classes.Contains("binder-disclosure") || self.Classes.Contains("binder-heading")))
-            return true;
-
-        return control.GetVisualAncestors().OfType<Button>().Any(button =>
-            button.Classes.Contains("binder-disclosure") || button.Classes.Contains("binder-heading"));
-    }
-
-    private static BinderRowViewModel? FindRowFromSource(object? source)
-    {
-        if (source is not Control control) return null;
-        if (control is ListBoxItem self && self.Content is BinderRowViewModel direct) return direct;
-        return control.GetVisualAncestors()
-            .OfType<ListBoxItem>()
-            .Select(static item => item.Content)
-            .OfType<BinderRowViewModel>()
-            .FirstOrDefault();
-    }
-
     private void BinderSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (_binder?.SelectedItem is not BinderRowViewModel row) return;
-        var selectedId = row.Node.PersistentId;
-        var viewModelId = _viewModel.SelectedRow?.Node.PersistentId;
+        if (_binder?.SelectedItem is not BinderRowViewModel row || _restoringPendingSelection) return;
+        var id = row.Node.PersistentId;
 
         if (_pendingUserSelectionId is not null &&
-            !string.Equals(selectedId, _pendingUserSelectionId, StringComparison.Ordinal) &&
-            !string.Equals(viewModelId, _pendingUserSelectionId, StringComparison.Ordinal))
+            !string.Equals(id, _pendingUserSelectionId, StringComparison.Ordinal))
         {
-            // StudioWorkspaceWindow may re-assert the previous ViewModel selection while its
-            // asynchronous selection handler is still flushing metadata. Keep the click pending
-            // and restore it on the next frame instead of accepting that transient reversion.
-            ScheduleFrame();
+            var pending = _visibleRows.FirstOrDefault(candidate =>
+                string.Equals(candidate.Node.PersistentId, _pendingUserSelectionId, StringComparison.Ordinal));
+            if (pending is not null)
+            {
+                _restoringPendingSelection = true;
+                try { _binder.SelectedItem = pending; }
+                finally { _restoringPendingSelection = false; }
+            }
             return;
         }
 
-        _selectedPersistentId = selectedId;
-        if (string.Equals(selectedId, _pendingUserSelectionId, StringComparison.Ordinal) &&
-            string.Equals(viewModelId, selectedId, StringComparison.Ordinal))
+        _selectedPersistentId = id;
+        SynchronizeTitleEditor(row);
+        if (_pendingUserSelectionId is not null)
+            Dispatcher.UIThread.Post(ConfirmPendingSelection, DispatcherPriority.Background);
+    }
+
+    private void ConfirmPendingSelection()
+    {
+        if (_pendingUserSelectionId is null) return;
+        var modelId = _viewModel.SelectedRow?.Node.PersistentId;
+        if (string.Equals(modelId, _pendingUserSelectionId, StringComparison.Ordinal))
             _pendingUserSelectionId = null;
     }
 
@@ -297,156 +255,46 @@ internal sealed class BinderTreeFeature
     {
         if (_binder?.SelectedItem is not BinderRowViewModel row) return;
 
-        if (e.Key == Key.Right && row.Node.IsContainer && _collapsedNodes.Contains(row.Node.PersistentId))
+        if (e.Key == Key.Right && row.Node.IsContainer && IsCollapsed(row))
         {
             _collapsedNodes.Remove(row.Node.PersistentId);
             SaveState();
-            ScheduleFrame();
+            ApplyVisibleProjection();
             e.Handled = true;
-        }
-        else if (e.Key == Key.Left)
-        {
-            if (row.Node.IsContainer && !_collapsedNodes.Contains(row.Node.PersistentId))
-            {
-                _collapsedNodes.Add(row.Node.PersistentId);
-                SaveState();
-                ScheduleFrame();
-                e.Handled = true;
-            }
-            else
-            {
-                var parent = FindParent(row);
-                if (parent is not null)
-                {
-                    _pendingUserSelectionId = parent.Node.PersistentId;
-                    _selectedPersistentId = parent.Node.PersistentId;
-                    _binder.SelectedItem = parent;
-                    _binder.ScrollIntoView(parent);
-                    e.Handled = true;
-                }
-            }
-        }
-    }
-
-    private BinderRowViewModel? FindParent(BinderRowViewModel row)
-    {
-        var canonical = _viewModel.BinderRows;
-        var index = canonical.IndexOf(row);
-        if (index < 0 || row.Depth <= 0) return null;
-        for (var i = index - 1; i >= 0; i--)
-            if (canonical[i].Depth < row.Depth)
-                return canonical[i];
-        return null;
-    }
-
-    internal void ToggleDisclosure(BinderRowViewModel row, BinderTreeRowControl visual)
-    {
-        if (row.Node.IsContainer)
-        {
-            ToggleContainer(row, selectContainer: false);
-            visual.Refresh();
             return;
         }
 
-        if (!row.Node.IsDocument || !HasHeadings(row.Node.PersistentId)) return;
-        if (!_expandedHeadingDocuments.Add(row.Node.PersistentId))
-            _expandedHeadingDocuments.Remove(row.Node.PersistentId);
-        SaveState();
-        visual.Refresh();
-    }
-
-    private void ToggleContainer(BinderRowViewModel row, bool selectContainer)
-    {
-        if (!row.Node.IsContainer) return;
-        var willCollapse = !_collapsedNodes.Contains(row.Node.PersistentId);
-        if (willCollapse)
+        if (e.Key != Key.Left) return;
+        if (row.Node.IsContainer && !IsCollapsed(row))
         {
             _collapsedNodes.Add(row.Node.PersistentId);
-            if (selectContainer || IsSelectionDescendantOf(row))
-            {
-                _pendingUserSelectionId = row.Node.PersistentId;
-                _selectedPersistentId = row.Node.PersistentId;
-                if (_binder is not null) _binder.SelectedItem = row;
-            }
-        }
-        else
-        {
-            _collapsedNodes.Remove(row.Node.PersistentId);
+            SaveState();
+            ApplyVisibleProjection();
+            e.Handled = true;
+            return;
         }
 
-        SaveState();
-        ScheduleFrame();
+        var parent = FindParent(row);
+        if (parent is null) return;
+        _binder.SelectedItem = parent;
+        _binder.ScrollIntoView(parent);
+        e.Handled = true;
     }
 
-    private bool IsSelectionDescendantOf(BinderRowViewModel parent)
+    private void SynchronizeStructure()
     {
-        var selectedId = _pendingUserSelectionId ?? _selectedPersistentId;
-        if (selectedId is null) return false;
-        var rows = _viewModel.BinderRows;
-        var parentIndex = rows.IndexOf(parent);
-        if (parentIndex < 0) return false;
-        for (var i = parentIndex + 1; i < rows.Count && rows[i].Depth > parent.Depth; i++)
-            if (string.Equals(rows[i].Node.PersistentId, selectedId, StringComparison.Ordinal))
-                return true;
-        return false;
-    }
-
-    internal bool IsCollapsed(BinderRowViewModel row)
-        => row.Node.IsContainer && _collapsedNodes.Contains(row.Node.PersistentId);
-
-    internal bool IsHeadingExpanded(BinderRowViewModel row)
-        => row.Node.IsDocument && _expandedHeadingDocuments.Contains(row.Node.PersistentId);
-
-    internal IReadOnlyList<OutlineItemViewModel> HeadingsFor(BinderRowViewModel row)
-        => _headingIndex.TryGetValue(row.Node.PersistentId, out var headings) ? headings : [];
-
-    internal bool HasHeadings(string persistentId)
-        => _headingIndex.TryGetValue(persistentId, out var headings) && headings.Length > 0;
-
-    internal async Task NavigateToHeadingAsync(BinderRowViewModel owner, OutlineItemViewModel heading)
-    {
-        try
-        {
-            var canonical = _viewModel.BinderRows.FirstOrDefault(row =>
-                string.Equals(row.Node.PersistentId, owner.Node.PersistentId, StringComparison.Ordinal));
-            if (canonical is null) return;
-
-            _pendingUserSelectionId = canonical.Node.PersistentId;
-            _selectedPersistentId = canonical.Node.PersistentId;
-            if (!ReferenceEquals(_viewModel.SelectedRow, canonical))
-                await _viewModel.SelectAsync(canonical);
-
-            _pendingUserSelectionId = null;
-            var liveHeading = _viewModel.OutlineItems.FirstOrDefault(item =>
-                item.SourceLine == heading.SourceLine &&
-                string.Equals(item.Title, heading.Title, StringComparison.Ordinal)) ?? heading;
-            _viewModel.SelectOutline(liveHeading);
-            if (_centerTabs is not null && _editorTab is not null)
-                _centerTabs.SelectedItem = _editorTab;
-        }
-        catch
-        {
-            // Heading navigation should never destabilize the Binder.
-        }
-    }
-
-    private void ScheduleFrame()
-    {
-        if (_disposed || _frameScheduled) return;
-        _frameScheduled = true;
-        _frameTimer.Start();
-    }
-
-    private void OnFrameTick(object? sender, EventArgs e)
-    {
-        _frameTimer.Stop();
-        _frameScheduled = false;
         if (_disposed) return;
-
-        EnsureSelectedAncestorsExpanded();
-        ReconcileVisibleRows(BuildVisibleRows());
-        SynchronizeSelection();
+        TryAttach();
+        UpdateProjectState();
+        PruneRemovedHeadingCaches();
+        ApplyVisibleProjection();
+        SynchronizeSelectionFromModel();
+        RefreshRealizedRows();
+        _ = IndexMissingDocumentsAsync();
     }
+
+    private void ApplyVisibleProjection()
+        => ReconcileVisibleRows(BuildVisibleRows());
 
     private BinderRowViewModel[] BuildVisibleRows()
     {
@@ -476,8 +324,7 @@ internal sealed class BinderTreeFeature
             var desired = target[index];
             if (index < _visibleRows.Count && SameNode(_visibleRows[index], desired))
             {
-                if (!ReferenceEquals(_visibleRows[index], desired))
-                    _visibleRows[index] = desired;
+                _visibleRows[index].RefreshFrom(desired);
                 continue;
             }
 
@@ -485,8 +332,7 @@ internal sealed class BinderTreeFeature
             if (existingIndex >= 0)
             {
                 _visibleRows.Move(existingIndex, index);
-                if (!ReferenceEquals(_visibleRows[index], desired))
-                    _visibleRows[index] = desired;
+                _visibleRows[index].RefreshFrom(desired);
             }
             else
             {
@@ -509,52 +355,262 @@ internal sealed class BinderTreeFeature
     private static bool SameNode(BinderRowViewModel left, BinderRowViewModel right)
         => string.Equals(left.Node.PersistentId, right.Node.PersistentId, StringComparison.Ordinal);
 
-    private void SynchronizeSelection()
+    private void SynchronizeSelectionFromModel()
     {
-        if (_binder is null) return;
-        var targetId = _pendingUserSelectionId ?? _selectedPersistentId ?? _viewModel.SelectedRow?.Node.PersistentId;
+        if (_binder is null || _pendingUserSelectionId is not null) return;
+        var targetId = _viewModel.SelectedRow?.Node.PersistentId ?? _selectedPersistentId;
         if (targetId is null) return;
-
         var target = _visibleRows.FirstOrDefault(row =>
             string.Equals(row.Node.PersistentId, targetId, StringComparison.Ordinal));
         if (target is null) return;
-
         _selectedPersistentId = targetId;
-        if (!ReferenceEquals(_binder.SelectedItem, target))
-            _binder.SelectedItem = target;
+        if (!ReferenceEquals(_binder.SelectedItem, target)) _binder.SelectedItem = target;
     }
 
-    private void EnsureSelectedAncestorsExpanded()
+    internal void ToggleDisclosure(BinderRowViewModel row, BinderTreeRowControl visual)
     {
-        var targetId = _pendingUserSelectionId ?? _selectedPersistentId ?? _viewModel.SelectedRow?.Node.PersistentId;
-        if (targetId is null) return;
+        if (row.Node.IsContainer)
+        {
+            ToggleContainer(row, selectContainer: false);
+            return;
+        }
+
+        if (!row.Node.IsDocument || !HasHeadings(row.Node.PersistentId)) return;
+        _headingDisclosureTouched.Add(row.Node.PersistentId);
+        if (!_expandedHeadingDocuments.Add(row.Node.PersistentId))
+            _expandedHeadingDocuments.Remove(row.Node.PersistentId);
+        SaveState();
+        visual.Refresh();
+    }
+
+    private void ToggleContainer(BinderRowViewModel row, bool selectContainer)
+    {
+        if (!row.Node.IsContainer) return;
+        var collapse = !_collapsedNodes.Contains(row.Node.PersistentId);
+        if (collapse)
+        {
+            _collapsedNodes.Add(row.Node.PersistentId);
+            if (selectContainer || IsSelectionDescendantOf(row))
+            {
+                _selectedPersistentId = row.Node.PersistentId;
+                _pendingUserSelectionId = null;
+                if (_binder is not null) _binder.SelectedItem = row;
+            }
+        }
+        else
+        {
+            _collapsedNodes.Remove(row.Node.PersistentId);
+        }
+
+        SaveState();
+        ApplyVisibleProjection();
+        RefreshRealizedRows();
+    }
+
+    private bool IsSelectionDescendantOf(BinderRowViewModel parent)
+    {
+        if (_selectedPersistentId is null) return false;
         var rows = _viewModel.BinderRows;
-        var selected = rows.FirstOrDefault(row => string.Equals(row.Node.PersistentId, targetId, StringComparison.Ordinal));
-        if (selected is null || selected.Depth <= 0) return;
-
-        var index = rows.IndexOf(selected);
-        if (index < 0) return;
-        var depth = selected.Depth;
-        var changed = false;
-        for (var i = index - 1; i >= 0 && depth > 0; i--)
-        {
-            var candidate = rows[i];
-            if (candidate.Depth >= depth) continue;
-            depth = candidate.Depth;
-            if (candidate.Node.IsContainer)
-                changed |= _collapsedNodes.Remove(candidate.Node.PersistentId);
-        }
-        if (changed) SaveState();
+        var parentIndex = rows.IndexOf(parent);
+        if (parentIndex < 0) return false;
+        for (var i = parentIndex + 1; i < rows.Count && rows[i].Depth > parent.Depth; i++)
+            if (string.Equals(rows[i].Node.PersistentId, _selectedPersistentId, StringComparison.Ordinal))
+                return true;
+        return false;
     }
 
-    private void RefreshRealizedRows(string? persistentId = null)
+    private BinderRowViewModel? FindParent(BinderRowViewModel row)
     {
-        if (_binder is null) return;
-        foreach (var visual in _binder.GetVisualDescendants().OfType<BinderTreeRowControl>().ToArray())
+        var rows = _viewModel.BinderRows;
+        var index = rows.FirstOrDefaultIndex(candidate =>
+            string.Equals(candidate.Node.PersistentId, row.Node.PersistentId, StringComparison.Ordinal));
+        if (index < 0 || row.Depth <= 0) return null;
+        for (var i = index - 1; i >= 0; i--)
+            if (rows[i].Depth < row.Depth)
+                return rows[i];
+        return null;
+    }
+
+    internal bool IsCollapsed(BinderRowViewModel row)
+        => row.Node.IsContainer && _collapsedNodes.Contains(row.Node.PersistentId);
+
+    internal bool IsHeadingExpanded(BinderRowViewModel row)
+        => row.Node.IsDocument && _expandedHeadingDocuments.Contains(row.Node.PersistentId);
+
+    internal IReadOnlyList<OutlineItemViewModel> HeadingsFor(BinderRowViewModel row)
+        => _headingIndex.TryGetValue(row.Node.PersistentId, out var headings) ? headings : [];
+
+    internal string HeadingVisualSignature(BinderRowViewModel row)
+        => _headingVisualSignatures.GetValueOrDefault(row.Node.PersistentId, string.Empty);
+
+    internal bool HasHeadings(string persistentId)
+        => _headingIndex.TryGetValue(persistentId, out var headings) && headings.Length > 0;
+
+    private void ApplyCurrentOutlineSnapshot()
+    {
+        var selected = _viewModel.SelectedRow;
+        if (selected?.Node.IsDocument != true) return;
+
+        var id = selected.Node.PersistentId;
+        var headings = _viewModel.OutlineItems.ToArray();
+        var signature = BuildHeadingVisualSignature(headings);
+        _headingIndex[id] = headings;
+
+        if (_headingVisualSignatures.TryGetValue(id, out var old) &&
+            string.Equals(old, signature, StringComparison.Ordinal))
         {
-            if (persistentId is null || string.Equals(visual.PersistentId, persistentId, StringComparison.Ordinal))
-                visual.Refresh();
+            // SourceLine/EndLine may have changed after ordinary typing. Keep the fresh semantic
+            // objects for navigation, but do not touch the visual tree when titles/levels did not.
+            return;
         }
+
+        _headingVisualSignatures[id] = signature;
+        var stateChanged = false;
+        if (headings.Length == 0)
+            stateChanged = _expandedHeadingDocuments.Remove(id);
+        else if (!_headingDisclosureTouched.Contains(id))
+            stateChanged = _expandedHeadingDocuments.Add(id);
+
+        if (stateChanged) SaveState();
+        RefreshRealizedRows(id);
+    }
+
+    internal async Task NavigateToHeadingAsync(BinderRowViewModel owner, int headingIndex)
+    {
+        try
+        {
+            var canonical = _viewModel.BinderRows.FirstOrDefault(row =>
+                string.Equals(row.Node.PersistentId, owner.Node.PersistentId, StringComparison.Ordinal));
+            if (canonical is null) return;
+
+            if (!string.Equals(_viewModel.SelectedRow?.Node.PersistentId, canonical.Node.PersistentId, StringComparison.Ordinal))
+                await _viewModel.SelectAsync(canonical);
+
+            if (!_headingIndex.TryGetValue(owner.Node.PersistentId, out var headings) ||
+                headingIndex < 0 || headingIndex >= headings.Length)
+                return;
+
+            var heading = headings[headingIndex];
+            var liveHeading = _viewModel.OutlineItems.FirstOrDefault(item =>
+                item.Level == heading.Level &&
+                string.Equals(item.Title, heading.Title, StringComparison.Ordinal) &&
+                item.SourceLine == heading.SourceLine) ?? heading;
+            _viewModel.SelectOutline(liveHeading);
+            if (_centerTabs is not null && _editorTab is not null)
+                _centerTabs.SelectedItem = _editorTab;
+        }
+        catch
+        {
+            // Navigation should never make the Binder interaction surface unusable.
+        }
+    }
+
+    private static string BuildHeadingVisualSignature(IReadOnlyList<OutlineItemViewModel> headings)
+    {
+        if (headings.Count == 0) return string.Empty;
+        var builder = new StringBuilder(headings.Count * 24);
+        foreach (var heading in headings)
+            builder.Append(heading.Level).Append(':').Append(heading.Title).Append('\u001f');
+        return builder.ToString();
+    }
+
+    private void PruneRemovedHeadingCaches()
+    {
+        var ids = _viewModel.BinderRows.Select(static row => row.Node.PersistentId).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in _headingIndex.Keys.Where(id => !ids.Contains(id)).ToArray())
+        {
+            _headingIndex.Remove(id);
+            _headingVisualSignatures.Remove(id);
+            _expandedHeadingDocuments.Remove(id);
+            _headingDisclosureTouched.Remove(id);
+        }
+    }
+
+    private async Task IndexMissingDocumentsAsync()
+    {
+        if (_disposed || _indexing || _repository.CurrentProject is not { } project) return;
+        var missing = _viewModel.BinderRows
+            .Where(static row => row.Node.IsDocument)
+            .Where(row => !_headingIndex.ContainsKey(row.Node.PersistentId))
+            .ToArray();
+        if (missing.Length == 0) return;
+
+        _indexCts ??= new CancellationTokenSource();
+        var token = _indexCts.Token;
+        _indexing = true;
+        var changed = false;
+        try
+        {
+            foreach (var row in missing)
+            {
+                token.ThrowIfCancellationRequested();
+                string text;
+                try { text = await _repository.ReadDocumentAsync(project, row.Node, token); }
+                catch when (!token.IsCancellationRequested) { continue; }
+
+                var headings = ParseHeadings(text);
+                var id = row.Node.PersistentId;
+                _headingIndex[id] = headings;
+                _headingVisualSignatures[id] = BuildHeadingVisualSignature(headings);
+                changed |= headings.Length > 0;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _indexing = false;
+        }
+
+        if (changed && !_disposed)
+            Dispatcher.UIThread.Post(() => RefreshRealizedRows(), DispatcherPriority.Background);
+    }
+
+    private static OutlineItemViewModel[] ParseHeadings(string text)
+    {
+        var source = (text ?? string.Empty)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        var lines = source.Split('\n');
+        var pending = new List<(string Title, int Level, int SourceLine)>();
+        var inFence = false;
+        char fenceCharacter = '\0';
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var trimmed = lines[index].TrimStart();
+            if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal))
+            {
+                var marker = trimmed[0];
+                if (!inFence) { inFence = true; fenceCharacter = marker; }
+                else if (marker == fenceCharacter) { inFence = false; fenceCharacter = '\0'; }
+                continue;
+            }
+            if (inFence || trimmed.Length < 2 || trimmed[0] != '#') continue;
+
+            var level = 0;
+            while (level < trimmed.Length && level < 6 && trimmed[level] == '#') level++;
+            if (level == 0 || level >= trimmed.Length || !char.IsWhiteSpace(trimmed[level])) continue;
+            var title = trimmed[(level + 1)..].Trim();
+            while (title.EndsWith('#')) title = title[..^1].TrimEnd();
+            if (title.Length > 0) pending.Add((title, level, index + 1));
+        }
+
+        var result = new OutlineItemViewModel[pending.Count];
+        for (var i = 0; i < pending.Count; i++)
+        {
+            var current = pending[i];
+            var endLine = lines.Length;
+            for (var j = i + 1; j < pending.Count; j++)
+            {
+                if (pending[j].Level > current.Level) continue;
+                endLine = Math.Max(current.SourceLine, pending[j].SourceLine - 1);
+                break;
+            }
+            result[i] = new OutlineItemViewModel(current.Title, current.Level, current.SourceLine, endLine);
+        }
+        return result;
     }
 
     private void UpdateProjectState()
@@ -567,8 +623,10 @@ internal sealed class BinderTreeFeature
             _statePath = null;
             _collapsedNodes.Clear();
             _expandedHeadingDocuments.Clear();
+            _headingDisclosureTouched.Clear();
             _headingIndex.Clear();
-            _pendingUserSelectionId = null;
+            _headingVisualSignatures.Clear();
+            _visibleRows.Clear();
             CancelIndexing();
             return;
         }
@@ -579,17 +637,17 @@ internal sealed class BinderTreeFeature
         _statePath = Path.Combine(project.RootPath, ".typescribe", "binder-tree.tsv");
         _collapsedNodes.Clear();
         _expandedHeadingDocuments.Clear();
+        _headingDisclosureTouched.Clear();
         _headingIndex.Clear();
-        _pendingUserSelectionId = null;
+        _headingVisualSignatures.Clear();
+        _visibleRows.Clear();
         LoadState(project.RootPath);
         CancelIndexing();
         _indexCts = new CancellationTokenSource();
-        _ = IndexMissingDocumentsAsync();
     }
 
     private void LoadState(string projectRoot)
     {
-        var loaded = false;
         if (_statePath is not null && File.Exists(_statePath))
         {
             try
@@ -603,21 +661,19 @@ internal sealed class BinderTreeFeature
                     else if (string.Equals(parts[0], "headings-open", StringComparison.Ordinal))
                         _expandedHeadingDocuments.Add(parts[1]);
                 }
-                loaded = true;
+                return;
             }
             catch
             {
             }
         }
 
-        if (loaded) return;
-
-        var workspace = Path.Combine(projectRoot, ".typescribe", "workspace.tsv");
-        if (File.Exists(workspace))
+        var oldWorkspace = Path.Combine(projectRoot, ".typescribe", "workspace.tsv");
+        if (File.Exists(oldWorkspace))
         {
             try
             {
-                foreach (var line in File.ReadLines(workspace, Encoding.UTF8))
+                foreach (var line in File.ReadLines(oldWorkspace, Encoding.UTF8))
                 {
                     var parts = line.Split('\t');
                     if (parts.Length >= 2 && string.Equals(parts[0], "collapsed", StringComparison.Ordinal))
@@ -645,7 +701,6 @@ internal sealed class BinderTreeFeature
             {
             }
         }
-
         SaveState();
     }
 
@@ -664,141 +719,15 @@ internal sealed class BinderTreeFeature
         }
         catch
         {
-            // UI state persistence must never make the Binder unusable.
         }
     }
 
-    private async Task IndexMissingDocumentsAsync()
+    private void RefreshRealizedRows(string? persistentId = null)
     {
-        if (_disposed || _indexing || _repository.CurrentProject is not { } project) return;
-        _indexCts ??= new CancellationTokenSource();
-        var token = _indexCts.Token;
-        _indexing = true;
-        try
-        {
-            foreach (var row in _viewModel.BinderRows.Where(static row => row.Node.IsDocument).ToArray())
-            {
-                token.ThrowIfCancellationRequested();
-                if (_headingIndex.ContainsKey(row.Node.PersistentId)) continue;
-                string text;
-                try
-                {
-                    text = await _repository.ReadDocumentAsync(project, row.Node, token);
-                }
-                catch when (!token.IsCancellationRequested)
-                {
-                    _headingIndex[row.Node.PersistentId] = [];
-                    continue;
-                }
-
-                var headings = ParseHeadings(text);
-                _headingIndex[row.Node.PersistentId] = headings;
-                if (headings.Length > 0 && string.Equals(_viewModel.SelectedRow?.Node.PersistentId, row.Node.PersistentId, StringComparison.Ordinal))
-                    _expandedHeadingDocuments.Add(row.Node.PersistentId);
-                await Dispatcher.UIThread.InvokeAsync(() => RefreshRealizedRows(row.Node.PersistentId));
-            }
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-        }
-        finally
-        {
-            _indexing = false;
-        }
-    }
-
-    private void RefreshSelectedHeadingCache()
-    {
-        var selected = _viewModel.SelectedRow;
-        if (selected?.Node.IsDocument != true) return;
-
-        var headings = _viewModel.OutlineItems.ToArray();
-        var id = selected.Node.PersistentId;
-        var changed = !_headingIndex.TryGetValue(id, out var old) || !HeadingSetsEqual(old, headings);
-        _headingIndex[id] = headings;
-        if (headings.Length > 0 && changed)
-            _expandedHeadingDocuments.Add(id);
-        if (changed)
-        {
-            SaveState();
-            RefreshRealizedRows(id);
-        }
-    }
-
-    private static bool HeadingSetsEqual(OutlineItemViewModel[] left, OutlineItemViewModel[] right)
-    {
-        if (left.Length != right.Length) return false;
-        for (var i = 0; i < left.Length; i++)
-        {
-            if (left[i].Level != right[i].Level || left[i].SourceLine != right[i].SourceLine ||
-                !string.Equals(left[i].Title, right[i].Title, StringComparison.Ordinal))
-                return false;
-        }
-        return true;
-    }
-
-    private static OutlineItemViewModel[] ParseHeadings(string text)
-    {
-        var source = (text ?? string.Empty)
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n');
-        var lines = source.Split('\n');
-        var pending = new List<(string Title, int Level, int SourceLine)>();
-        var inFence = false;
-        char fenceCharacter = '\0';
-
-        for (var index = 0; index < lines.Length; index++)
-        {
-            var trimmed = lines[index].TrimStart();
-            if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal))
-            {
-                var marker = trimmed[0];
-                if (!inFence)
-                {
-                    inFence = true;
-                    fenceCharacter = marker;
-                }
-                else if (marker == fenceCharacter)
-                {
-                    inFence = false;
-                    fenceCharacter = '\0';
-                }
-                continue;
-            }
-            if (inFence || trimmed.Length < 2 || trimmed[0] != '#') continue;
-
-            var level = 0;
-            while (level < trimmed.Length && level < 6 && trimmed[level] == '#') level++;
-            if (level == 0 || level >= trimmed.Length || !char.IsWhiteSpace(trimmed[level])) continue;
-
-            var title = trimmed[(level + 1)..].Trim();
-            while (title.EndsWith('#')) title = title[..^1].TrimEnd();
-            if (title.Length == 0) continue;
-            pending.Add((title, level, index + 1));
-        }
-
-        var result = new OutlineItemViewModel[pending.Count];
-        for (var i = 0; i < pending.Count; i++)
-        {
-            var current = pending[i];
-            var endLine = lines.Length;
-            for (var j = i + 1; j < pending.Count; j++)
-            {
-                if (pending[j].Level > current.Level) continue;
-                endLine = Math.Max(current.SourceLine, pending[j].SourceLine - 1);
-                break;
-            }
-            result[i] = new OutlineItemViewModel(current.Title, current.Level, current.SourceLine, endLine);
-        }
-        return result;
-    }
-
-    private void CancelIndexing()
-    {
-        _indexCts?.Cancel();
-        _indexCts?.Dispose();
-        _indexCts = null;
-        _indexing = false;
+        if (_binder is null) return;
+        foreach (var visual in _binder.GetVisualDescendants().OfType<BinderTreeRowControl>().ToArray())
+            if (persistentId is null || string.Equals(visual.PersistentId, persistentId, StringComparison.Ordinal))
+                visual.Refresh();
     }
 
     private void EnsureEditableDocumentTitle()
@@ -848,7 +777,7 @@ internal sealed class BinderTreeFeature
         else if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            SynchronizeTitleEditor(force: true);
+            SynchronizeTitleEditor(_binder?.SelectedItem as BinderRowViewModel, force: true);
             _window.GetVisualDescendants().OfType<ManuscriptEditor>().FirstOrDefault()?.Focus();
         }
     }
@@ -859,59 +788,36 @@ internal sealed class BinderTreeFeature
         var requested = (_titleEditor.Text ?? string.Empty).Trim();
         if (requested.Length == 0 || string.Equals(requested, _viewModel.SelectedTitle, StringComparison.Ordinal))
         {
-            SynchronizeTitleEditor(force: true);
+            SynchronizeTitleEditor(_binder?.SelectedItem as BinderRowViewModel, force: true);
             return;
         }
 
         _titleCommitRunning = true;
-        try
-        {
-            await _viewModel.RenameSelectedAsync(requested);
-            SynchronizeTitleEditor(force: true);
-        }
+        try { await _viewModel.RenameSelectedAsync(requested); }
         finally
         {
             _titleCommitRunning = false;
+            SynchronizeTitleEditor(_binder?.SelectedItem as BinderRowViewModel, force: true);
         }
     }
 
-    private void SynchronizeTitleEditor(bool force = false)
+    private void SynchronizeTitleEditor(BinderRowViewModel? row, bool force = false)
     {
         if (_titleEditor is null) return;
-        _titleEditor.IsEnabled = _viewModel.HasSelection;
+        _titleEditor.IsEnabled = row is not null;
         if (!force && _titleEditor.IsKeyboardFocusWithin) return;
-        var title = _viewModel.HasSelection ? _viewModel.SelectedTitle : string.Empty;
+        var title = row?.Node.Title ?? string.Empty;
         if (!string.Equals(_titleEditor.Text, title, StringComparison.Ordinal))
             _titleEditor.Text = title;
     }
 
-    private void AttachBookmarkSelectionGuard()
+    private static BinderRowViewModel? FindBinderRow(object? source)
     {
-        if (_leftTabs is null || _bookmarkList is not null) return;
-        var bookmarks = TabItems(_leftTabs).FirstOrDefault(static item =>
-            string.Equals(item.Header?.ToString(), "Bookmarks", StringComparison.Ordinal));
-        if (bookmarks?.Content is not Control content) return;
-        _bookmarkList = EnumerateControls(content).OfType<ListBox>().FirstOrDefault();
-        if (_bookmarkList is null) return;
-        _bookmarkSelectedIndex = _bookmarkList.SelectedIndex;
-        _bookmarkList.SelectionChanged += BookmarkSelectionChanged;
-        _bookmarkList.PropertyChanged += BookmarkPropertyChanged;
-    }
-
-    private void BookmarkSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_bookmarkList?.SelectedIndex >= 0)
-            _bookmarkSelectedIndex = _bookmarkList.SelectedIndex;
-    }
-
-    private void BookmarkPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
-    {
-        if (_bookmarkList is null || e.Property != ItemsControl.ItemsSourceProperty || _bookmarkSelectedIndex < 0) return;
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (_disposed || _bookmarkList is null || _bookmarkList.ItemCount <= 0 || _bookmarkList.SelectedIndex >= 0) return;
-            _bookmarkList.SelectedIndex = Math.Clamp(_bookmarkSelectedIndex, 0, _bookmarkList.ItemCount - 1);
-        }, DispatcherPriority.Background);
+        if (source is ListBoxItem direct)
+            return direct.Content as BinderRowViewModel ?? direct.DataContext as BinderRowViewModel;
+        if (source is not Visual visual) return null;
+        var item = visual.GetVisualAncestors().OfType<ListBoxItem>().FirstOrDefault();
+        return item?.Content as BinderRowViewModel ?? item?.DataContext as BinderRowViewModel;
     }
 
     private static IEnumerable<TabItem> TabItems(TabControl tabs)
@@ -924,21 +830,23 @@ internal sealed class BinderTreeFeature
     {
         yield return root;
         if (root is Panel panel)
-        {
             foreach (var child in panel.Children)
                 foreach (var nested in EnumerateControls(child))
                     yield return nested;
-        }
         if (root is ContentControl content && content.Content is Control contentChild)
-        {
             foreach (var nested in EnumerateControls(contentChild))
                 yield return nested;
-        }
         if (root is Decorator decorator && decorator.Child is Control decoratedChild)
-        {
             foreach (var nested in EnumerateControls(decoratedChild))
                 yield return nested;
-        }
+    }
+
+    private void CancelIndexing()
+    {
+        _indexCts?.Cancel();
+        _indexCts?.Dispose();
+        _indexCts = null;
+        _indexing = false;
     }
 
     internal static IBrush LabelBrush(ProjectNode node)
@@ -971,26 +879,19 @@ internal sealed class BinderTreeFeature
         _disposed = true;
         SaveState();
         CancelIndexing();
-        _frameTimer.Stop();
-        _frameTimer.Tick -= OnFrameTick;
         _itemsSourceLease?.Dispose();
         _itemTemplateLease?.Dispose();
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
-        _viewModel.StateChanged -= OnStateChanged;
-        _viewModel.BinderRows.CollectionChanged -= OnCanonicalRowsChanged;
-
+        _viewModel.BinderRows.CollectionChanged -= OnBinderRowsChanged;
+        _viewModel.OutlineItems.CollectionChanged -= OnOutlineItemsChanged;
         if (_binder is not null)
         {
+            _binder.PointerPressed -= BinderPointerPressed;
             _binder.SelectionChanged -= BinderSelectionChanged;
             _binder.DoubleTapped -= BinderDoubleTapped;
             _binder.KeyDown -= BinderKeyDown;
-        }
-        if (_bookmarkList is not null)
-        {
-            _bookmarkList.SelectionChanged -= BookmarkSelectionChanged;
-            _bookmarkList.PropertyChanged -= BookmarkPropertyChanged;
         }
     }
 
@@ -1004,8 +905,7 @@ internal sealed class BinderTreeFeature
         private readonly TextBlock _title;
         private readonly TextBlock _compile;
         private readonly StackPanel _headings;
-        private string _headingSignature = string.Empty;
-        private bool _lastExpanded;
+        private string? _headingRenderKey;
 
         internal BinderTreeRowControl(BinderTreeFeature owner, BinderRowViewModel row)
         {
@@ -1014,7 +914,6 @@ internal sealed class BinderTreeFeature
             PersistentId = row.Node.PersistentId;
             RowDefinitions = new RowDefinitions("Auto,Auto");
             ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,*,Auto");
-            Margin = new Thickness(Math.Clamp(row.Depth, 0, 12) * 13, 0, 0, 0);
 
             _disclosure = new Button
             {
@@ -1025,8 +924,7 @@ internal sealed class BinderTreeFeature
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Focusable = false
+                VerticalContentAlignment = VerticalAlignment.Center
             };
             _disclosure.Classes.Add("binder-disclosure");
             _disclosure.PointerPressed += (_, e) => e.Handled = true;
@@ -1044,7 +942,6 @@ internal sealed class BinderTreeFeature
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(2, 0, 5, 0)
             };
-
             _icon = new TextBlock
             {
                 Width = 20,
@@ -1053,15 +950,11 @@ internal sealed class BinderTreeFeature
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            _icon.Classes.Add("binder-icon");
-
             _title = new TextBlock
             {
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            _title.Classes.Add("binder-title");
-
             _compile = new TextBlock
             {
                 Width = 18,
@@ -1069,7 +962,6 @@ internal sealed class BinderTreeFeature
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            _compile.Classes.Add("binder-compile-state");
 
             Children.Add(_disclosure);
             Grid.SetColumn(_labelSwatch, 1); Children.Add(_labelSwatch);
@@ -1085,10 +977,8 @@ internal sealed class BinderTreeFeature
             };
             _headings.Classes.Add("binder-heading-group");
             Grid.SetRow(_headings, 1);
-            Grid.SetColumn(_headings, 0);
             Grid.SetColumnSpan(_headings, 5);
             Children.Add(_headings);
-
             Refresh();
         }
 
@@ -1097,11 +987,10 @@ internal sealed class BinderTreeFeature
         internal void Refresh()
         {
             var node = _row.Node;
+            Margin = new Thickness(Math.Clamp(_row.Depth, 0, 12) * 13, 0, 0, 0);
             var headings = _owner.HeadingsFor(_row);
             var canExpand = node.IsContainer || (node.IsDocument && headings.Count > 0);
-            var expanded = node.IsContainer
-                ? !_owner.IsCollapsed(_row)
-                : node.IsDocument && _owner.IsHeadingExpanded(_row);
+            var expanded = node.IsContainer ? !_owner.IsCollapsed(_row) : node.IsDocument && _owner.IsHeadingExpanded(_row);
 
             _disclosure.IsVisible = canExpand;
             _disclosure.IsEnabled = canExpand;
@@ -1114,24 +1003,17 @@ internal sealed class BinderTreeFeature
             _compile.Text = node.IncludeInCompilation ? "●" : "○";
             _compile.Opacity = node.IncludeInCompilation ? 0.78 : 0.3;
 
-            var signature = string.Join('\u001f', headings.Select(static heading => $"{heading.Level}:{heading.SourceLine}:{heading.Title}"));
-            if (expanded == _lastExpanded && string.Equals(signature, _headingSignature, StringComparison.Ordinal))
-            {
-                _headings.IsVisible = node.IsDocument && expanded && headings.Count > 0;
-                return;
-            }
-
-            _lastExpanded = expanded;
-            _headingSignature = signature;
+            var renderKey = $"{expanded}:{_owner.HeadingVisualSignature(_row)}";
+            if (string.Equals(_headingRenderKey, renderKey, StringComparison.Ordinal)) return;
+            _headingRenderKey = renderKey;
             _headings.Children.Clear();
             _headings.IsVisible = node.IsDocument && expanded && headings.Count > 0;
             if (!_headings.IsVisible) return;
-
-            foreach (var heading in headings)
-                _headings.Children.Add(BuildHeadingButton(heading));
+            for (var index = 0; index < headings.Count; index++)
+                _headings.Children.Add(BuildHeadingButton(index, headings[index]));
         }
 
-        private Control BuildHeadingButton(OutlineItemViewModel heading)
+        private Control BuildHeadingButton(int index, OutlineItemViewModel heading)
         {
             var level = Math.Clamp(heading.Level, 1, 6);
             var badge = new TextBlock
@@ -1174,10 +1056,20 @@ internal sealed class BinderTreeFeature
             button.Click += async (_, e) =>
             {
                 e.Handled = true;
-                await _owner.NavigateToHeadingAsync(_row, heading);
+                await _owner.NavigateToHeadingAsync(_row, index);
             };
-            ToolTip.SetTip(button, $"Go to {heading.Title} — line {heading.SourceLine}");
+            ToolTip.SetTip(button, $"Go to {heading.Title}");
             return button;
         }
+    }
+}
+
+internal static class BinderRowCollectionExtensions
+{
+    internal static int FirstOrDefaultIndex(this IList<BinderRowViewModel> rows, Func<BinderRowViewModel, bool> predicate)
+    {
+        for (var index = 0; index < rows.Count; index++)
+            if (predicate(rows[index])) return index;
+        return -1;
     }
 }
