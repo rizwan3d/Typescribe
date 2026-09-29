@@ -2,13 +2,10 @@ using System.Collections;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using Typescribe.Desktop.ViewModels;
-using Typescribe.Domain.Models;
 
 namespace Typescribe.Desktop;
 
@@ -193,9 +190,6 @@ internal sealed class StudioUxPolish
             case Border border:
                 StyleBorder(border);
                 break;
-            case ListBox listBox:
-                StyleListBox(listBox);
-                break;
             case StackPanel stack when stack.Spacing <= 1.1:
                 AddClass(stack, "outliner-rows");
                 break;
@@ -224,7 +218,7 @@ internal sealed class StudioUxPolish
         {
             AddClass(textBox, "editor-canvas");
             textBox.FontSize = 16;
-            textBox.PlaceholderText = "Select a manuscript document in the Binder to begin writing.";
+            textBox.PlaceholderText = "Select a manuscript document in Project Explorer to begin writing.";
             _editor = textBox;
             EnsureEditorEmptyState(textBox);
         }
@@ -250,61 +244,6 @@ internal sealed class StudioUxPolish
         }
     }
 
-    private static void StyleListBox(ListBox listBox)
-    {
-        if (listBox.ContextMenu is null) return;
-        AddClass(listBox, "binder-list");
-        listBox.ItemTemplate = new FuncDataTemplate<BinderRowViewModel>(
-            static (row, _) => BuildBinderRow(row),
-            supportsRecycling: true);
-    }
-
-    private static Control BuildBinderRow(BinderRowViewModel row)
-    {
-        var icon = new TextBlock
-        {
-            Text = BinderIcon(row.Node.Kind),
-            Width = 20,
-            FontSize = 12,
-            Opacity = 0.72,
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center
-        };
-        AddClass(icon, "binder-icon");
-
-        var title = new TextBlock
-        {
-            Text = row.Node.Title,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center,
-            FontWeight = row.Node.IsContainer ? FontWeight.SemiBold : FontWeight.Normal
-        };
-        AddClass(title, "binder-title");
-
-        var compileState = new TextBlock
-        {
-            Text = row.Node.IncludeInCompilation ? "●" : "○",
-            FontSize = 9,
-            Opacity = row.Node.IncludeInCompilation ? 0.82 : 0.32,
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Width = 18
-        };
-        AddClass(compileState, "binder-compile-state");
-
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-            Margin = new Thickness(Math.Clamp(row.Depth, 0, 8) * 14, 0, 0, 0)
-        };
-        grid.Children.Add(icon);
-        Grid.SetColumn(title, 1);
-        grid.Children.Add(title);
-        Grid.SetColumn(compileState, 2);
-        grid.Children.Add(compileState);
-        return grid;
-    }
-
     private void EnsureEditorEmptyState(TextBox editor)
     {
         if (_editorEmptyState is not null || editor.Parent is not Grid parent) return;
@@ -320,7 +259,7 @@ internal sealed class StudioUxPolish
 
         var body = new TextBlock
         {
-            Text = "Select a chapter in the Binder, or create one to start writing.\nUse Corkboard and Outliner when you want to plan before drafting.",
+            Text = "Select a chapter in Project Explorer, or create one to start writing.\nUse Corkboard and Outliner when you want to plan before drafting.",
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Center,
             MaxWidth = 520,
@@ -378,19 +317,6 @@ internal sealed class StudioUxPolish
         if (textBlock.Text is "Synopsis" or "Notes" or "Status" or "Label" or "Keywords" or "Document word target" or "Custom metadata")
             AddClass(textBlock, "field-label");
     }
-
-    private static string BinderIcon(NodeKind kind) => kind switch
-    {
-        NodeKind.Book => "▣",
-        NodeKind.Part => "◆",
-        NodeKind.Folder => "▸",
-        NodeKind.Chapter => "▤",
-        NodeKind.Section => "§",
-        NodeKind.Scene => "▪",
-        NodeKind.Research => "⌕",
-        NodeKind.Note => "✎",
-        _ => "•"
-    };
 
     private static void AddClass(StyledElement element, string className)
     {
