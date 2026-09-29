@@ -51,10 +51,9 @@ public sealed class App : AvaloniaApplication
             StudioAuthoringEnhancements.Apply(window);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
 
-            // BinderTreeFeature is the sole visual owner of the Binder. The previous stack of
-            // ScrivenerBinderEnhancements + NavigatorStability + BinderHeadingVisibility all
-            // mutated the same ListBox and could undo clicks or rebuild rows under the pointer.
-            BinderTreeFeature.Apply(window, viewModel, repository);
+            // Native hierarchical Project Explorer. It replaces the legacy flat Binder visual
+            // after authoring features capture their compatibility selection bridge.
+            ProjectExplorerFeature.Apply(window, viewModel, repository, parser);
             PdfAutoFitEnhancement.Apply(window);
 
             ManuscriptEditorUpgrade.Apply(window, viewModel);
