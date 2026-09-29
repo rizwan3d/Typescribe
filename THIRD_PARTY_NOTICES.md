@@ -8,6 +8,15 @@ Typescribe uses third-party components and can download optional publishing comp
 - License: MIT
 - Source: https://github.com/AvaloniaUI/Avalonia
 
+## AvaloniaEdit
+
+- Project: AvaloniaEdit
+- Version: 12.0.0
+- License: MIT
+- Source: https://github.com/AvaloniaUI/AvaloniaEdit
+
+AvaloniaEdit provides the cross-platform, virtualized text engine underneath Typescribe's `ManuscriptEditor`. Typescribe supplies its own manuscript rendering and authoring semantics on top of that engine.
+
 ## PDFtoImage
 
 - Project: PDFtoImage
