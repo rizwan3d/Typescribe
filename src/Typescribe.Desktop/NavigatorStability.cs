@@ -10,24 +10,23 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Gives the left navigator a single stable item source. The base workspace and the
-/// Scrivenings feature both legitimately compute Binder views, but swapping ListBox
-/// ItemsSource instances during editor/autosave updates tears down item containers and can
-/// make rows appear to disappear. This coordinator accepts those incoming views, updates a
-/// permanent ObservableCollection in place, and keeps selection/collapse semantics intact.
-/// It also gives Bookmarks a stable source to eliminate visible flicker.
+/// Gives the left navigator one stable ItemsSource. BinderRows always remains the complete,
+/// canonical flattened project tree; collapse is only a projection over that tree. Incoming
+/// Binder views are used only to infer which visible containers are collapsed, so a stale or
+/// incomplete array can never become authoritative and permanently hide unrelated rows.
+/// Bookmarks likewise keep a permanent observable source to avoid container flicker.
 /// </summary>
 internal sealed class NavigatorStability
 {
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
-    private readonly ObservableCollection<BinderRowViewModel> _binderItems = [];
+    private readonly ObservableCollection<BinderRowViewModel> _visibleBinderRows = [];
     private readonly ObservableCollection<object?> _bookmarkItems = [];
-    private readonly DispatcherTimer _masterReconcileTimer;
+    private readonly HashSet<string> _collapsedContainers = new(StringComparer.Ordinal);
 
     private ListBox? _binder;
-    private ListBox? _bookmarks;
     private TabControl? _leftTabs;
+    private ListBox? _bookmarkList;
     private bool _restoringBinder;
     private bool _restoringBookmarks;
     private bool _discoverScheduled;
@@ -37,8 +36,6 @@ internal sealed class NavigatorStability
     {
         _window = window;
         _viewModel = viewModel;
-        _masterReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
-        _masterReconcileTimer.Tick += MasterReconcileTick;
     }
 
     public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
@@ -46,20 +43,44 @@ internal sealed class NavigatorStability
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(viewModel);
 
-        var coordinator = new NavigatorStability(window, viewModel);
-        window.Opened += coordinator.OnOpened;
-        window.LayoutUpdated += coordinator.OnLayoutUpdated;
-        window.Closed += coordinator.OnClosed;
-        viewModel.BinderRows.CollectionChanged += coordinator.MasterBinderChanged;
-        coordinator.ScheduleDiscover();
+        var host = new NavigatorStability(window, viewModel);
+        window.Opened += host.OnOpened;
+        window.LayoutUpdated += host.OnLayoutUpdated;
+        window.Closed += host.OnClosed;
+        viewModel.StateChanged += host.OnStateChanged;
+        viewModel.BinderRows.CollectionChanged += host.OnCanonicalBinderChanged;
+        host.ScheduleDiscover();
     }
 
     private void OnOpened(object? sender, EventArgs e) => ScheduleDiscover();
 
     private void OnLayoutUpdated(object? sender, EventArgs e)
     {
-        if (_binder is null || _leftTabs is null || _bookmarks is null)
-            ScheduleDiscover();
+        if (_binder is null || _bookmarkList is null) ScheduleDiscover();
+    }
+
+    private void OnStateChanged(object? sender, EventArgs e)
+        => Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed) return;
+            SynchronizeBinderProjection();
+            RestoreBinderSource();
+            SynchronizeBinderSelection();
+            if (_bookmarkList is null) ScheduleDiscover();
+        }, DispatcherPriority.Background);
+
+    private void OnCanonicalBinderChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_disposed) return;
+
+        var validIds = _viewModel.BinderRows
+            .Select(static row => row.Node.PersistentId)
+            .ToHashSet(StringComparer.Ordinal);
+        _collapsedContainers.RemoveWhere(id => !validIds.Contains(id));
+
+        SynchronizeBinderProjection();
+        RestoreBinderSource();
+        SynchronizeBinderSelection();
     }
 
     private void ScheduleDiscover()
@@ -79,286 +100,256 @@ internal sealed class NavigatorStability
 
         if (_binder is null)
         {
-            var candidate = controls.OfType<ListBox>().FirstOrDefault(static list => list.ContextMenu is not null);
-            if (candidate is not null) AttachBinder(candidate);
+            var binder = controls.OfType<ListBox>().FirstOrDefault(static list => list.ContextMenu is not null);
+            if (binder is not null) AttachBinder(binder);
         }
 
         if (_leftTabs is null)
         {
             _leftTabs = controls.OfType<TabControl>().FirstOrDefault(HasBinderTab);
             if (_leftTabs is not null)
-            {
-                _leftTabs.SelectionChanged += LeftTabsSelectionChanged;
-                _leftTabs.PropertyChanged += LeftTabsPropertyChanged;
-            }
+                _leftTabs.SelectionChanged += LeftTabSelectionChanged;
         }
 
-        AttachBookmarks();
+        AttachBookmarksList();
 
-        if (_binder is not null && _leftTabs is not null && _bookmarks is not null)
+        if (_binder is not null && _leftTabs is not null && _bookmarkList is not null)
             _window.LayoutUpdated -= OnLayoutUpdated;
     }
 
     private void AttachBinder(ListBox binder)
     {
         _binder = binder;
-        var initial = Rows(binder.ItemsSource);
-        SyncBinder(initial.Length > 0 ? initial : _viewModel.BinderRows.ToArray());
+        if (binder.ItemsSource is IEnumerable<BinderRowViewModel> proposal &&
+            !ReferenceEquals(binder.ItemsSource, _viewModel.BinderRows))
+            CaptureCollapseProposal(proposal);
+
+        SynchronizeBinderProjection();
         _restoringBinder = true;
-        try
-        {
-            binder.ItemsSource = _binderItems;
-            RestoreBinderSelection();
-        }
+        try { binder.ItemsSource = _visibleBinderRows; }
         finally { _restoringBinder = false; }
         binder.PropertyChanged += BinderPropertyChanged;
+        SynchronizeBinderSelection();
     }
 
     private void BinderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (_disposed || _restoringBinder || _binder is null || e.Property != ItemsControl.ItemsSourceProperty)
             return;
+        if (ReferenceEquals(_binder.ItemsSource, _visibleBinderRows)) return;
 
-        var incomingSource = _binder.ItemsSource;
-        if (ReferenceEquals(incomingSource, _binderItems)) return;
+        var proposedSource = _binder.ItemsSource;
 
-        // A base-window rebind to BinderRows is not a request to expand the entire tree;
-        // it is ordinary state churn. Preserve the current collapsed view and only reconcile
-        // structural changes against the master list.
-        if (ReferenceEquals(incomingSource, _viewModel.BinderRows))
-            ReconcileWithMasterPreservingCollapse();
-        else
-        {
-            var incoming = Rows(incomingSource);
-            if (incoming.Length > 0 || _viewModel.BinderRows.Count == 0)
-                SyncBinder(incoming);
-        }
+        // The base workspace assigns the full BinderRows collection during ordinary state
+        // updates. That is not an Expand All request, so never erase collapse state for it.
+        if (!ReferenceEquals(proposedSource, _viewModel.BinderRows) &&
+            proposedSource is IEnumerable<BinderRowViewModel> proposal)
+            CaptureCollapseProposal(proposal);
 
-        RestoreStableBinderSource();
+        SynchronizeBinderProjection();
+        RestoreBinderSource();
+        SynchronizeBinderSelection();
     }
 
-    private void RestoreStableBinderSource()
+    private void CaptureCollapseProposal(IEnumerable<BinderRowViewModel> proposal)
     {
-        if (_binder is null) return;
-        _restoringBinder = true;
-        try
+        var canonical = _viewModel.BinderRows;
+        if (canonical.Count == 0) return;
+
+        var proposed = proposal.ToArray();
+        if (proposed.Length == canonical.Count &&
+            proposed.Select(static row => row.Node.PersistentId)
+                .SequenceEqual(canonical.Select(static row => row.Node.PersistentId), StringComparer.Ordinal))
         {
-            _binder.ItemsSource = _binderItems;
-            RestoreBinderSelection();
-        }
-        finally { _restoringBinder = false; }
-    }
-
-    private void MasterBinderChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (_disposed) return;
-        _masterReconcileTimer.Stop();
-        _masterReconcileTimer.Start();
-    }
-
-    private void MasterReconcileTick(object? sender, EventArgs e)
-    {
-        _masterReconcileTimer.Stop();
-        if (_disposed || _binder is null) return;
-
-        // Give StudioScriveningsFeatures first chance to publish its newly-computed visible
-        // source. If it already did, consume that source directly. Otherwise reconcile the
-        // stable view with the master tree so add/delete/move operations never lose rows.
-        if (!ReferenceEquals(_binder.ItemsSource, _binderItems) &&
-            !ReferenceEquals(_binder.ItemsSource, _viewModel.BinderRows))
-        {
-            var incoming = Rows(_binder.ItemsSource);
-            if (incoming.Length > 0 || _viewModel.BinderRows.Count == 0)
-                SyncBinder(incoming);
-            RestoreStableBinderSource();
+            _collapsedContainers.Clear();
             return;
         }
 
-        ReconcileWithMasterPreservingCollapse();
-        RestoreBinderSelection();
-    }
+        var visibleIds = proposed
+            .Select(static row => row.Node.PersistentId)
+            .ToHashSet(StringComparer.Ordinal);
 
-    private void ReconcileWithMasterPreservingCollapse()
-    {
-        var master = _viewModel.BinderRows.ToArray();
-        if (master.Length == 0)
+        // Only containers that are themselves visible can communicate a collapse/expand
+        // decision. Containers hidden under an ancestor keep their previous state.
+        for (var index = 0; index < canonical.Count; index++)
         {
-            SyncBinder([]);
-            return;
-        }
+            var row = canonical[index];
+            if (!row.Node.IsContainer || !visibleIds.Contains(row.Node.PersistentId)) continue;
 
-        if (_binderItems.Count == 0)
-        {
-            SyncBinder(master);
-            return;
-        }
-
-        var visibleIds = _binderItems.Select(static row => row.Node.PersistentId).ToHashSet(StringComparer.Ordinal);
-        var collapsed = InferCollapsedContainers(master, visibleIds);
-        var visible = new List<BinderRowViewModel>(master.Length);
-        int? hiddenBelowDepth = null;
-
-        foreach (var row in master)
-        {
-            if (hiddenBelowDepth is { } hiddenDepth)
+            var hasDescendants = index + 1 < canonical.Count && canonical[index + 1].Depth > row.Depth;
+            if (!hasDescendants)
             {
-                if (row.Depth > hiddenDepth) continue;
+                _collapsedContainers.Remove(row.Node.PersistentId);
+                continue;
+            }
+
+            var anyVisibleDescendant = false;
+            for (var cursor = index + 1; cursor < canonical.Count; cursor++)
+            {
+                var descendant = canonical[cursor];
+                if (descendant.Depth <= row.Depth) break;
+                if (!visibleIds.Contains(descendant.Node.PersistentId)) continue;
+                anyVisibleDescendant = true;
+                break;
+            }
+
+            if (anyVisibleDescendant)
+                _collapsedContainers.Remove(row.Node.PersistentId);
+            else
+                _collapsedContainers.Add(row.Node.PersistentId);
+        }
+    }
+
+    private void SynchronizeBinderProjection()
+    {
+        var target = BuildVisibleBinderRows().ToArray();
+        var shared = Math.Min(_visibleBinderRows.Count, target.Length);
+
+        for (var index = 0; index < shared; index++)
+        {
+            var current = _visibleBinderRows[index];
+            var desired = target[index];
+            if (!ReferenceEquals(current, desired)) _visibleBinderRows[index] = desired;
+        }
+
+        while (_visibleBinderRows.Count > target.Length)
+            _visibleBinderRows.RemoveAt(_visibleBinderRows.Count - 1);
+        for (var index = _visibleBinderRows.Count; index < target.Length; index++)
+            _visibleBinderRows.Add(target[index]);
+    }
+
+    private IEnumerable<BinderRowViewModel> BuildVisibleBinderRows()
+    {
+        int? hiddenBelowDepth = null;
+        foreach (var row in _viewModel.BinderRows)
+        {
+            if (hiddenBelowDepth is { } depth)
+            {
+                if (row.Depth > depth) continue;
                 hiddenBelowDepth = null;
             }
 
-            visible.Add(row);
-            if (row.Node.IsContainer && collapsed.Contains(row.Node.PersistentId))
+            yield return row;
+            if (row.Node.IsContainer && _collapsedContainers.Contains(row.Node.PersistentId))
                 hiddenBelowDepth = row.Depth;
         }
-
-        SyncBinder(visible);
     }
 
-    private static HashSet<string> InferCollapsedContainers(
-        IReadOnlyList<BinderRowViewModel> master,
-        IReadOnlySet<string> visibleIds)
+    private void RestoreBinderSource()
     {
-        var collapsed = new HashSet<string>(StringComparer.Ordinal);
-        for (var index = 0; index < master.Count; index++)
-        {
-            var row = master[index];
-            if (!row.Node.IsContainer || !visibleIds.Contains(row.Node.PersistentId)) continue;
-
-            var hasDescendant = false;
-            var hasVisibleDescendant = false;
-            for (var cursor = index + 1; cursor < master.Count; cursor++)
-            {
-                var child = master[cursor];
-                if (child.Depth <= row.Depth) break;
-                hasDescendant = true;
-                if (visibleIds.Contains(child.Node.PersistentId))
-                {
-                    hasVisibleDescendant = true;
-                    break;
-                }
-            }
-
-            if (hasDescendant && !hasVisibleDescendant)
-                collapsed.Add(row.Node.PersistentId);
-        }
-        return collapsed;
+        if (_binder is null || ReferenceEquals(_binder.ItemsSource, _visibleBinderRows)) return;
+        _restoringBinder = true;
+        try { _binder.ItemsSource = _visibleBinderRows; }
+        finally { _restoringBinder = false; }
     }
 
-    private void SyncBinder(IEnumerable<BinderRowViewModel> source)
-    {
-        var incoming = source.ToArray();
-        var shared = Math.Min(_binderItems.Count, incoming.Length);
-        for (var index = 0; index < shared; index++)
-        {
-            if (!ReferenceEquals(_binderItems[index], incoming[index]))
-                _binderItems[index] = incoming[index];
-        }
-        while (_binderItems.Count > incoming.Length)
-            _binderItems.RemoveAt(_binderItems.Count - 1);
-        for (var index = _binderItems.Count; index < incoming.Length; index++)
-            _binderItems.Add(incoming[index]);
-    }
-
-    private void RestoreBinderSelection()
+    private void SynchronizeBinderSelection()
     {
         if (_binder is null) return;
-        var selectedId = _viewModel.SelectedRow?.Node.PersistentId ??
-                         (_binder.SelectedItem as BinderRowViewModel)?.Node.PersistentId;
-        if (selectedId is null) return;
-        var match = _binderItems.FirstOrDefault(row =>
+
+        var selectedId = _viewModel.SelectedRow?.Node.PersistentId;
+        if (selectedId is null)
+        {
+            _binder.SelectedItem = null;
+            return;
+        }
+
+        var visible = _visibleBinderRows.FirstOrDefault(row =>
             string.Equals(row.Node.PersistentId, selectedId, StringComparison.Ordinal));
-        if (match is not null) _binder.SelectedItem = match;
+        if (visible is not null && !ReferenceEquals(_binder.SelectedItem, visible))
+            _binder.SelectedItem = visible;
     }
 
-    private void LeftTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
-        => Dispatcher.UIThread.Post(AttachBookmarks, DispatcherPriority.Background);
+    private void LeftTabSelectionChanged(object? sender, SelectionChangedEventArgs e)
+        => Dispatcher.UIThread.Post(AttachBookmarksList, DispatcherPriority.Background);
 
-    private void LeftTabsPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    private void AttachBookmarksList()
     {
-        if (e.Property == ItemsControl.ItemsSourceProperty)
-            Dispatcher.UIThread.Post(AttachBookmarks, DispatcherPriority.Background);
-    }
-
-    private void AttachBookmarks()
-    {
-        if (_disposed || _leftTabs is null || _bookmarks is not null) return;
+        if (_disposed || _leftTabs is null || _bookmarkList is not null) return;
         var tab = TabItems(_leftTabs).FirstOrDefault(static item =>
             string.Equals(item.Header?.ToString(), "Bookmarks", StringComparison.Ordinal));
         if (tab?.Content is not Control content) return;
 
-        var list = content as ListBox ?? content.GetVisualDescendants().OfType<ListBox>().FirstOrDefault();
+        var list = FindListBox(content);
         if (list is null || ReferenceEquals(list, _binder)) return;
 
-        _bookmarks = list;
-        SyncBookmarks(list.ItemsSource);
+        _bookmarkList = list;
+        SynchronizeBookmarks(list.ItemsSource);
         _restoringBookmarks = true;
         try { list.ItemsSource = _bookmarkItems; }
         finally { _restoringBookmarks = false; }
-        list.PropertyChanged += BookmarksPropertyChanged;
+        list.PropertyChanged += BookmarkPropertyChanged;
     }
 
-    private void BookmarksPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    private void BookmarkPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
-        if (_disposed || _restoringBookmarks || _bookmarks is null ||
-            e.Property != ItemsControl.ItemsSourceProperty || ReferenceEquals(_bookmarks.ItemsSource, _bookmarkItems))
+        if (_disposed || _restoringBookmarks || _bookmarkList is null ||
+            e.Property != ItemsControl.ItemsSourceProperty || ReferenceEquals(_bookmarkList.ItemsSource, _bookmarkItems))
             return;
 
-        var selected = _bookmarks.SelectedItem;
-        SyncBookmarks(_bookmarks.ItemsSource);
+        var selected = _bookmarkList.SelectedItem;
+        SynchronizeBookmarks(_bookmarkList.ItemsSource);
         _restoringBookmarks = true;
         try
         {
-            _bookmarks.ItemsSource = _bookmarkItems;
+            _bookmarkList.ItemsSource = _bookmarkItems;
             if (selected is not null)
-                _bookmarks.SelectedItem = _bookmarkItems.FirstOrDefault(item => Equals(item, selected));
+                _bookmarkList.SelectedItem = _bookmarkItems.FirstOrDefault(item => Equals(item, selected));
         }
         finally { _restoringBookmarks = false; }
     }
 
-    private void SyncBookmarks(IEnumerable? source)
+    private void SynchronizeBookmarks(IEnumerable? source)
     {
         if (ReferenceEquals(source, _bookmarkItems)) return;
         var incoming = source?.Cast<object?>().ToArray() ?? [];
         var shared = Math.Min(_bookmarkItems.Count, incoming.Length);
+
         for (var index = 0; index < shared; index++)
-        {
-            if (!Equals(_bookmarkItems[index], incoming[index]))
-                _bookmarkItems[index] = incoming[index];
-        }
+            if (!Equals(_bookmarkItems[index], incoming[index])) _bookmarkItems[index] = incoming[index];
         while (_bookmarkItems.Count > incoming.Length)
             _bookmarkItems.RemoveAt(_bookmarkItems.Count - 1);
         for (var index = _bookmarkItems.Count; index < incoming.Length; index++)
             _bookmarkItems.Add(incoming[index]);
     }
 
-    private static BinderRowViewModel[] Rows(IEnumerable? source)
-        => source?.Cast<object?>().OfType<BinderRowViewModel>().ToArray() ?? [];
-
     private static bool HasBinderTab(TabControl tabs)
-        => TabItems(tabs).Any(static tab => string.Equals(tab.Header?.ToString(), "Binder", StringComparison.Ordinal));
+        => TabItems(tabs).Any(static item => string.Equals(item.Header?.ToString(), "Binder", StringComparison.Ordinal));
 
     private static IEnumerable<TabItem> TabItems(TabControl tabs)
     {
-        if (tabs.ItemsSource is IEnumerable source)
-            return source.Cast<object?>().OfType<TabItem>();
+        if (tabs.ItemsSource is IEnumerable source) return source.Cast<object?>().OfType<TabItem>();
         return tabs.Items.OfType<TabItem>();
+    }
+
+    private static ListBox? FindListBox(Control control)
+    {
+        if (control is ListBox list) return list;
+        if (control is Panel panel)
+        {
+            foreach (var child in panel.Children)
+            {
+                var found = FindListBox(child);
+                if (found is not null) return found;
+            }
+        }
+        if (control is ContentControl content && content.Content is Control childContent)
+            return FindListBox(childContent);
+        if (control is Decorator decorator && decorator.Child is Control child)
+            return FindListBox(child);
+        return null;
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _disposed = true;
-        _masterReconcileTimer.Stop();
-        _masterReconcileTimer.Tick -= MasterReconcileTick;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
-        _viewModel.BinderRows.CollectionChanged -= MasterBinderChanged;
+        _viewModel.StateChanged -= OnStateChanged;
+        _viewModel.BinderRows.CollectionChanged -= OnCanonicalBinderChanged;
         if (_binder is not null) _binder.PropertyChanged -= BinderPropertyChanged;
-        if (_bookmarks is not null) _bookmarks.PropertyChanged -= BookmarksPropertyChanged;
-        if (_leftTabs is not null)
-        {
-            _leftTabs.SelectionChanged -= LeftTabsSelectionChanged;
-            _leftTabs.PropertyChanged -= LeftTabsPropertyChanged;
-        }
+        if (_bookmarkList is not null) _bookmarkList.PropertyChanged -= BookmarkPropertyChanged;
+        if (_leftTabs is not null) _leftTabs.SelectionChanged -= LeftTabSelectionChanged;
     }
 }
