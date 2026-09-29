@@ -55,9 +55,10 @@ public sealed class App : AvaloniaApplication
             ScrivenerBinderEnhancements.Apply(window, viewModel, repository);
             LeftPanelStability.Apply(window, viewModel);
 
-            // Run last: the earlier studio layers retain their existing TextBox proxies,
-            // while every visible manuscript surface is replaced with ManuscriptEditor.
+            // The bridge runs before the advanced tools so the latter can target the real
+            // AvaloniaEdit manuscript surface for equation/code insertion and highlighting.
             ManuscriptEditorUpgrade.Apply(window, viewModel);
+            AdvancedTypesettingFeatures.Apply(window, viewModel);
             desktop.MainWindow = window;
         }
 
