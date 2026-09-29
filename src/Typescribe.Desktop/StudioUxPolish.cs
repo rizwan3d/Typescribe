@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -79,9 +80,6 @@ internal sealed class StudioUxPolish
             ApplyShellClasses();
             StyleOnce(_window);
 
-            // GetVisualDescendants() is a lazy walk over Avalonia's live visual collections.
-            // Some styling operations below intentionally alter templates/children, so first
-            // freeze the traversal into a snapshot and only then mutate controls.
             var controls = _window.GetVisualDescendants().OfType<Control>().ToArray();
             foreach (var control in controls) StyleOnce(control);
 
@@ -137,9 +135,27 @@ internal sealed class StudioUxPolish
             {
                 AddClass(inspector, "inspector-pane");
                 AddClass(inspectorTabs, "inspector-tabs");
-                inspectorTabs.TabStripPlacement = Dock.Left;
+                inspectorTabs.TabStripPlacement = Dock.Top;
+                MakeInspectorTabsCompact(inspectorTabs);
                 _inspectorTabs = inspectorTabs;
             }
+        }
+    }
+
+    private static void MakeInspectorTabsCompact(TabControl tabs)
+    {
+        IEnumerable<TabItem> items = tabs.ItemsSource is IEnumerable source
+            ? source.Cast<object?>().OfType<TabItem>()
+            : tabs.Items.OfType<TabItem>();
+
+        foreach (var tab in items)
+        {
+            tab.Width = double.NaN;
+            tab.MinWidth = 0;
+            tab.MinHeight = 30;
+            tab.Padding = new Thickness(7, 5);
+            tab.FontSize = 11;
+            tab.HorizontalContentAlignment = HorizontalAlignment.Center;
         }
     }
 
