@@ -25,7 +25,7 @@ internal sealed class LeftPanelStability
 
     private ListBox? _binder;
     private TabControl? _leftTabs;
-    private object? _preferredBinderSource;
+    private IEnumerable? _preferredBinderSource;
     private bool _restoringBinder;
     private bool _disposed;
 
@@ -185,17 +185,16 @@ internal sealed class LeftPanelStability
         _preferredBinderSource = null;
     }
 
-    private static SourceSnapshot Snapshot(object? source)
+    private static SourceSnapshot Snapshot(IEnumerable? source)
         => new(source, BuildSignature(source));
 
-    private static string BuildSignature(object? source)
+    private static string BuildSignature(IEnumerable? source)
     {
         if (source is null) return "<null>";
-        if (source is not IEnumerable enumerable) return $"{source.GetType().FullName}:{source}";
 
         var builder = new StringBuilder(256);
         var count = 0;
-        foreach (var item in enumerable)
+        foreach (var item in source)
         {
             if (count >= 512)
             {
@@ -240,5 +239,5 @@ internal sealed class LeftPanelStability
         _preferredBinderSource = null;
     }
 
-    private sealed record SourceSnapshot(object? Source, string Signature);
+    private sealed record SourceSnapshot(IEnumerable? Source, string Signature);
 }
