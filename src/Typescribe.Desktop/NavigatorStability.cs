@@ -327,16 +327,16 @@ internal sealed class NavigatorStability
         if (control is ListBox list) return list;
         if (control is Panel panel)
         {
-            foreach (var child in panel.Children)
+            foreach (var panelChild in panel.Children)
             {
-                var found = FindListBox(child);
+                var found = FindListBox(panelChild);
                 if (found is not null) return found;
             }
         }
         if (control is ContentControl content && content.Content is Control childContent)
             return FindListBox(childContent);
-        if (control is Decorator decorator && decorator.Child is Control child)
-            return FindListBox(child);
+        if (control is Decorator decorator && decorator.Child is Control decoratedChild)
+            return FindListBox(decoratedChild);
         return null;
     }
 
