@@ -19,7 +19,7 @@ public sealed class App : AvaloniaApplication
         Styles.Add(new FluentTheme());
         Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
         {
-            Source = new Uri("avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml")
+            Source = new Uri("avares://Typescribe/Styles/ManuscriptEditorTheme.axaml")
         });
         Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
         {
