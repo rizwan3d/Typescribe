@@ -50,9 +50,11 @@ public sealed class App : AvaloniaApplication
             StudioUxPolish.Apply(window);
             StudioAuthoringEnhancements.Apply(window);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
-            ScrivenerBinderEnhancements.Apply(window, viewModel, repository);
-            NavigatorStability.Apply(window, viewModel);
-            BinderHeadingVisibility.Apply(window, viewModel);
+
+            // BinderTreeFeature is the sole visual owner of the Binder. The previous stack of
+            // ScrivenerBinderEnhancements + NavigatorStability + BinderHeadingVisibility all
+            // mutated the same ListBox and could undo clicks or rebuild rows under the pointer.
+            BinderTreeFeature.Apply(window, viewModel, repository);
             PdfAutoFitEnhancement.Apply(window);
 
             ManuscriptEditorUpgrade.Apply(window, viewModel);
