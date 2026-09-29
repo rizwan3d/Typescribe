@@ -177,7 +177,29 @@ Searches can be saved as Collections.
 
 ## Book styles
 
-`styles/book.style` keeps presentation separate from manuscript content. The style editor exposes page dimensions, margins, body font, font size, line spacing, paragraph indentation/spacing, and justification. The same style model feeds live preview and final publishing.
+`styles/book.style` keeps presentation separate from manuscript content. Use **Project → Book Design & LaTeX…** to edit the persistent book-design model. Existing projects remain compatible because missing keys fall back to defaults.
+
+The design surface includes page size and mirrored margins, document class/options, table-of-contents and numbering depth, body/heading/monospace/math fonts, body size and line spacing, paragraph indentation/spacing, justification and colors, chapter/section/subsection sizing, heading spacing, quote typography, list spacing, caption and footnote sizes, code styling, running headers/footers, page numbers, microtype, widow/orphan control, extra packages, and a custom LuaLaTeX preamble.
+
+The same style model feeds both live preview and final publishing. LuaLaTeX output uses `fontspec`, `unicode-math`, `titlesec`, `enumitem`, `caption`, `fancyhdr`, `hyperref`, `xcolor`, and `listings`-based formatting as appropriate.
+
+## Visual equation builder
+
+Use **Insert → Advanced Equation…** to insert inline or display mathematics without having to remember every LaTeX command. The builder provides palettes for fractions, roots, powers, subscripts, integrals, sums, products, limits, matrices, cases, aligned equations, Greek letters, and common mathematical symbols while still allowing direct LuaLaTeX math source editing.
+
+The inserted manuscript remains plain text using `$…$` or `$$…$$`, so equations continue through the normal semantic AST and LuaLaTeX pipeline.
+
+## Code blocks and syntax themes
+
+Use **Insert → Code Block…** to choose a language and insert a fenced code block. Language tags such as `csharp`, `python`, `javascript`, `typescript`, `java`, `sql`, `bash`, `powershell`, `rust`, `go`, and `latex` are preserved in the manuscript.
+
+The editor highlights fenced code using the active book style's code foreground, background, keyword, string, and comment colors. Published PDFs use the same style through LaTeX `listings`, including code font/size, frame/background colors, wrapping, and optional line numbers.
+
+## Advanced LuaLaTeX controls
+
+Typescribe exposes advanced publishing controls without making raw LaTeX the manuscript format. Projects can choose a LaTeX document class and class options, add extra `\usepackage` entries, select Unicode text/heading/monospace/math fonts, configure running heads and feet, tune heading hierarchy and page geometry, and inject an explicit custom preamble for expert use.
+
+Custom preamble content is project-controlled and is written into the generated `.tex` before `\begin{document}`. LuaLaTeX is still launched with shell escape disabled.
 
 ## Realtime PDF preview and publishing
 
