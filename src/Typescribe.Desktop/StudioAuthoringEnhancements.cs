@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia;
@@ -11,12 +12,13 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Adds durable, author-focused workspace conveniences without coupling them to
-/// manuscript persistence or the publishing pipeline.
+/// Durable author-focused workspace conveniences. Navigation is driven directly by the
+/// WorkspaceViewModel so Favorites/Recent/Quick Reference do not depend on any Binder control.
 /// </summary>
 internal sealed class StudioAuthoringEnhancements
 {
     private readonly StudioWorkspaceWindow _window;
+    private readonly WorkspaceViewModel _viewModel;
     private readonly string _workspaceDirectory;
     private readonly string _favoritesPath;
     private readonly List<FavoriteEntry> _favorites = [];
@@ -28,15 +30,15 @@ internal sealed class StudioAuthoringEnhancements
         AcceptsReturn = true,
         TextWrapping = Avalonia.Media.TextWrapping.Wrap,
         MinHeight = 260,
-        Watermark = "Project notes, loose ideas, reminders, research leads…"
+        PlaceholderText = "Project notes, loose ideas, reminders, research leads…"
     };
     private readonly DispatcherTimer _scratchpadTimer;
 
-    private ListBox? _binder;
     private TextBox? _editor;
     private TabControl? _leftTabs;
     private TabControl? _inspectorTabs;
     private string? _scratchpadKey;
+    private string? _lastSelectionId;
     private int _historyIndex = -1;
     private bool _navigatingHistory;
     private bool _favoritesInjected;
@@ -46,9 +48,10 @@ internal sealed class StudioAuthoringEnhancements
     private bool _disposed;
     private bool _loadingScratchpad;
 
-    private StudioAuthoringEnhancements(StudioWorkspaceWindow window)
+    private StudioAuthoringEnhancements(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
     {
         _window = window;
+        _viewModel = viewModel;
         _workspaceDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Typescribe",
@@ -71,19 +74,30 @@ internal sealed class StudioAuthoringEnhancements
         };
     }
 
-    public static void Apply(StudioWorkspaceWindow window)
+    public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
     {
         ArgumentNullException.ThrowIfNull(window);
-        var host = new StudioAuthoringEnhancements(window);
+        ArgumentNullException.ThrowIfNull(viewModel);
+        var host = new StudioAuthoringEnhancements(window, viewModel);
         window.Opened += host.OnOpened;
         window.LayoutUpdated += host.OnLayoutUpdated;
         window.KeyDown += host.OnWindowKeyDown;
         window.Closed += host.OnClosed;
+        viewModel.StateChanged += host.OnViewModelStateChanged;
         host.ScheduleApply();
     }
 
     private void OnOpened(object? sender, EventArgs e) => ScheduleApply();
     private void OnLayoutUpdated(object? sender, EventArgs e) => ScheduleApply();
+
+    private void OnViewModelStateChanged(object? sender, EventArgs e)
+        => Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed) return;
+            CaptureCurrentSelection();
+            RefreshFavorites();
+            RefreshScratchpadProject();
+        }, DispatcherPriority.Background);
 
     private void ScheduleApply()
     {
@@ -101,7 +115,6 @@ internal sealed class StudioAuthoringEnhancements
         var controls = _window.GetVisualDescendants().OfType<Control>().ToArray();
         HideLegacyToolbar();
 
-        _binder ??= controls.OfType<ListBox>().FirstOrDefault(static list => list.ContextMenu is not null);
         _editor ??= controls.OfType<TextBox>().FirstOrDefault(static box => box.AcceptsReturn && box.AcceptsTab);
 
         foreach (var tabControl in controls.OfType<TabControl>())
@@ -111,19 +124,16 @@ internal sealed class StudioAuthoringEnhancements
             if (_inspectorTabs is null && headers.Contains("Inspector", StringComparer.Ordinal)) _inspectorTabs = tabControl;
         }
 
-        if (_binder is not null && !_binder.Classes.Contains("authoring-history-wired"))
-        {
-            _binder.Classes.Add("authoring-history-wired");
-            _binder.SelectionChanged += BinderSelectionChanged;
-            CaptureCurrentSelection();
-        }
-
         InjectFavoritesTab();
         InjectScratchpadTab();
         InjectMenuCommands(controls.OfType<Menu>().FirstOrDefault());
+        CaptureCurrentSelection();
         RefreshFavorites();
         RefreshRecent();
         RefreshScratchpadProject();
+
+        if (_editor is not null && _leftTabs is not null && _inspectorTabs is not null && _menuInjected)
+            _window.LayoutUpdated -= OnLayoutUpdated;
     }
 
     private void HideLegacyToolbar()
@@ -144,14 +154,14 @@ internal sealed class StudioAuthoringEnhancements
             return;
         }
 
-        _favoritesList.DoubleTapped += (_, _) => NavigateFavorite();
-        _recentList.DoubleTapped += (_, _) => NavigateRecent();
+        _favoritesList.DoubleTapped += async (_, _) => await NavigateFavoriteAsync();
+        _recentList.DoubleTapped += async (_, _) => await NavigateRecentAsync();
 
         var back = new Button { Content = "← Back" };
         var forward = new Button { Content = "Forward →", Margin = new Thickness(6, 0, 0, 0) };
         var add = new Button { Content = "★ Favorite", Margin = new Thickness(6, 0, 0, 0) };
-        back.Click += (_, _) => NavigateHistory(-1);
-        forward.Click += (_, _) => NavigateHistory(1);
+        back.Click += async (_, _) => await NavigateHistoryAsync(-1);
+        forward.Click += async (_, _) => await NavigateHistoryAsync(1);
         add.Click += (_, _) => AddSelectedFavorite();
 
         var remove = new Button { Content = "Remove" };
@@ -173,7 +183,12 @@ internal sealed class StudioAuthoringEnhancements
         Grid.SetRow(_favoritesList, 2);
         panel.Children.Add(_favoritesList);
 
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 8), Children = { remove, quick } };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 6, 0, 8),
+            Children = { remove, quick }
+        };
         Grid.SetRow(actions, 3);
         panel.Children.Add(actions);
 
@@ -230,9 +245,9 @@ internal sealed class StudioAuthoringEnhancements
         {
             var existing = ToMenuItems(view.ItemsSource);
             existing.Add(new Separator());
-            existing.Add(MenuCommand("Back", () => NavigateHistory(-1), new KeyGesture(Key.Left, KeyModifiers.Alt)));
-            existing.Add(MenuCommand("Forward", () => NavigateHistory(1), new KeyGesture(Key.Right, KeyModifiers.Alt)));
-            existing.Add(MenuCommand("Quick Reference", OpenQuickReference, new KeyGesture(Key.Q, PrimaryModifier() | KeyModifiers.Shift)));
+            existing.Add(MenuCommand("Back", () => NavigateHistoryAsync(-1), new KeyGesture(Key.Left, KeyModifiers.Alt)));
+            existing.Add(MenuCommand("Forward", () => NavigateHistoryAsync(1), new KeyGesture(Key.Right, KeyModifiers.Alt)));
+            existing.Add(MenuCommand("Quick Reference", () => { OpenQuickReference(); return Task.CompletedTask; }, new KeyGesture(Key.Q, PrimaryModifier() | KeyModifiers.Shift)));
             view.ItemsSource = existing.ToArray();
         }
 
@@ -240,24 +255,21 @@ internal sealed class StudioAuthoringEnhancements
         {
             var existing = ToMenuItems(document.ItemsSource);
             existing.Add(new Separator());
-            existing.Add(MenuCommand("Add to Favorites", AddSelectedFavorite, new KeyGesture(Key.D, PrimaryModifier() | KeyModifiers.Shift)));
+            existing.Add(MenuCommand("Add to Favorites", () => { AddSelectedFavorite(); return Task.CompletedTask; }, new KeyGesture(Key.D, PrimaryModifier() | KeyModifiers.Shift)));
             document.ItemsSource = existing.ToArray();
         }
         _menuInjected = true;
     }
 
-    private void BinderSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_navigatingHistory) return;
-        CaptureCurrentSelection();
-        RefreshFavorites();
-    }
-
     private void CaptureCurrentSelection()
     {
-        if (_binder?.SelectedItem is not BinderRowViewModel row) return;
+        if (_navigatingHistory || _viewModel.SelectedRow is not { } row) return;
         var id = row.Node.PersistentId;
-        if (_historyIndex >= 0 && _historyIndex < _history.Count && string.Equals(_history[_historyIndex].PersistentId, id, StringComparison.Ordinal))
+        if (string.Equals(id, _lastSelectionId, StringComparison.Ordinal)) return;
+        _lastSelectionId = id;
+
+        if (_historyIndex >= 0 && _historyIndex < _history.Count &&
+            string.Equals(_history[_historyIndex].PersistentId, id, StringComparison.Ordinal))
             return;
 
         if (_historyIndex + 1 < _history.Count)
@@ -269,34 +281,39 @@ internal sealed class StudioAuthoringEnhancements
         RefreshRecent();
     }
 
-    private void NavigateHistory(int offset)
+    private async Task NavigateHistoryAsync(int offset)
     {
-        if (_binder is null || _history.Count == 0) return;
+        if (_history.Count == 0) return;
         var target = Math.Clamp(_historyIndex + offset, 0, _history.Count - 1);
         if (target == _historyIndex) return;
-        if (SelectBinderNode(_history[target].PersistentId)) _historyIndex = target;
+        if (await SelectNodeAsync(_history[target].PersistentId)) _historyIndex = target;
         RefreshRecent();
     }
 
-    private bool SelectBinderNode(string persistentId)
+    private async Task<bool> SelectNodeAsync(string persistentId)
     {
-        if (_binder is null) return false;
-        var row = BinderRows().FirstOrDefault(candidate => string.Equals(candidate.Node.PersistentId, persistentId, StringComparison.Ordinal));
+        var row = _viewModel.BinderRows.FirstOrDefault(candidate =>
+            string.Equals(candidate.Node.PersistentId, persistentId, StringComparison.Ordinal));
         if (row is null) return false;
+
         _navigatingHistory = true;
         try
         {
-            _binder.SelectedItem = row;
-            _binder.ScrollIntoView(row);
+            await _viewModel.SelectAsync(row);
+            _lastSelectionId = row.Node.PersistentId;
         }
-        finally { _navigatingHistory = false; }
+        finally
+        {
+            _navigatingHistory = false;
+        }
         return true;
     }
 
     private void AddSelectedFavorite()
     {
-        if (_binder?.SelectedItem is not BinderRowViewModel row) return;
-        var existing = _favorites.FindIndex(item => string.Equals(item.PersistentId, row.Node.PersistentId, StringComparison.Ordinal));
+        if (_viewModel.SelectedRow is not { } row) return;
+        var existing = _favorites.FindIndex(item =>
+            string.Equals(item.PersistentId, row.Node.PersistentId, StringComparison.Ordinal));
         var entry = new FavoriteEntry(row.Node.PersistentId, row.Node.Title);
         if (existing >= 0) _favorites[existing] = entry;
         else _favorites.Add(entry);
@@ -312,19 +329,21 @@ internal sealed class StudioAuthoringEnhancements
         RefreshFavorites();
     }
 
-    private void NavigateFavorite()
+    private async Task NavigateFavoriteAsync()
     {
-        if (_favoritesList.SelectedItem is FavoriteEntry selected) SelectBinderNode(selected.PersistentId);
+        if (_favoritesList.SelectedItem is FavoriteEntry selected)
+            await SelectNodeAsync(selected.PersistentId);
     }
 
-    private void NavigateRecent()
+    private async Task NavigateRecentAsync()
     {
-        if (_recentList.SelectedItem is NavigationEntry selected) SelectBinderNode(selected.PersistentId);
+        if (_recentList.SelectedItem is NavigationEntry selected)
+            await SelectNodeAsync(selected.PersistentId);
     }
 
     private void RefreshFavorites()
     {
-        var available = BinderRows().ToDictionary(static row => row.Node.PersistentId, StringComparer.Ordinal);
+        var available = _viewModel.BinderRows.ToDictionary(static row => row.Node.PersistentId, StringComparer.Ordinal);
         var visible = new List<FavoriteEntry>();
         foreach (var favorite in _favorites)
         {
@@ -344,7 +363,7 @@ internal sealed class StudioAuthoringEnhancements
 
     private void OpenQuickReference()
     {
-        if (_binder?.SelectedItem is not BinderRowViewModel row || !row.Node.IsDocument || _editor is null) return;
+        if (_viewModel.SelectedRow is not { } row || !row.Node.IsDocument || _editor is null) return;
         var reference = new Window
         {
             Title = $"{row.Node.Title} — Quick Reference",
@@ -410,9 +429,6 @@ internal sealed class StudioAuthoringEnhancements
     private static string ScratchpadKey(string value)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant()[..20];
 
-    private IEnumerable<BinderRowViewModel> BinderRows()
-        => _binder?.ItemsSource is IEnumerable<BinderRowViewModel> rows ? rows : [];
-
     private void LoadFavorites()
     {
         if (!File.Exists(_favoritesPath)) return;
@@ -437,25 +453,26 @@ internal sealed class StudioAuthoringEnhancements
     {
         try
         {
-            var lines = _favorites.Select(item => $"{item.PersistentId}\t{Convert.ToBase64String(Encoding.UTF8.GetBytes(item.Title))}");
+            var lines = _favorites.Select(item =>
+                $"{item.PersistentId}\t{Convert.ToBase64String(Encoding.UTF8.GetBytes(item.Title))}");
             File.WriteAllLines(_favoritesPath, lines, new UTF8Encoding(false));
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }
 
-    private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
         var primary = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
         if (e.KeyModifiers.HasFlag(KeyModifiers.Alt) && e.Key == Key.Left)
         {
             e.Handled = true;
-            NavigateHistory(-1);
+            await NavigateHistoryAsync(-1);
         }
         else if (e.KeyModifiers.HasFlag(KeyModifiers.Alt) && e.Key == Key.Right)
         {
             e.Handled = true;
-            NavigateHistory(1);
+            await NavigateHistoryAsync(1);
         }
         else if (primary && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.Q)
         {
@@ -499,7 +516,7 @@ internal sealed class StudioAuthoringEnhancements
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.KeyDown -= OnWindowKeyDown;
         _window.Closed -= OnClosed;
-        if (_binder is not null) _binder.SelectionChanged -= BinderSelectionChanged;
+        _viewModel.StateChanged -= OnViewModelStateChanged;
     }
 
     private static TextBlock SectionLabel(string text) => new()
@@ -519,12 +536,19 @@ internal sealed class StudioAuthoringEnhancements
         => source is IEnumerable<object> items ? items.ToList() : [];
 
     private static bool HeaderEquals(MenuItem item, string expected)
-        => string.Equals((item.Header?.ToString() ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal), expected, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(
+            (item.Header?.ToString() ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal),
+            expected,
+            StringComparison.OrdinalIgnoreCase);
 
-    private static MenuItem MenuCommand(string header, Action action, KeyGesture? gesture = null)
+    private static MenuItem MenuCommand(string header, Func<Task> action, KeyGesture? gesture = null)
     {
         var item = new MenuItem { Header = header, InputGesture = gesture };
-        item.Click += (_, _) => action();
+        item.Click += async (_, _) =>
+        {
+            try { await action(); }
+            catch { }
+        };
         return item;
     }
 
