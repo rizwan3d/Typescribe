@@ -25,13 +25,16 @@ internal sealed class StudioNavigationPolish
     private readonly WorkspaceViewModel _viewModel;
     private readonly TextBox _quickSearch = new()
     {
-        Width = 320,
-        MinWidth = 220,
+        Name = "ProjectSearchBox",
+        Width = 360,
+        MinWidth = 240,
         Watermark = "Search project (Ctrl+F)",
         VerticalAlignment = VerticalAlignment.Center,
+        HorizontalAlignment = HorizontalAlignment.Left,
         Margin = new Thickness(10, 2, 8, 2)
     };
 
+    private Grid? _root;
     private Grid? _topBar;
     private Menu? _menu;
     private bool _findMenuHooked;
@@ -55,7 +58,6 @@ internal sealed class StudioNavigationPolish
     private void Attach()
     {
         _quickSearch.KeyDown += QuickSearchKeyDown;
-        _window.KeyDown += WindowKeyDown;
         _window.Opened += WindowOpened;
         _window.LayoutUpdated += WindowLayoutUpdated;
         _window.Closed += WindowClosed;
@@ -86,11 +88,14 @@ internal sealed class StudioNavigationPolish
         if (menu is null) return;
 
         root.Children.Remove(menu);
+        _root = root;
+        _root.KeyDown += RootKeyDown;
         _menu = menu;
+        menu.HorizontalAlignment = HorizontalAlignment.Left;
 
         var topBar = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         topBar.Children.Add(menu);
@@ -144,7 +149,7 @@ internal sealed class StudioNavigationPolish
         await RunQuickSearchAsync();
     }
 
-    private void WindowKeyDown(object? sender, KeyEventArgs e)
+    private void RootKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.F || (e.KeyModifiers & KeyModifiers.Control) == 0) return;
         e.Handled = true;
@@ -243,7 +248,7 @@ internal sealed class StudioNavigationPolish
     {
         _disposed = true;
         _quickSearch.KeyDown -= QuickSearchKeyDown;
-        _window.KeyDown -= WindowKeyDown;
+        if (_root is not null) _root.KeyDown -= RootKeyDown;
         _window.Opened -= WindowOpened;
         _window.LayoutUpdated -= WindowLayoutUpdated;
         _window.Closed -= WindowClosed;
