@@ -54,6 +54,7 @@ public sealed class App : AvaloniaApplication
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
             ScrivenerBinderEnhancements.Apply(window, viewModel, repository);
             NavigatorStability.Apply(window, viewModel);
+            BinderHeadingVisibility.Apply(window, viewModel);
 
             // The bridge runs before the advanced tools so the latter can target the real
             // AvaloniaEdit manuscript surface for equation/code insertion and highlighting.
