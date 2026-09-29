@@ -104,11 +104,11 @@ internal sealed class StudioNavigationPolish
             Padding = new Thickness(8, 2),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
-            Child = _quickSearch
+            Child = _quickSearch,
+            ZIndex = 20
         };
 
         Grid.SetRow(_searchHost, 0);
-        Panel.SetZIndex(_searchHost, 20);
         root.Children.Add(_searchHost);
         PositionSearchNextToMenu();
     }
