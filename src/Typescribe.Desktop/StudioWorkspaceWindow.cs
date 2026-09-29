@@ -5,7 +5,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Typescribe.Application.Models;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Domain.Models;
@@ -14,8 +13,6 @@ namespace Typescribe.Desktop;
 
 public sealed class StudioWorkspaceWindow : Window
 {
-    private static readonly DataFormat<BinderRowViewModel> BinderRowFormat =
-        DataFormat.CreateInProcessFormat<BinderRowViewModel>("typescribe-binder-row");
     private static readonly DataFormat<CorkboardCardViewModel> CorkboardCardFormat =
         DataFormat.CreateInProcessFormat<CorkboardCardViewModel>("typescribe-corkboard-card");
 
@@ -23,7 +20,12 @@ public sealed class StudioWorkspaceWindow : Window
     private readonly AuthoringFeatureCoordinator _features = new();
     private readonly PdfPreviewRenderer _pdfPreviewRenderer = new();
 
-    private readonly ListBox _binder = new();
+    private readonly Grid _projectExplorerHost = new()
+    {
+        Name = "ProjectExplorerHost",
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        VerticalAlignment = VerticalAlignment.Stretch
+    };
     private readonly TextBox _searchBox = new();
     private readonly ListBox _searchResults = new();
     private readonly CheckBox _regexSearch = new() { Content = "Regex" };
@@ -109,9 +111,6 @@ public sealed class StudioWorkspaceWindow : Window
     private CancellationTokenSource? _previewRenderCts;
     private CancellationTokenSource? _metadataSaveCts;
     private PdfPreviewPage? _renderedPreviewPage;
-    private BinderRowViewModel? _binderDragCandidate;
-    private PointerPressedEventArgs? _binderDragTrigger;
-    private Point _binderDragStart;
     private CorkboardCardViewModel? _cardDragCandidate;
     private PointerPressedEventArgs? _cardDragTrigger;
     private Point _cardDragStart;
@@ -142,12 +141,6 @@ public sealed class StudioWorkspaceWindow : Window
         Content = BuildLayout();
 
         _viewModel.StateChanged += OnStateChanged;
-        _binder.SelectionChanged += BinderSelectionChanged;
-        _binder.PointerPressed += BinderPointerPressed;
-        _binder.PointerMoved += BinderPointerMoved;
-        DragDrop.SetAllowDrop(_binder, true);
-        DragDrop.AddDragOverHandler(_binder, BinderDragOver);
-        DragDrop.AddDropHandler(_binder, BinderDrop);
         _outline.SelectionChanged += OutlineSelectionChanged;
         _editor.TextChanged += EditorTextChanged;
         _searchBox.KeyDown += SearchBoxKeyDown;
@@ -250,11 +243,11 @@ public sealed class StudioWorkspaceWindow : Window
             {
                 MenuAction("_Find in Project", FocusSearchAsync, new KeyGesture(Key.F, KeyModifiers.Control)),
                 new Separator(),
-                MenuAction("_Rename Binder Item", RenameBinderNodeAsync, new KeyGesture(Key.F2)),
-                MenuAction("_Delete Binder Item", DeleteBinderNodeAsync),
+                MenuAction("_Rename Project Item", RenameBinderNodeAsync, new KeyGesture(Key.F2)),
+                MenuAction("_Delete Project Item", DeleteBinderNodeAsync),
                 new Separator(),
-                MenuAction("Move Binder Item _Up", () => MoveSelectedAsync(-1)),
-                MenuAction("Move Binder Item _Down", () => MoveSelectedAsync(1))
+                MenuAction("Move Project Item _Up", () => MoveSelectedAsync(-1)),
+                MenuAction("Move Project Item _Down", () => MoveSelectedAsync(1))
             }
         };
 
@@ -385,10 +378,6 @@ public sealed class StudioWorkspaceWindow : Window
 
     private Control BuildLeftPane()
     {
-        _binder.HorizontalAlignment = HorizontalAlignment.Stretch;
-        _binder.VerticalAlignment = VerticalAlignment.Stretch;
-        _binder.ContextMenu = BuildBinderContextMenu();
-
         var binderActions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6) };
         foreach (var pair in new (string Text, NodeKind Kind)[]
                  {
@@ -400,10 +389,10 @@ public sealed class StudioWorkspaceWindow : Window
             binderActions.Children.Add(button);
         }
 
-        var binderPanel = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        binderPanel.Children.Add(binderActions);
-        Grid.SetRow(_binder, 1);
-        binderPanel.Children.Add(_binder);
+        var explorerPanel = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        explorerPanel.Children.Add(binderActions);
+        Grid.SetRow(_projectExplorerHost, 1);
+        explorerPanel.Children.Add(_projectExplorerHost);
 
         var searchButton = new Button { Content = "Search" };
         var saveSearch = new Button { Content = "Save Search", Margin = new Thickness(6, 0, 0, 0) };
@@ -450,7 +439,7 @@ public sealed class StudioWorkspaceWindow : Window
 
         _leftTabs.ItemsSource = new object[]
         {
-            new TabItem { Header = "Binder", Content = binderPanel },
+            new TabItem { Header = "Binder", Content = explorerPanel },
             new TabItem { Header = "Search", Content = searchPanel },
             new TabItem { Header = "Collections", Content = collectionsPanel }
         };
@@ -708,26 +697,6 @@ public sealed class StudioWorkspaceWindow : Window
         return bar;
     }
 
-    private ContextMenu BuildBinderContextMenu() => new()
-    {
-        ItemsSource = new object[]
-        {
-            MenuAction("New Chapter…", () => AddBinderNodeAsync(NodeKind.Chapter, "New Chapter")),
-            MenuAction("New Part…", () => AddBinderNodeAsync(NodeKind.Part, "New Part")),
-            MenuAction("New Folder…", () => AddBinderNodeAsync(NodeKind.Folder, "New Folder")),
-            new Separator(),
-            MenuAction("Rename", RenameBinderNodeAsync),
-            MenuAction("Delete", DeleteBinderNodeAsync),
-            new Separator(),
-            MenuAction("Move Up", () => MoveSelectedAsync(-1)),
-            MenuAction("Move Down", () => MoveSelectedAsync(1)),
-            MenuAction("Include / Exclude", ToggleCompilationAsync),
-            new Separator(),
-            MenuAction("Add Comment…", AddCommentAsync),
-            MenuAction("Take Snapshot…", TakeSnapshotAsync)
-        }
-    };
-
     private async Task CreateProjectAsync()
     {
         await FlushMetadataAsync();
@@ -786,7 +755,7 @@ public sealed class StudioWorkspaceWindow : Window
     {
         if (!_viewModel.HasSelection) return;
         await FlushMetadataAsync();
-        var title = await DesktopDialogService.PromptAsync(this, "Rename Binder Item", "Title", _viewModel.SelectedTitle);
+        var title = await DesktopDialogService.PromptAsync(this, "Rename Project Item", "Title", _viewModel.SelectedTitle);
         if (title is null) return;
         await _viewModel.RenameSelectedAsync(title);
         await ReloadAdvancedStructureAsync();
@@ -796,7 +765,7 @@ public sealed class StudioWorkspaceWindow : Window
     {
         if (!_viewModel.HasSelection) return;
         await FlushMetadataAsync();
-        var confirmed = await DesktopDialogService.ConfirmAsync(this, "Delete Binder Item", $"Delete '{_viewModel.SelectedTitle}' and its on-disk content?", "Delete");
+        var confirmed = await DesktopDialogService.ConfirmAsync(this, "Delete Project Item", $"Delete '{_viewModel.SelectedTitle}' and its on-disk content?", "Delete");
         if (!confirmed) return;
         await _viewModel.DeleteSelectedAsync();
         await ReloadAdvancedStructureAsync();
@@ -916,7 +885,7 @@ public sealed class StudioWorkspaceWindow : Window
 
     private async Task CreateManualCollectionAsync()
     {
-        var node = _viewModel.SelectedRow?.Node ?? throw new InvalidOperationException("Select a binder item first.");
+        var node = _viewModel.SelectedRow?.Node ?? throw new InvalidOperationException("Select a project item first.");
         var name = await DesktopDialogService.PromptAsync(this, "New Collection", "Collection name", "New Collection");
         if (name is null) return;
         await _features.CreateManualCollectionAsync(name, [node]);
@@ -929,7 +898,7 @@ public sealed class StudioWorkspaceWindow : Window
         var collection = SelectedCollection();
         var node = _viewModel.SelectedRow?.Node;
         if (collection is null || node is null) return;
-        if (collection.Kind != ProjectCollectionKind.Manual) throw new InvalidOperationException("Only manual collections can accept binder items.");
+        if (collection.Kind != ProjectCollectionKind.Manual) throw new InvalidOperationException("Only manual collections can accept project items.");
         await _features.AddToManualCollectionAsync(collection, node);
         RefreshCollections();
     }
@@ -964,7 +933,7 @@ public sealed class StudioWorkspaceWindow : Window
                 _caseSearch.IsChecked = collection.MatchCase;
                 _regexSearch.IsChecked = collection.UseRegex;
                 _wholeWordSearch.IsChecked = collection.WholeWord;
-                await _viewModel.SearchAsync(collection.Query, new SearchOptions(collection.MatchCase, collection.UseRegex, collection.WholeWord));
+                await _viewModel.SearchAsync(collection.Query, new SearchOptions(collection.MatchCase, collection.MatchCase, collection.WholeWord));
                 RefreshSearchResults();
                 _leftTabs.SelectedIndex = 1;
             }
@@ -1262,77 +1231,6 @@ public sealed class StudioWorkspaceWindow : Window
         return file?.Path.LocalPath;
     }
 
-    private async void BinderSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_updatingUi || _binder.SelectedItem is not BinderRowViewModel row) return;
-        await RunUiTaskAsync(async () =>
-        {
-            await FlushMetadataAsync();
-            _previewPageIndex = 0;
-            _loadedPreviewVersion = -1;
-            await _viewModel.SelectAsync(row);
-            if (_features.HasProject) await _features.RefreshStatisticsAsync();
-            _features.UpdateSelectedWords(row.Node.PersistentId, _viewModel.WordCount);
-            RefreshAdvancedViews();
-        });
-    }
-
-    private void BinderPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var point = e.GetCurrentPoint(_binder);
-        if (!point.Properties.IsLeftButtonPressed) return;
-        var row = FindBinderRow(e.Source);
-        if (row is null) return;
-        _binderDragCandidate = row;
-        _binderDragTrigger = e;
-        _binderDragStart = e.GetPosition(_binder);
-    }
-
-    private async void BinderPointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (_binderDragCandidate is null || _binderDragTrigger is null) return;
-        if (!e.GetCurrentPoint(_binder).Properties.IsLeftButtonPressed)
-        {
-            ClearBinderDragCandidate();
-            return;
-        }
-        var current = e.GetPosition(_binder);
-        var dx = current.X - _binderDragStart.X;
-        var dy = current.Y - _binderDragStart.Y;
-        if ((dx * dx) + (dy * dy) < 64) return;
-        var candidate = _binderDragCandidate;
-        var trigger = _binderDragTrigger;
-        ClearBinderDragCandidate();
-        var data = new DataTransfer();
-        data.Add(DataTransferItem.Create(BinderRowFormat, candidate));
-        await DragDrop.DoDragDropAsync(trigger, data, DragDropEffects.Move);
-    }
-
-    private void BinderDragOver(object? sender, DragEventArgs e)
-    {
-        var source = e.DataTransfer.TryGetValue(BinderRowFormat);
-        var target = FindBinderRow(e.Source);
-        e.DragEffects = _viewModel.CanDropBinderItem(source, target) ? DragDropEffects.Move : DragDropEffects.None;
-    }
-
-    private async void BinderDrop(object? sender, DragEventArgs e)
-    {
-        var source = e.DataTransfer.TryGetValue(BinderRowFormat);
-        var target = FindBinderRow(e.Source);
-        if (!_viewModel.CanDropBinderItem(source, target) || source is null || target is null)
-        {
-            e.DragEffects = DragDropEffects.None;
-            return;
-        }
-        var placement = GetBinderDropPlacement(e, FindBinderListItem(e.Source), target);
-        e.DragEffects = DragDropEffects.Move;
-        await RunUiTaskAsync(async () =>
-        {
-            await _viewModel.MoveBinderItemAsync(source, target, placement == BinderDropPlacement.Inside, placement == BinderDropPlacement.After);
-            await ReloadAdvancedStructureAsync();
-        });
-    }
-
     private async void OutlineSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_updatingUi || _outline.SelectedItem is not OutlineItemViewModel item) return;
@@ -1516,7 +1414,7 @@ public sealed class StudioWorkspaceWindow : Window
         _corkboardTitle.Text = $"Corkboard — {_viewModel.CorkboardTitle}";
         foreach (var card in _viewModel.CorkboardCards) _corkboardPanel.Children.Add(BuildCorkboardCard(card));
         if (_viewModel.CorkboardCards.Count == 0)
-            _corkboardPanel.Children.Add(new TextBlock { Text = "This binder group has no cards yet.", Margin = new Thickness(18), Opacity = 0.7 });
+            _corkboardPanel.Children.Add(new TextBlock { Text = "This project group has no cards yet.", Margin = new Thickness(18), Opacity = 0.7 });
     }
 
     private Control BuildCorkboardCard(CorkboardCardViewModel card)
@@ -1759,8 +1657,6 @@ public sealed class StudioWorkspaceWindow : Window
         try
         {
             Title = $"{_viewModel.ProjectTitle} — Typescribe";
-            _binder.ItemsSource = _viewModel.BinderRows;
-            _binder.SelectedItem = _viewModel.SelectedRow;
             _outline.ItemsSource = _viewModel.OutlineItems;
             _outline.SelectedItem = _viewModel.SelectedOutline;
             _snapshots.ItemsSource = _viewModel.Snapshots
@@ -1908,27 +1804,6 @@ public sealed class StudioWorkspaceWindow : Window
         await _viewModel.DisposeAsync();
     }
 
-    private void ClearBinderDragCandidate()
-    {
-        _binderDragCandidate = null;
-        _binderDragTrigger = null;
-    }
-
-    private static BinderRowViewModel? FindBinderRow(object? source)
-        => FindBinderListItem(source)?.Content as BinderRowViewModel;
-
-    private static ListBoxItem? FindBinderListItem(object? source)
-        => source is Visual visual ? visual.FindAncestorOfType<ListBoxItem>(includeSelf: true) : null;
-
-    private static BinderDropPlacement GetBinderDropPlacement(DragEventArgs e, ListBoxItem? item, BinderRowViewModel target)
-    {
-        if (item is null) return target.Node.IsContainer ? BinderDropPlacement.Inside : BinderDropPlacement.Before;
-        var height = Math.Max(1, item.Bounds.Height);
-        var y = e.GetPosition(item).Y;
-        if (target.Node.IsContainer && y >= height * 0.25 && y <= height * 0.75) return BinderDropPlacement.Inside;
-        return y > height * 0.5 ? BinderDropPlacement.After : BinderDropPlacement.Before;
-    }
-
     private MenuItem MenuAction(string header, Func<Task> action, KeyGesture? gesture = null)
     {
         var item = new MenuItem { Header = header, InputGesture = gesture };
@@ -1997,6 +1872,4 @@ public sealed class StudioWorkspaceWindow : Window
         var cleaned = new string(value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray()).Trim();
         return string.IsNullOrWhiteSpace(cleaned) ? "typescribe-book" : cleaned;
     }
-
-    private enum BinderDropPlacement { Before, Inside, After }
 }
