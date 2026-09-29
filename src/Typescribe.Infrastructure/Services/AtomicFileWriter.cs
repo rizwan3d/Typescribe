@@ -15,11 +15,15 @@ internal static class AtomicFileWriter
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
+            // Backups enumerate the project while metadata may be written. Allow a concurrent
+            // read of the temporary file so the archive walk cannot fail with a sharing
+            // violation. The writer still has exclusive write ownership; only reads/deletes
+            // are shared, and the final destination is replaced atomically after flush/close.
             await using (var stream = new FileStream(
                 tempPath,
                 FileMode.CreateNew,
                 FileAccess.Write,
-                FileShare.None,
+                FileShare.Read | FileShare.Delete,
                 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.WriteThrough))
             await using (var writer = new StreamWriter(stream, Utf8NoBom, 16 * 1024, leaveOpen: true))
@@ -33,7 +37,7 @@ internal static class AtomicFileWriter
         }
         finally
         {
-            if (File.Exists(tempPath)) File.Delete(tempPath);
+            TryDeleteTemporaryFile(tempPath);
         }
     }
 
@@ -56,6 +60,23 @@ internal static class AtomicFileWriter
         catch (IOException)
         {
             File.Move(tempPath, destinationPath, overwrite: true);
+        }
+    }
+
+    private static void TryDeleteTemporaryFile(string tempPath)
+    {
+        try
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+        catch (IOException)
+        {
+            // Antivirus/indexing can briefly retain a handle after the writer closes. A stale
+            // dot-prefixed temp file is safer than failing a successful atomic save.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Same principle as above: cleanup must never turn a completed save into an error.
         }
     }
 }
