@@ -5,6 +5,7 @@ using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 using AvaloniaApplication = Avalonia.Application;
 using Typescribe.Application.Services;
+using Typescribe.Desktop.Editing;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Infrastructure.Services;
 
@@ -16,6 +17,10 @@ public sealed class App : AvaloniaApplication
     {
         RequestedThemeVariant = ThemeVariant.Default;
         Styles.Add(new FluentTheme());
+        Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
+        {
+            Source = new Uri("avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml")
+        });
         Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
         {
             Source = new Uri("avares://Typescribe/Styles/StudioTheme.axaml")
@@ -47,6 +52,10 @@ public sealed class App : AvaloniaApplication
             StudioUxPolish.Apply(window);
             StudioAuthoringEnhancements.Apply(window);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
+
+            // Run last: the earlier studio layers retain their existing TextBox proxies,
+            // while every visible manuscript surface is replaced with ManuscriptEditor.
+            ManuscriptEditorUpgrade.Apply(window, viewModel);
             desktop.MainWindow = window;
         }
 
