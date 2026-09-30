@@ -70,6 +70,8 @@ public sealed class App : AvaloniaApplication
             EditorAnalysisDetailsFeature.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             BookDesignFeature.Apply(window, viewModel);
+            ExactPdfCursorSyncFeature.Apply(window, viewModel, repository, parser);
+            DirectEditorNavigationFeature.Apply(window, viewModel);
 
             // Install this last so later workspace enhancements cannot replace or hide the search row.
             InstallProjectSearch(window, viewModel);
