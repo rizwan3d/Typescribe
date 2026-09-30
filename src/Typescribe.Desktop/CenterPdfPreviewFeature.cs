@@ -12,10 +12,14 @@ namespace Typescribe.Desktop;
 /// <summary>
 /// Adds a real PDF preview beside Editor while leaving the Inspector preview intact.
 /// Both surfaces consume WorkspaceViewModel.LivePreviewPdfPath, so they always display
-/// the same generated PDF instead of one surface being replaced by a shortcut.
+/// the same generated PDF. The center preview includes a clickable page thumbnail strip.
 /// </summary>
 internal sealed class CenterPdfPreviewFeature
 {
+    private static readonly IBrush AccentBrush = new SolidColorBrush(Color.Parse("#007ACC"));
+    private static readonly IBrush BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46"));
+    private static readonly IBrush SidebarBrush = new SolidColorBrush(Color.Parse("#252526"));
+
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
     private readonly PdfPreviewRenderer _renderer = new();
@@ -36,11 +40,24 @@ internal sealed class CenterPdfPreviewFeature
         HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
         VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
     };
+    private readonly StackPanel _thumbnailStack = new()
+    {
+        Spacing = 7,
+        Margin = new Thickness(7, 6)
+    };
+    private readonly ScrollViewer _thumbnailScroll = new()
+    {
+        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
+    };
+    private readonly List<Button> _thumbnailButtons = [];
+    private readonly Dictionary<int, PdfPreviewPage> _thumbnailPages = [];
 
     private TabControl? _centerTabs;
     private TabItem? _centerPdfTab;
     private TabItem? _inspectorPreviewTab;
     private CancellationTokenSource? _renderCts;
+    private CancellationTokenSource? _thumbnailCts;
     private PdfPreviewPage? _renderedPage;
     private string? _pdfPath;
     private long _version = -1;
@@ -54,6 +71,7 @@ internal sealed class CenterPdfPreviewFeature
     {
         _window = window;
         _viewModel = viewModel;
+        _thumbnailScroll.Content = _thumbnailStack;
     }
 
     public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
@@ -102,7 +120,7 @@ internal sealed class CenterPdfPreviewFeature
 
         _centerPdfTab.Header = "PDF Preview";
         _centerPdfTab.Content = BuildSurface();
-        ToolTip.SetTip(_centerPdfTab, "The same generated PDF shown in Inspector Preview");
+        ToolTip.SetTip(_centerPdfTab, "Live PDF preview with page thumbnails, navigation and zoom");
         _installed = true;
         NormalizeInspectorPreviewHeader();
     }
@@ -135,10 +153,33 @@ internal sealed class CenterPdfPreviewFeature
         };
         _scroll.Content = pageHost;
 
+        var thumbnailPane = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        thumbnailPane.Children.Add(new TextBlock
+        {
+            Text = "Pages",
+            FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(10, 8, 8, 5)
+        });
+        Grid.SetRow(_thumbnailScroll, 1);
+        thumbnailPane.Children.Add(_thumbnailScroll);
+
+        var thumbnailBorder = new Border
+        {
+            Background = SidebarBrush,
+            BorderBrush = BorderBrush,
+            BorderThickness = new Thickness(0, 0, 1, 0),
+            Child = thumbnailPane
+        };
+
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("132,*") };
+        body.Children.Add(thumbnailBorder);
+        Grid.SetColumn(_scroll, 1);
+        body.Children.Add(_scroll);
+
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         root.Children.Add(toolbar);
-        Grid.SetRow(_scroll, 1);
-        root.Children.Add(_scroll);
+        Grid.SetRow(body, 1);
+        root.Children.Add(body);
 
         _previous.Click += async (_, _) =>
         {
@@ -203,10 +244,15 @@ internal sealed class CenterPdfPreviewFeature
         }
 
         if (!force && version == _version && string.Equals(path, _pdfPath, StringComparison.Ordinal)) return;
+
+        CancelThumbnailRendering();
+        DisposeThumbnails();
         _pdfPath = path;
         _version = version;
         _pageIndex = 0;
         await RenderCurrentPageAsync();
+        BuildThumbnailButtons();
+        StartThumbnailRendering(path);
     }
 
     private async Task RenderCurrentPageAsync()
@@ -234,6 +280,7 @@ internal sealed class CenterPdfPreviewFeature
             _pageImage.Source = page.Bitmap;
             ApplyZoom();
             UpdatePageUi();
+            UpdateThumbnailSelection();
             _status.Text = "Live PDF";
         }
         catch (OperationCanceledException)
@@ -243,6 +290,155 @@ internal sealed class CenterPdfPreviewFeature
         {
             _status.Text = "Could not render: " + ex.Message;
         }
+    }
+
+    private void BuildThumbnailButtons()
+    {
+        _thumbnailStack.Children.Clear();
+        _thumbnailButtons.Clear();
+
+        for (var index = 0; index < _pageCount; index++)
+        {
+            var pageIndex = index;
+            var button = new Button
+            {
+                MinHeight = 126,
+                Padding = new Thickness(5),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                BorderBrush = BorderBrush,
+                BorderThickness = new Thickness(1),
+                Background = Brushes.Transparent,
+                Content = new StackPanel
+                {
+                    Spacing = 4,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Width = 92,
+                            Height = 106,
+                            Background = Brushes.White,
+                            Child = new TextBlock
+                            {
+                                Text = "…",
+                                Foreground = Brushes.Black,
+                                HorizontalAlignment = HorizontalAlignment.Center,
+                                VerticalAlignment = VerticalAlignment.Center
+                            }
+                        },
+                        new TextBlock
+                        {
+                            Text = $"Page {pageIndex + 1}",
+                            FontSize = 11,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            Opacity = 0.72
+                        }
+                    }
+                }
+            };
+            ToolTip.SetTip(button, $"Open page {pageIndex + 1}");
+            button.Click += async (_, _) =>
+            {
+                _pageIndex = pageIndex;
+                await RenderCurrentPageAsync();
+            };
+            _thumbnailButtons.Add(button);
+            _thumbnailStack.Children.Add(button);
+        }
+
+        UpdateThumbnailSelection();
+    }
+
+    private void StartThumbnailRendering(string path)
+    {
+        if (_pageCount <= 0) return;
+        _thumbnailCts = new CancellationTokenSource();
+        _ = RenderThumbnailsAsync(path, _thumbnailCts.Token);
+    }
+
+    private async Task RenderThumbnailsAsync(string path, CancellationToken token)
+    {
+        try
+        {
+            for (var index = 0; index < _pageCount; index++)
+            {
+                token.ThrowIfCancellationRequested();
+                var page = await _renderer.RenderAsync(path, index, 160, token);
+                if (token.IsCancellationRequested || !string.Equals(path, _pdfPath, StringComparison.Ordinal))
+                {
+                    page.Dispose();
+                    return;
+                }
+
+                if (_thumbnailPages.Remove(index, out var previous)) previous.Dispose();
+                _thumbnailPages[index] = page;
+                if (index >= _thumbnailButtons.Count) continue;
+
+                var image = new Image
+                {
+                    Source = page.Bitmap,
+                    Width = 96,
+                    Stretch = Stretch.Uniform,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                _thumbnailButtons[index].Content = new StackPanel
+                {
+                    Spacing = 4,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Background = Brushes.White,
+                            Padding = new Thickness(1),
+                            Child = image
+                        },
+                        new TextBlock
+                        {
+                            Text = $"Page {index + 1}",
+                            FontSize = 11,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            Opacity = 0.72
+                        }
+                    }
+                };
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (!_disposed) _status.Text = "Thumbnail error: " + ex.Message;
+        }
+    }
+
+    private void UpdateThumbnailSelection()
+    {
+        for (var index = 0; index < _thumbnailButtons.Count; index++)
+        {
+            var selected = index == _pageIndex;
+            _thumbnailButtons[index].BorderBrush = selected ? AccentBrush : BorderBrush;
+            _thumbnailButtons[index].BorderThickness = selected ? new Thickness(2) : new Thickness(1);
+            _thumbnailButtons[index].Opacity = selected ? 1.0 : 0.88;
+        }
+    }
+
+    private void CancelThumbnailRendering()
+    {
+        _thumbnailCts?.Cancel();
+        _thumbnailCts?.Dispose();
+        _thumbnailCts = null;
+    }
+
+    private void DisposeThumbnails()
+    {
+        foreach (var page in _thumbnailPages.Values) page.Dispose();
+        _thumbnailPages.Clear();
+        _thumbnailButtons.Clear();
+        _thumbnailStack.Children.Clear();
     }
 
     private void ChangeZoom(double delta)
@@ -272,6 +468,8 @@ internal sealed class CenterPdfPreviewFeature
         _disposed = true;
         _renderCts?.Cancel();
         _renderCts?.Dispose();
+        CancelThumbnailRendering();
+        DisposeThumbnails();
         _renderedPage?.Dispose();
         _viewModel.StateChanged -= OnStateChanged;
         _window.Opened -= OnOpened;
