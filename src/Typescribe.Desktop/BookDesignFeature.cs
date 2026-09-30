@@ -7,7 +7,7 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Owns the project-level Book Design command and the explicit live-PDF scope controls.
+/// Owns the project-level Book Design command and the complete live-PDF workspace.
 /// It supersedes the older partial style dialogs while leaving equation and code-block tools
 /// in AdvancedTypesettingFeatures unchanged.
 /// </summary>
@@ -28,6 +28,7 @@ internal sealed class BookDesignFeature
     public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
     {
         LivePdfControlsFeature.Apply(window, viewModel);
+        ContinuousPdfPreviewFeature.Apply(window, viewModel);
 
         var feature = new BookDesignFeature(window, viewModel);
         window.Opened += feature.OnOpened;
@@ -68,8 +69,6 @@ internal sealed class BookDesignFeature
             return;
         }
 
-        // Keep a single complete route into project publishing settings. The older Book Style
-        // and programmatic Book Design dialogs expose only subsets of BookStyle.
         foreach (var old in items.OfType<MenuItem>().Where(static item =>
                      HeaderEquals(item, "Book Style…") || HeaderEquals(item, "Book Design & LaTeX…")))
             old.IsVisible = false;

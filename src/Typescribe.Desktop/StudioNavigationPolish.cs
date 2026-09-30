@@ -7,18 +7,16 @@ namespace Typescribe.Desktop;
 /// <summary>
 /// Keeps the left project pane focused on navigation.
 ///
-/// Project search is installed centrally by App.InstallProjectSearch. Keeping that
-/// ownership in one place avoids two search bars competing for the menu row and also
-/// keeps this polish component limited to its remaining responsibility: hiding legacy
-/// navigation tabs that have been superseded by the Project Explorer.
+/// Project search is installed centrally by App.InstallProjectSearch. Search and Collections
+/// are legacy surfaces superseded by the Project Explorer, while Favorites remains visible as
+/// the durable home for favorites, recent documents and navigation history.
 /// </summary>
 internal sealed class StudioNavigationPolish
 {
     private static readonly HashSet<string> HiddenLeftTabs = new(StringComparer.Ordinal)
     {
         "Search",
-        "Collections",
-        "Favorites"
+        "Collections"
     };
 
     private readonly StudioWorkspaceWindow _window;
@@ -33,6 +31,10 @@ internal sealed class StudioNavigationPolish
     {
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(viewModel);
+
+        InspectorEditingFeature.Apply(window, viewModel);
+        OutlinerSpreadsheetFeature.Apply(window, viewModel);
+        SnapshotHistoryFeature.Apply(window, viewModel);
 
         var polish = new StudioNavigationPolish(window);
         polish.Attach();
