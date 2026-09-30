@@ -5,18 +5,17 @@ using Avalonia.VisualTree;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Keeps the left project pane focused on navigation.
-///
-/// Project search is installed centrally by App.InstallProjectSearch. Search and Collections
-/// are legacy surfaces superseded by the Project Explorer, while Favorites remains visible as
-/// the durable home for favorites, recent documents and navigation history.
+/// Keeps the left project pane focused on the native Project Explorer and Bookmarks surfaces.
+/// Project search is installed centrally in the top chrome; legacy Search, Collections and
+/// Favorites tabs are removed so there is only one navigation model in the project pane.
 /// </summary>
 internal sealed class StudioNavigationPolish
 {
     private static readonly HashSet<string> HiddenLeftTabs = new(StringComparer.Ordinal)
     {
         "Search",
-        "Collections"
+        "Collections",
+        "Favorites"
     };
 
     private readonly StudioWorkspaceWindow _window;
@@ -35,6 +34,7 @@ internal sealed class StudioNavigationPolish
         InspectorEditingFeature.Apply(window, viewModel);
         OutlinerSpreadsheetFeature.Apply(window, viewModel);
         SnapshotHistoryFeature.Apply(window, viewModel);
+        WorkspaceUxCompletionFeature.Apply(window, viewModel);
 
         var polish = new StudioNavigationPolish(window);
         polish.Attach();
