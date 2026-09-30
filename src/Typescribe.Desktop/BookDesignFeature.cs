@@ -7,9 +7,9 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Owns the project-level Book Design command. It intentionally supersedes the older
-/// programmatically-built dialog from AdvancedTypesettingFeatures while leaving equation and
-/// code-block tools there unchanged.
+/// Owns the project-level Book Design command and the explicit live-PDF scope controls.
+/// It supersedes the older partial style dialogs while leaving equation and code-block tools
+/// in AdvancedTypesettingFeatures unchanged.
 /// </summary>
 internal sealed class BookDesignFeature
 {
@@ -27,6 +27,8 @@ internal sealed class BookDesignFeature
 
     public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
     {
+        LivePdfControlsFeature.Apply(window, viewModel);
+
         var feature = new BookDesignFeature(window, viewModel);
         window.Opened += feature.OnOpened;
         window.LayoutUpdated += feature.OnLayoutUpdated;
@@ -66,7 +68,10 @@ internal sealed class BookDesignFeature
             return;
         }
 
-        foreach (var old in items.OfType<MenuItem>().Where(static item => HeaderEquals(item, "Book Design & LaTeX…")))
+        // Keep a single complete route into project publishing settings. The older Book Style
+        // and programmatic Book Design dialogs expose only subsets of BookStyle.
+        foreach (var old in items.OfType<MenuItem>().Where(static item =>
+                     HeaderEquals(item, "Book Style…") || HeaderEquals(item, "Book Design & LaTeX…")))
             old.IsVisible = false;
 
         var command = new MenuItem { Header = "Book _Design && LaTeX…" };
@@ -75,6 +80,7 @@ internal sealed class BookDesignFeature
         {
             if (!_viewModel.HasProject) return;
             var dialog = new BookDesignDialog(_viewModel);
+            BookDesignInputWiring.Apply(dialog);
             await dialog.ShowDialog<bool?>(_window);
         };
 

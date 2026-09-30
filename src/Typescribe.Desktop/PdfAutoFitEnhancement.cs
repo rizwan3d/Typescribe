@@ -2,6 +2,7 @@ using System.Collections;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
@@ -9,9 +10,9 @@ using Avalonia.VisualTree;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Keeps the live PDF page fitted completely inside the Inspector's PDF viewport.
-/// It works from the rendered image's native aspect ratio, so changing Inspector size
-/// automatically zooms the page in or out without clipping or manual scrolling.
+/// Keeps the live PDF page fitted completely inside the Inspector until the user explicitly
+/// zooms. Manual +/- zoom is then applied relative to the fitted page size and survives page
+/// changes and Inspector resizes without being overwritten by the auto-fit pass.
 /// </summary>
 internal sealed class PdfAutoFitEnhancement
 {
@@ -20,8 +21,14 @@ internal sealed class PdfAutoFitEnhancement
     private TabItem? _pdfTab;
     private ScrollViewer? _scroll;
     private Image? _image;
+    private Button? _zoomOutButton;
+    private Button? _zoomInButton;
     private Size _lastViewport;
     private Size _lastSource;
+    private double _fitWidth;
+    private double _fitHeight;
+    private double _manualScale = 1.0;
+    private bool _manualZoom;
     private bool _disposed;
 
     private PdfAutoFitEnhancement(StudioWorkspaceWindow window) => _window = window;
@@ -67,6 +74,11 @@ internal sealed class PdfAutoFitEnhancement
         _image = FindControl<Image>(content);
         if (_scroll is null || _image is null) return;
 
+        _zoomOutButton = FindButton(content, "−");
+        _zoomInButton = FindButton(content, "+");
+        if (_zoomOutButton is not null) _zoomOutButton.Click += OnZoomOutClicked;
+        if (_zoomInButton is not null) _zoomInButton.Click += OnZoomInClicked;
+
         _scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         _scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
         _image.HorizontalAlignment = HorizontalAlignment.Center;
@@ -86,6 +98,22 @@ internal sealed class PdfAutoFitEnhancement
             FitPageIfNeeded(force: true);
     }
 
+    private void OnZoomOutClicked(object? sender, RoutedEventArgs e) => EnterManualZoom(-0.1);
+
+    private void OnZoomInClicked(object? sender, RoutedEventArgs e) => EnterManualZoom(0.1);
+
+    private void EnterManualZoom(double delta)
+    {
+        _manualZoom = true;
+        _manualScale = Math.Clamp(_manualScale + delta, 0.5, 2.5);
+        if (_scroll is not null)
+        {
+            _scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        }
+        ApplyManualZoom();
+    }
+
     private void FitPageIfNeeded(bool force = false)
     {
         if (_scroll is null || _image?.Source is null) return;
@@ -100,8 +128,26 @@ internal sealed class PdfAutoFitEnhancement
 
         var scale = Math.Min(viewport.Width / source.Width, viewport.Height / source.Height);
         scale = Math.Max(0.05, scale);
-        _image.Width = Math.Floor(source.Width * scale);
-        _image.Height = Math.Floor(source.Height * scale);
+        _fitWidth = Math.Floor(source.Width * scale);
+        _fitHeight = Math.Floor(source.Height * scale);
+
+        if (_manualZoom)
+        {
+            ApplyManualZoom();
+            return;
+        }
+
+        _scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        _scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        _image.Width = _fitWidth;
+        _image.Height = _fitHeight;
+    }
+
+    private void ApplyManualZoom()
+    {
+        if (_image is null || _fitWidth <= 0 || _fitHeight <= 0) return;
+        _image.Width = Math.Floor(_fitWidth * _manualScale);
+        _image.Height = Math.Floor(_fitHeight * _manualScale);
     }
 
     private static bool NearlyEqual(Size left, Size right)
@@ -114,6 +160,32 @@ internal sealed class PdfAutoFitEnhancement
     {
         if (tabs.ItemsSource is IEnumerable source) return source.Cast<object?>().OfType<TabItem>();
         return tabs.Items.OfType<TabItem>();
+    }
+
+    private static Button? FindButton(Control root, string content)
+    {
+        if (root is Button direct && string.Equals(direct.Content?.ToString(), content, StringComparison.Ordinal))
+            return direct;
+
+        if (root is Panel panel)
+        {
+            foreach (var child in panel.Children.OfType<Control>())
+            {
+                var found = FindButton(child, content);
+                if (found is not null) return found;
+            }
+        }
+
+        if (root is ContentControl contentControl && contentControl.Content is Control contentChild)
+        {
+            var found = FindButton(contentChild, content);
+            if (found is not null) return found;
+        }
+
+        if (root is Decorator decorator && decorator.Child is Control decoratedChild)
+            return FindButton(decoratedChild, content);
+
+        return null;
     }
 
     private static T? FindControl<T>(Control root) where T : Control
@@ -145,5 +217,7 @@ internal sealed class PdfAutoFitEnhancement
         _window.Closed -= OnClosed;
         if (_scroll is not null) _scroll.SizeChanged -= OnViewportSizeChanged;
         if (_image is not null) _image.PropertyChanged -= OnImagePropertyChanged;
+        if (_zoomOutButton is not null) _zoomOutButton.Click -= OnZoomOutClicked;
+        if (_zoomInButton is not null) _zoomInButton.Click -= OnZoomInClicked;
     }
 }
