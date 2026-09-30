@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Domain.Models;
+using AvaloniaApplication = Avalonia.Application;
 
 namespace Typescribe.Desktop;
 
@@ -272,7 +273,7 @@ internal sealed class CorkboardOutlinerUxFixFeature
 
     private void PolishCardEditorDialogs()
     {
-        if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
+        if (AvaloniaApplication.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
         foreach (var dialog in desktop.Windows)
         {
             if (ReferenceEquals(dialog, _window) || !dialog.IsVisible) continue;
