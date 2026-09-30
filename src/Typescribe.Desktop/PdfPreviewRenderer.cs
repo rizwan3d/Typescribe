@@ -12,9 +12,22 @@ public sealed class PdfPreviewRenderer
         string pdfPath,
         int requestedPage,
         CancellationToken cancellationToken = default)
-        => Task.Run(() => RenderCore(pdfPath, requestedPage, cancellationToken), cancellationToken);
+        => RenderAsync(pdfPath, requestedPage, RenderWidth, cancellationToken);
 
-    private static PdfPreviewPage RenderCore(string pdfPath, int requestedPage, CancellationToken cancellationToken)
+    public Task<PdfPreviewPage> RenderAsync(
+        string pdfPath,
+        int requestedPage,
+        int renderWidth,
+        CancellationToken cancellationToken = default)
+        => Task.Run(
+            () => RenderCore(pdfPath, requestedPage, Math.Clamp(renderWidth, 80, 2400), cancellationToken),
+            cancellationToken);
+
+    private static PdfPreviewPage RenderCore(
+        string pdfPath,
+        int requestedPage,
+        int renderWidth,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var stream = new FileStream(
@@ -34,7 +47,7 @@ public sealed class PdfPreviewRenderer
             stream,
             page,
             leaveOpen: true,
-            options: new RenderOptions(Width: RenderWidth, WithAspectRatio: true));
+            options: new RenderOptions(Width: renderWidth, WithAspectRatio: true));
 
         cancellationToken.ThrowIfCancellationRequested();
         using var image = SKImage.FromBitmap(rendered);
