@@ -188,10 +188,15 @@ public sealed class AdvancedDocumentRenderer : IDocumentRenderer
     private static string RenderFigureLatex(FigureBlock figure)
     {
         var output = new StringBuilder();
+        var source = SanitizeDetokenize(figure.Source);
         output.AppendLine("\\begin{figure}[htbp]");
         output.AppendLine("\\centering");
-        output.Append("\\includegraphics[width=0.9\\linewidth]{\\detokenize{")
-            .Append(SanitizeDetokenize(figure.Source)).AppendLine("}}");
+        output.Append("\\IfFileExists{\\detokenize{").Append(source).AppendLine("}}{% ");
+        output.Append("  \\includegraphics[width=0.9\\linewidth]{\\detokenize{").Append(source).AppendLine("}}% ");
+        output.AppendLine("}{% ");
+        output.AppendLine("  \\fbox{\\parbox{0.86\\linewidth}{\\centering Figure asset not found\\\\\\smallskip");
+        output.Append("  \\texttt{\\detokenize{").Append(source).AppendLine("}}}}% ");
+        output.AppendLine("}");
         if (!string.IsNullOrWhiteSpace(figure.Caption))
             output.Append("\\caption{").Append(EscapeLatex(figure.Caption)).AppendLine("}");
         if (!string.IsNullOrWhiteSpace(figure.Identifier))
@@ -265,7 +270,9 @@ public sealed class AdvancedDocumentRenderer : IDocumentRenderer
     private static string AddAdvancedPackages(string latex)
     {
         const string marker = "\\usepackage{fontspec}";
-        const string packages = "\\usepackage{graphicx}\n\\usepackage{booktabs}\n\\usepackage{tabularx}\n\\usepackage{cite}";
+        // Do not force a citation package here. Plain \\cite is available from LaTeX,
+        // while bibliography packages such as biblatex should remain user-selectable.
+        const string packages = "\\usepackage{graphicx}\n\\usepackage{booktabs}\n\\usepackage{tabularx}";
         var index = latex.IndexOf(marker, StringComparison.Ordinal);
         if (index < 0) return packages + Environment.NewLine + latex;
         var insert = index + marker.Length;
