@@ -35,6 +35,7 @@ internal sealed class StudioNavigationPolish
         OutlinerSpreadsheetFeature.Apply(window, viewModel);
         SnapshotHistoryFeature.Apply(window, viewModel);
         WorkspaceUxCompletionFeature.Apply(window, viewModel);
+        CorkboardOutlinerUxFixFeature.Apply(window, viewModel);
         CenterPdfPreviewFeature.Apply(window, viewModel);
 
         var polish = new StudioNavigationPolish(window);
