@@ -6,27 +6,30 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Rebuilds the studio's upper chrome to match the compact dark reference:
-/// custom project title row, centered global search, compact menu row and IDE-like tab strips.
+/// Applies compact Visual Studio-like dark chrome to the main workspace and keeps the
+/// custom title area fully draggable without interfering with search or window buttons.
 /// </summary>
 internal sealed class ReferenceTopChrome
 {
-    private static readonly SolidColorBrush ChromeBrush = Brush("#0D151E");
-    private static readonly SolidColorBrush MenuBrush = Brush("#101923");
-    private static readonly SolidColorBrush SurfaceBrush = Brush("#172230");
-    private static readonly SolidColorBrush SurfaceHoverBrush = Brush("#202D3C");
-    private static readonly SolidColorBrush BorderBrush = Brush("#293748");
-    private static readonly SolidColorBrush SearchBrush = Brush("#121D29");
-    private static readonly SolidColorBrush TextBrush = Brush("#DCE5F0");
-    private static readonly SolidColorBrush MutedTextBrush = Brush("#93A2B6");
-    private static readonly SolidColorBrush AccentBrush = Brush("#8B5CF6");
-    private static readonly SolidColorBrush AccentSoftBrush = Brush("#241E3C");
-    private static readonly SolidColorBrush CloseHoverBrush = Brush("#C42B3D");
+    private static readonly SolidColorBrush ChromeBrush = Brush("#181818");
+    private static readonly SolidColorBrush MenuBrush = Brush("#181818");
+    private static readonly SolidColorBrush SurfaceBrush = Brush("#252526");
+    private static readonly SolidColorBrush SurfaceMutedBrush = Brush("#2D2D30");
+    private static readonly SolidColorBrush SurfaceHoverBrush = Brush("#2A2D2E");
+    private static readonly SolidColorBrush EditorBrush = Brush("#1E1E1E");
+    private static readonly SolidColorBrush BorderBrush = Brush("#3F3F46");
+    private static readonly SolidColorBrush SearchBrush = Brush("#1E1E1E");
+    private static readonly SolidColorBrush TextBrush = Brush("#CCCCCC");
+    private static readonly SolidColorBrush MutedTextBrush = Brush("#969696");
+    private static readonly SolidColorBrush AccentBrush = Brush("#007ACC");
+    private static readonly SolidColorBrush AccentHoverBrush = Brush("#1C97EA");
+    private static readonly SolidColorBrush AccentSoftBrush = Brush("#094771");
+    private static readonly SolidColorBrush DangerBrush = Brush("#F14C4C");
+    private static readonly SolidColorBrush CloseHoverBrush = Brush("#C42B1C");
 
     private readonly StudioWorkspaceWindow _window;
     private readonly Grid _root;
@@ -74,7 +77,10 @@ internal sealed class ReferenceTopChrome
 
     private void Install()
     {
+        ApplyVisualStudioDarkPalette();
+
         _window.WindowDecorations = WindowDecorations.BorderOnly;
+        _window.Background = EditorBrush;
 
         _root.RowDefinitions[0].Height = GridLength.Auto;
         if (_root.RowDefinitions.Count > 1)
@@ -83,7 +89,7 @@ internal sealed class ReferenceTopChrome
         var shell = new Grid
         {
             Name = "ReferenceTopChrome",
-            RowDefinitions = new RowDefinitions("42,30"),
+            RowDefinitions = new RowDefinitions("36,29"),
             Background = ChromeBrush,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
@@ -99,6 +105,7 @@ internal sealed class ReferenceTopChrome
         _root.Children.Add(shell);
 
         StyleWorkspaceTabs();
+        DockableSidePanels.Apply(_window);
 
         _window.PropertyChanged += WindowPropertyChanged;
         _window.Opened += WindowOpened;
@@ -108,13 +115,32 @@ internal sealed class ReferenceTopChrome
         Dispatcher.UIThread.Post(StyleWorkspaceTabs, DispatcherPriority.Background);
     }
 
+    private static void ApplyVisualStudioDarkPalette()
+    {
+        if (Avalonia.Application.Current is not { } app) return;
+
+        app.RequestedThemeVariant = ThemeVariant.Dark;
+        app.Resources["TsAppBackgroundBrush"] = EditorBrush;
+        app.Resources["TsSurfaceBrush"] = SurfaceBrush;
+        app.Resources["TsSurfaceMutedBrush"] = SurfaceMutedBrush;
+        app.Resources["TsSurfaceHoverBrush"] = SurfaceHoverBrush;
+        app.Resources["TsEditorBrush"] = EditorBrush;
+        app.Resources["TsBorderBrush"] = BorderBrush;
+        app.Resources["TsTextBrush"] = TextBrush;
+        app.Resources["TsMutedTextBrush"] = MutedTextBrush;
+        app.Resources["TsAccentBrush"] = AccentBrush;
+        app.Resources["TsAccentHoverBrush"] = AccentHoverBrush;
+        app.Resources["TsAccentSoftBrush"] = AccentSoftBrush;
+        app.Resources["TsDangerBrush"] = DangerBrush;
+    }
+
     private Control BuildTitleRow()
     {
         _titleText.Text = DisplayTitle(_window.Title);
-        _titleText.FontSize = 12;
+        _titleText.FontSize = 11.5;
         _titleText.Foreground = TextBrush;
         _titleText.VerticalAlignment = VerticalAlignment.Center;
-        _titleText.Margin = new Thickness(9, 0, 0, 0);
+        _titleText.Margin = new Thickness(7, 0, 0, 0);
 
         var mark = new Border
         {
@@ -123,12 +149,12 @@ internal sealed class ReferenceTopChrome
             CornerRadius = new CornerRadius(2),
             BorderThickness = new Thickness(1),
             BorderBrush = BorderBrush,
-            Background = SurfaceBrush,
+            Background = SurfaceMutedBrush,
             VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock
             {
                 Text = "T",
-                FontSize = 10,
+                FontSize = 9.5,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = TextBrush,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -140,13 +166,11 @@ internal sealed class ReferenceTopChrome
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0, 12, 0),
+            Margin = new Thickness(10, 0, 10, 0),
             Children = { mark, _titleText }
         };
-        titleHost.PointerPressed += TitleHostPointerPressed;
 
         ConfigureSearchBox();
-
         var windowButtons = BuildWindowButtons();
 
         var titleGrid = new Grid
@@ -154,12 +178,14 @@ internal sealed class ReferenceTopChrome
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
             Background = ChromeBrush
         };
+        titleGrid.PointerPressed += TitleBarPointerPressed;
         titleGrid.Children.Add(titleHost);
 
         var searchHost = new Grid
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Background = Brushes.Transparent
         };
         searchHost.Children.Add(_searchBox);
         Grid.SetColumn(searchHost, 1);
@@ -172,27 +198,27 @@ internal sealed class ReferenceTopChrome
 
     private void ConfigureSearchBox()
     {
-        _searchBox.Width = 430;
-        _searchBox.MinWidth = 280;
-        _searchBox.MaxWidth = 430;
-        _searchBox.Height = 34;
-        _searchBox.MinHeight = 34;
-        _searchBox.Margin = new Thickness(12, 4);
-        _searchBox.Padding = new Thickness(12, 5);
+        _searchBox.Width = 380;
+        _searchBox.MinWidth = 260;
+        _searchBox.MaxWidth = 420;
+        _searchBox.Height = 28;
+        _searchBox.MinHeight = 28;
+        _searchBox.Margin = new Thickness(8, 4);
+        _searchBox.Padding = new Thickness(10, 3);
         _searchBox.HorizontalAlignment = HorizontalAlignment.Center;
         _searchBox.VerticalAlignment = VerticalAlignment.Center;
         _searchBox.Background = SearchBrush;
         _searchBox.Foreground = TextBrush;
         _searchBox.BorderBrush = BorderBrush;
         _searchBox.BorderThickness = new Thickness(1);
-        _searchBox.CornerRadius = new CornerRadius(8);
-        _searchBox.FontSize = 12;
+        _searchBox.CornerRadius = new CornerRadius(4);
+        _searchBox.FontSize = 11.5;
     }
 
     private StackPanel BuildWindowButtons()
     {
         var minimize = ChromeButton("—", "Minimize");
-        var maximize = ChromeButton("□", "Maximize");
+        var maximize = ChromeButton("□", "Maximize / Restore");
         var close = ChromeButton("×", "Close");
 
         minimize.Click += (_, _) => _window.WindowState = WindowState.Minimized;
@@ -211,22 +237,22 @@ internal sealed class ReferenceTopChrome
         };
     }
 
-    private Button ChromeButton(string glyph, string tip)
+    private static Button ChromeButton(string glyph, string tip)
     {
         var button = new Button
         {
             Content = new TextBlock
             {
                 Text = glyph,
-                FontSize = 13,
+                FontSize = 12.5,
                 Foreground = TextBrush,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             },
-            Width = 36,
-            Height = 30,
-            MinWidth = 36,
-            MinHeight = 30,
+            Width = 38,
+            Height = 29,
+            MinWidth = 38,
+            MinHeight = 29,
             Padding = new Thickness(0),
             Margin = new Thickness(0),
             Background = Brushes.Transparent,
@@ -255,24 +281,16 @@ internal sealed class ReferenceTopChrome
         _menu.VerticalAlignment = VerticalAlignment.Stretch;
         _menu.Background = MenuBrush;
         _menu.Foreground = TextBrush;
-        _menu.Padding = new Thickness(12, 0, 0, 0);
-        _menu.FontSize = 12;
+        _menu.Padding = new Thickness(8, 0, 0, 0);
+        _menu.FontSize = 11.5;
 
         foreach (var item in TopLevelMenuItems(_menu))
         {
-            item.Padding = new Thickness(10, 4);
+            item.Padding = new Thickness(8, 4);
             item.Margin = new Thickness(0);
             item.Foreground = TextBrush;
             item.Background = Brushes.Transparent;
         }
-
-        var theme = UtilityButton("◔", "Toggle light/dark theme");
-        theme.Click += (_, _) =>
-        {
-            if (Avalonia.Application.Current is not { } app) return;
-            app.RequestedThemeVariant =
-                _window.ActualThemeVariant == ThemeVariant.Dark ? ThemeVariant.Light : ThemeVariant.Dark;
-        };
 
         var project = UtilityButton("⚙", "Project menu");
         project.Click += (_, _) =>
@@ -290,8 +308,8 @@ internal sealed class ReferenceTopChrome
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 10, 0),
-            Children = { theme, project }
+            Margin = new Thickness(0, 0, 6, 0),
+            Children = { project }
         };
 
         var row = new Grid
@@ -319,20 +337,20 @@ internal sealed class ReferenceTopChrome
             Content = new TextBlock
             {
                 Text = glyph,
-                FontSize = 14,
+                FontSize = 13,
                 Foreground = MutedTextBrush,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             },
-            Width = 34,
-            Height = 28,
-            MinWidth = 34,
-            MinHeight = 28,
+            Width = 32,
+            Height = 26,
+            MinWidth = 32,
+            MinHeight = 26,
             Padding = new Thickness(0),
             Margin = new Thickness(0),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
-            CornerRadius = new CornerRadius(5),
+            CornerRadius = new CornerRadius(2),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
@@ -351,13 +369,15 @@ internal sealed class ReferenceTopChrome
             .FirstOrDefault(grid => Grid.GetRow(grid) == 2);
         if (workspace is null) return;
 
-        workspace.Background = ChromeBrush;
-        workspace.Margin = new Thickness(20, 0, 20, 0);
+        workspace.Background = EditorBrush;
+        workspace.Margin = new Thickness(0);
 
         if (workspace.ColumnDefinitions.Count >= 5)
         {
-            workspace.ColumnDefinitions[0].Width = new GridLength(232);
-            workspace.ColumnDefinitions[4].Width = new GridLength(428);
+            workspace.ColumnDefinitions[0].Width = new GridLength(250);
+            workspace.ColumnDefinitions[1].Width = new GridLength(4);
+            workspace.ColumnDefinitions[3].Width = new GridLength(4);
+            workspace.ColumnDefinitions[4].Width = new GridLength(360);
         }
 
         foreach (var child in workspace.Children.OfType<Control>())
@@ -366,14 +386,14 @@ internal sealed class ReferenceTopChrome
             {
                 border.Background = SurfaceBrush;
                 border.BorderBrush = BorderBrush;
-                border.BorderThickness = new Thickness(1);
-                border.CornerRadius = new CornerRadius(8);
+                border.BorderThickness = new Thickness(0, 0, 1, 0);
+                border.CornerRadius = new CornerRadius(0);
                 border.ClipToBounds = true;
                 StyleTabControl(borderedTabs);
             }
             else if (child is TabControl tabs)
             {
-                tabs.Background = SurfaceBrush;
+                tabs.Background = EditorBrush;
                 StyleTabControl(tabs);
             }
         }
@@ -381,7 +401,6 @@ internal sealed class ReferenceTopChrome
 
     private void StyleTabControl(TabControl tabs)
     {
-        tabs.Background = SurfaceBrush;
         tabs.Margin = new Thickness(0);
 
         if (_styledTabs.Add(tabs))
@@ -389,10 +408,10 @@ internal sealed class ReferenceTopChrome
 
         foreach (var item in TabItems(tabs))
         {
-            item.MinHeight = 34;
-            item.Padding = new Thickness(11, 7);
-            item.Margin = new Thickness(1, 0);
-            item.FontSize = 11.5;
+            item.MinHeight = 30;
+            item.Padding = new Thickness(9, 5);
+            item.Margin = new Thickness(0);
+            item.FontSize = 11;
             item.HorizontalContentAlignment = HorizontalAlignment.Center;
         }
 
@@ -404,8 +423,10 @@ internal sealed class ReferenceTopChrome
         foreach (var item in TabItems(tabs))
         {
             var selected = ReferenceEquals(item, tabs.SelectedItem);
-            item.Background = selected ? AccentSoftBrush : Brushes.Transparent;
-            item.Foreground = selected ? AccentBrush : MutedTextBrush;
+            item.Background = selected ? EditorBrush : Brushes.Transparent;
+            item.Foreground = selected ? TextBrush : MutedTextBrush;
+            item.BorderBrush = selected ? AccentBrush : Brushes.Transparent;
+            item.BorderThickness = selected ? new Thickness(0, 0, 0, 2) : new Thickness(0);
             item.FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal;
         }
     }
@@ -424,9 +445,11 @@ internal sealed class ReferenceTopChrome
         return menu.Items.OfType<MenuItem>();
     }
 
-    private void TitleHostPointerPressed(object? sender, PointerPressedEventArgs e)
+    private void TitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (!e.GetCurrentPoint((Control)sender!).Properties.IsLeftButtonPressed) return;
+        if (sender is not Control titleBar) return;
+        if (!e.GetCurrentPoint(titleBar).Properties.IsLeftButtonPressed) return;
+        if (IsInteractiveTitleSource(e.Source)) return;
 
         if (e.ClickCount >= 2)
         {
@@ -436,6 +459,17 @@ internal sealed class ReferenceTopChrome
         }
 
         _window.BeginMoveDrag(e);
+        e.Handled = true;
+    }
+
+    private static bool IsInteractiveTitleSource(object? source)
+    {
+        for (var current = source as Control; current is not null; current = current.Parent as Control)
+        {
+            if (current is Button or Avalonia.Controls.TextBox)
+                return true;
+        }
+        return false;
     }
 
     private void ToggleMaximized()
