@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Reflection;
-using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -12,17 +11,17 @@ using Avalonia.VisualTree;
 using Typescribe.Desktop.Editing;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Domain.Models;
+using AvaloniaApplication = Avalonia.Application;
 
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Finishes the studio surface without introducing another ownership layer for project data.
-/// It improves navigation/preview discoverability, turns the top utility buttons into real
-/// appearance/settings controls, and polishes the existing bookmark/comment/snapshot/target flows.
+/// Completes the author-facing workspace UI while keeping the existing project/view-model
+/// services as the source of truth. This class only owns presentation and preference wiring.
 /// </summary>
 internal sealed class WorkspaceUxCompletionFeature
 {
-    private static readonly PaletteChoice[] LabelPalette =
+    private static readonly LabelColorChoice[] LabelColors =
     [
         new("Automatic", null),
         new("Slate", "#64748B"),
@@ -37,18 +36,21 @@ internal sealed class WorkspaceUxCompletionFeature
 
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
-    private readonly TextBlock _centerPreviewTitle = new()
+    private readonly DispatcherTimer _cardDialogTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
+    private readonly Dictionary<string, string> _labelColorMap = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly TextBlock _previewTitle = new()
     {
         FontSize = 17,
         FontWeight = FontWeight.SemiBold,
         Margin = new Thickness(18, 12, 18, 4)
     };
-    private readonly TextBlock _centerPreviewMeta = new()
+    private readonly TextBlock _previewMeta = new()
     {
-        Opacity = 0.62,
+        Opacity = 0.64,
         Margin = new Thickness(18, 0, 18, 8)
     };
-    private readonly TextBox _centerPreviewText = new()
+    private readonly Avalonia.Controls.TextBox _previewText = new()
     {
         IsReadOnly = true,
         AcceptsReturn = true,
@@ -60,69 +62,72 @@ internal sealed class WorkspaceUxCompletionFeature
         HorizontalAlignment = HorizontalAlignment.Stretch,
         VerticalAlignment = VerticalAlignment.Stretch
     };
-    private readonly TextBox _outlinerLabelBox = new()
+
+    private readonly Avalonia.Controls.TextBox _labelBox = new()
     {
-        Watermark = "Label (POV, storyline, arc…)",
+        PlaceholderText = "Label (POV, storyline, arc…)",
         MinWidth = 190,
         Height = 30,
         Padding = new Thickness(8, 3),
-        VerticalContentAlignment = VerticalAlignment.Center
+        VerticalContentAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(3, 0)
     };
-    private readonly ComboBox _outlinerLabelColor = new()
+    private readonly ComboBox _labelColor = new()
     {
-        ItemsSource = LabelPalette,
+        ItemsSource = LabelColors,
         SelectedIndex = 0,
         MinWidth = 118,
-        Height = 30
+        Height = 30,
+        Margin = new Thickness(3, 0)
     };
-    private readonly Border _outlinerLabelSwatch = new()
+    private readonly Border _labelSwatch = new()
     {
         Width = 14,
         Height = 14,
         CornerRadius = new CornerRadius(7),
         BorderThickness = new Thickness(1),
         BorderBrush = new SolidColorBrush(Color.Parse("#808080")),
-        VerticalAlignment = VerticalAlignment.Center
+        VerticalAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(3, 0)
     };
-    private readonly Button _outlinerApplyLabel = new()
+    private readonly Button _applyLabel = new()
     {
         Content = "Apply Label",
         MinWidth = 92,
         Height = 30,
-        Padding = new Thickness(9, 3)
+        Padding = new Thickness(9, 3),
+        Margin = new Thickness(3, 0)
     };
-    private readonly DispatcherTimer _dialogPolishTimer = new() { Interval = TimeSpan.FromMilliseconds(280) };
-    private readonly Dictionary<string, string> _labelColors = new(StringComparer.OrdinalIgnoreCase);
 
-    private TabControl? _centerTabs;
-    private TabItem? _centerPreviewTab;
     private TabItem? _outlinerTab;
     private Button? _themeButton;
-    private UiSettings _settings = new();
-    private string? _loadedLabelProject;
-    private bool _topChromeInstalled;
+    private string _theme = "Dark";
+    private bool _showLineNumbers;
+    private string? _labelProjectRoot;
+    private bool _searchPolished;
+    private bool _utilitiesInstalled;
     private bool _centerPreviewInstalled;
+    private bool _leftCleaned;
     private bool _inspectorArranged;
-    private bool _leftTabsCleaned;
     private bool _bookmarksPolished;
     private bool _commentsPolished;
     private bool _snapshotsPolished;
-    private bool _projectTargetsPolished;
-    private bool _outlinerPaletteInstalled;
-    private bool _opened;
+    private bool _targetsPolished;
+    private bool _outlinerLabelsInstalled;
     private bool _installQueued;
-    private bool _syncingLabelControls;
+    private bool _opened;
+    private bool _syncingLabelUi;
     private bool _disposed;
 
     private WorkspaceUxCompletionFeature(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
     {
         _window = window;
         _viewModel = viewModel;
-        _settings = LoadSettings();
-        _dialogPolishTimer.Tick += (_, _) => PolishOpenCardEditors();
-        _outlinerLabelColor.SelectionChanged += (_, _) => UpdateLabelSwatch();
-        _outlinerApplyLabel.Click += async (_, _) => await ApplySelectedLabelAsync();
-        _outlinerLabelBox.KeyDown += async (_, e) =>
+        LoadSettings();
+        _cardDialogTimer.Tick += (_, _) => PolishCardDialogs();
+        _labelColor.SelectionChanged += (_, _) => UpdateLabelSwatch();
+        _applyLabel.Click += async (_, _) => await ApplySelectedLabelAsync();
+        _labelBox.KeyDown += async (_, e) =>
         {
             if (e.Key != Avalonia.Input.Key.Enter) return;
             e.Handled = true;
@@ -145,8 +150,8 @@ internal sealed class WorkspaceUxCompletionFeature
     private void WindowOpened(object? sender, EventArgs e)
     {
         _opened = true;
-        ApplySettings();
-        _dialogPolishTimer.Start();
+        ApplyPreferences();
+        _cardDialogTimer.Start();
         QueueInstall();
     }
 
@@ -164,9 +169,9 @@ internal sealed class WorkspaceUxCompletionFeature
             if (_disposed) return;
             UpdateCenterPreview();
             EnsureLabelColorProject();
-            UpdateOutlinerLabelControls();
+            UpdateLabelControls();
             StyleOutlinerLabelCells();
-            ApplyEditorSettings();
+            ApplyEditorPreferences();
         }, DispatcherPriority.Background);
     }
 
@@ -177,93 +182,79 @@ internal sealed class WorkspaceUxCompletionFeature
         Dispatcher.UIThread.Post(() =>
         {
             _installQueued = false;
-            if (!_disposed) InstallAvailableSurfaces();
+            if (!_disposed) InstallAvailableUi();
         }, DispatcherPriority.Background);
     }
 
-    private void InstallAvailableSurfaces()
+    private void InstallAvailableUi()
     {
-        InstallTopChromeUtilities();
+        InstallSearchIcon();
+        InstallTopUtilities();
         InstallCenterPreview();
-        RemoveLegacyProjectTabs();
+        RemoveLegacyLeftTabs();
         ArrangeInspectorTabs();
         PolishBookmarks();
         PolishComments();
         PolishSnapshots();
         PolishProjectTargets();
-        InstallOutlinerLabelPalette();
+        InstallOutlinerLabelControls();
         EnsureLabelColorProject();
         UpdateCenterPreview();
-        UpdateOutlinerLabelControls();
+        UpdateLabelControls();
+        ApplyPreferences();
         StyleOutlinerLabelCells();
-        ApplyEditorSettings();
-        PolishOpenCardEditors();
+        PolishCardDialogs();
     }
 
-    private void InstallTopChromeUtilities()
+    private void InstallSearchIcon()
     {
-        if (_topChromeInstalled) return;
-        var chrome = _window.GetVisualDescendants()
-            .OfType<Grid>()
-            .FirstOrDefault(static grid => string.Equals(grid.Name, "ReferenceTopChrome", StringComparison.Ordinal));
-        if (chrome is null) return;
-
-        var search = chrome.GetVisualDescendants()
-            .OfType<TextBox>()
+        if (_searchPolished) return;
+        var search = _window.GetVisualDescendants()
+            .OfType<Avalonia.Controls.TextBox>()
             .FirstOrDefault(static box => string.Equals(box.Name, "ProjectSearchBox", StringComparison.Ordinal));
-        if (search is not null && search.Parent is Grid parent &&
-            !string.Equals(parent.Name, "ProjectSearchField", StringComparison.Ordinal))
+        if (search?.Parent is not Grid parent) return;
+
+        search.Padding = new Thickness(30, 3, 10, 3);
+        if (!parent.Children.OfType<TextBlock>().Any(static text => text.Classes.Contains("project-search-icon")))
         {
-            var field = new Grid
+            var icon = new TextBlock
             {
-                Name = "ProjectSearchField",
-                Width = 380,
-                Height = 28,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = search.Margin
-            };
-            var row = Grid.GetRow(search);
-            var column = Grid.GetColumn(search);
-            parent.Children.Remove(search);
-            search.Margin = new Thickness(0);
-            search.Width = double.NaN;
-            search.HorizontalAlignment = HorizontalAlignment.Stretch;
-            search.Padding = new Thickness(30, 3, 10, 3);
-            field.Children.Add(search);
-            field.Children.Add(new TextBlock
-            {
-                Text = "🔍",
-                FontSize = 11,
+                Text = "⌕",
+                FontSize = 16,
                 Opacity = 0.72,
                 Margin = new Thickness(9, 0, 0, 0),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false
-            });
-            Grid.SetRow(field, row);
-            Grid.SetColumn(field, column);
-            parent.Children.Add(field);
+            };
+            icon.Classes.Add("project-search-icon");
+            parent.Children.Add(icon);
         }
-
-        var gear = chrome.GetVisualDescendants()
-            .OfType<Button>()
-            .FirstOrDefault(static button => string.Equals(ButtonGlyph(button), "⚙", StringComparison.Ordinal));
-        if (gear?.Parent is StackPanel utilities)
-        {
-            utilities.Children.Clear();
-            _themeButton = TopUtilityButton(CurrentThemeGlyph(), "Toggle light / dark theme");
-            var settings = TopUtilityButton("⚙", "Settings");
-            _themeButton.Click += (_, _) => ToggleTheme();
-            settings.Click += async (_, _) => await ShowSettingsAsync();
-            utilities.Children.Add(_themeButton);
-            utilities.Children.Add(settings);
-            _topChromeInstalled = true;
-            ApplyTheme();
-        }
+        _searchPolished = true;
     }
 
-    private static Button TopUtilityButton(string glyph, string toolTip)
+    private void InstallTopUtilities()
+    {
+        if (_utilitiesInstalled) return;
+        var chrome = FindTopChrome();
+        if (chrome is null) return;
+        var gear = chrome.GetVisualDescendants()
+            .OfType<Button>()
+            .FirstOrDefault(static button => string.Equals(ButtonText(button), "⚙", StringComparison.Ordinal));
+        if (gear?.Parent is not StackPanel utilities) return;
+
+        utilities.Children.Clear();
+        _themeButton = UtilityButton(ThemeGlyph(), "Toggle light / dark theme");
+        var settings = UtilityButton("⚙", "Settings");
+        _themeButton.Click += (_, _) => ToggleTheme();
+        settings.Click += async (_, _) => await ShowSettingsAsync();
+        utilities.Children.Add(_themeButton);
+        utilities.Children.Add(settings);
+        _utilitiesInstalled = true;
+        ApplyTheme();
+    }
+
+    private static Button UtilityButton(string glyph, string toolTip)
     {
         var button = new Button
         {
@@ -292,33 +283,30 @@ internal sealed class WorkspaceUxCompletionFeature
 
     private void ToggleTheme()
     {
-        _settings.Theme = string.Equals(_settings.Theme, "Dark", StringComparison.OrdinalIgnoreCase)
-            ? "Light"
-            : "Dark";
+        _theme = string.Equals(_theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Light" : "Dark";
         SaveSettings();
         ApplyTheme();
     }
 
-    private string CurrentThemeGlyph()
-        => string.Equals(_settings.Theme, "Light", StringComparison.OrdinalIgnoreCase) ? "☀" : "☾";
+    private string ThemeGlyph()
+        => string.Equals(_theme, "Light", StringComparison.OrdinalIgnoreCase) ? "☀" : "☾";
 
-    private void ApplySettings()
+    private void ApplyPreferences()
     {
         ApplyTheme();
-        ApplyEditorSettings();
+        ApplyEditorPreferences();
     }
 
     private void ApplyTheme()
     {
-        if (Application.Current is not { } app) return;
-        var theme = _settings.Theme;
-        app.RequestedThemeVariant = string.Equals(theme, "Light", StringComparison.OrdinalIgnoreCase)
+        if (AvaloniaApplication.Current is not { } app) return;
+        var light = string.Equals(_theme, "Light", StringComparison.OrdinalIgnoreCase);
+        app.RequestedThemeVariant = light
             ? ThemeVariant.Light
-            : string.Equals(theme, "System", StringComparison.OrdinalIgnoreCase)
+            : string.Equals(_theme, "System", StringComparison.OrdinalIgnoreCase)
                 ? ThemeVariant.Default
                 : ThemeVariant.Dark;
 
-        var light = string.Equals(theme, "Light", StringComparison.OrdinalIgnoreCase);
         app.Resources["TsAppBackgroundBrush"] = Brush(light ? "#F3F3F3" : "#1E1E1E");
         app.Resources["TsSurfaceBrush"] = Brush(light ? "#FFFFFF" : "#252526");
         app.Resources["TsSurfaceMutedBrush"] = Brush(light ? "#F0F0F0" : "#2D2D30");
@@ -333,47 +321,53 @@ internal sealed class WorkspaceUxCompletionFeature
         app.Resources["TsDangerBrush"] = Brush(light ? "#C42B1C" : "#F14C4C");
 
         _window.Background = Brush(light ? "#FFFFFF" : "#1E1E1E");
-        var chrome = _window.GetVisualDescendants()
-            .OfType<Grid>()
-            .FirstOrDefault(static grid => string.Equals(grid.Name, "ReferenceTopChrome", StringComparison.Ordinal));
-        if (chrome is not null)
-        {
-            var chromeBackground = Brush(light ? "#F3F3F3" : "#181818");
-            var chromeText = Brush(light ? "#202020" : "#CCCCCC");
-            chrome.Background = chromeBackground;
-            foreach (var grid in chrome.GetVisualDescendants().OfType<Grid>())
-            {
-                if (grid.Background is not null && grid.Background != Brushes.Transparent)
-                    grid.Background = chromeBackground;
-            }
-            foreach (var border in chrome.GetVisualDescendants().OfType<Border>())
-            {
-                if (border.Child is Menu or Grid) border.Background = chromeBackground;
-            }
-            foreach (var text in chrome.GetVisualDescendants().OfType<TextBlock>())
-                text.Foreground = chromeText;
-            foreach (var menu in chrome.GetVisualDescendants().OfType<Menu>())
-            {
-                menu.Background = chromeBackground;
-                menu.Foreground = chromeText;
-            }
-            var search = chrome.GetVisualDescendants().OfType<TextBox>()
-                .FirstOrDefault(static box => string.Equals(box.Name, "ProjectSearchBox", StringComparison.Ordinal));
-            if (search is not null)
-            {
-                search.Background = Brush(light ? "#FFFFFF" : "#1E1E1E");
-                search.Foreground = chromeText;
-                search.BorderBrush = Brush(light ? "#B8B8B8" : "#3F3F46");
-            }
-        }
-
-        if (_themeButton?.Content is TextBlock glyph) glyph.Text = CurrentThemeGlyph();
+        ApplyTopChromeTheme(light);
+        if (_themeButton?.Content is TextBlock text) text.Text = ThemeGlyph();
     }
 
-    private void ApplyEditorSettings()
+    private void ApplyTopChromeTheme(bool light)
+    {
+        var chrome = FindTopChrome();
+        if (chrome is null) return;
+        var background = Brush(light ? "#F3F3F3" : "#181818");
+        var foreground = Brush(light ? "#202020" : "#CCCCCC");
+        var searchBackground = Brush(light ? "#FFFFFF" : "#1E1E1E");
+        var borderColor = Brush(light ? "#B8B8B8" : "#3F3F46");
+
+        chrome.Background = background;
+        foreach (var grid in chrome.GetVisualDescendants().OfType<Grid>())
+            if (grid.Background is not null && grid.Background != Brushes.Transparent)
+                grid.Background = background;
+        foreach (var border in chrome.GetVisualDescendants().OfType<Border>())
+            if (border.Child is Menu or Grid)
+                border.Background = background;
+        foreach (var menu in chrome.GetVisualDescendants().OfType<Menu>())
+        {
+            menu.Background = background;
+            menu.Foreground = foreground;
+        }
+        foreach (var text in chrome.GetVisualDescendants().OfType<TextBlock>())
+            text.Foreground = foreground;
+
+        var search = chrome.GetVisualDescendants().OfType<Avalonia.Controls.TextBox>()
+            .FirstOrDefault(static box => string.Equals(box.Name, "ProjectSearchBox", StringComparison.Ordinal));
+        if (search is not null)
+        {
+            search.Background = searchBackground;
+            search.Foreground = foreground;
+            search.BorderBrush = borderColor;
+        }
+    }
+
+    private Grid? FindTopChrome()
+        => _window.GetVisualDescendants()
+            .OfType<Grid>()
+            .FirstOrDefault(static grid => string.Equals(grid.Name, "ReferenceTopChrome", StringComparison.Ordinal));
+
+    private void ApplyEditorPreferences()
     {
         foreach (var editor in _window.GetVisualDescendants().OfType<ManuscriptEditor>())
-            editor.ShowLineNumbers = _settings.ShowLineNumbers;
+            editor.ShowLineNumbers = _showLineNumbers;
     }
 
     private async Task ShowSettingsAsync()
@@ -381,14 +375,14 @@ internal sealed class WorkspaceUxCompletionFeature
         var theme = new ComboBox
         {
             ItemsSource = new[] { "Dark", "Light", "System" },
-            SelectedItem = NormalizeTheme(_settings.Theme),
+            SelectedItem = NormalizeTheme(_theme),
             MinWidth = 190,
             HorizontalAlignment = HorizontalAlignment.Left
         };
         var lineNumbers = new CheckBox
         {
             Content = "Show manuscript line numbers",
-            IsChecked = _settings.ShowLineNumbers
+            IsChecked = _showLineNumbers
         };
         var save = new Button { Content = "Save Settings", MinWidth = 108 };
         var cancel = new Button { Content = "Cancel", MinWidth = 88, Margin = new Thickness(8, 0, 0, 0) };
@@ -412,7 +406,7 @@ internal sealed class WorkspaceUxCompletionFeature
                     Opacity = 0.68,
                     Margin = new Thickness(0, 0, 0, 8)
                 },
-                Field("Theme", theme),
+                LabeledField("Theme", theme),
                 lineNumbers,
                 new Separator { Margin = new Thickness(0, 8) },
                 actions
@@ -432,10 +426,10 @@ internal sealed class WorkspaceUxCompletionFeature
         cancel.Click += (_, _) => dialog.Close(false);
         if (!await dialog.ShowDialog<bool>(_window)) return;
 
-        _settings.Theme = theme.SelectedItem?.ToString() ?? "Dark";
-        _settings.ShowLineNumbers = lineNumbers.IsChecked == true;
+        _theme = theme.SelectedItem?.ToString() ?? "Dark";
+        _showLineNumbers = lineNumbers.IsChecked == true;
         SaveSettings();
-        ApplySettings();
+        ApplyPreferences();
     }
 
     private void InstallCenterPreview()
@@ -449,38 +443,35 @@ internal sealed class WorkspaceUxCompletionFeature
                 !items.Any(static item => HeaderEquals(item, "Outliner")))
                 continue;
 
-            _centerTabs = tabs;
             _outlinerTab = items.FirstOrDefault(static item => HeaderEquals(item, "Outliner"));
             var existing = items.FirstOrDefault(static item => HeaderEquals(item, "Preview"));
-            if (existing is not null)
+            if (existing is null)
             {
-                _centerPreviewTab = existing;
-                _centerPreviewTab.Content = BuildCenterPreviewSurface();
-                _centerPreviewInstalled = true;
-                UpdateCenterPreview();
-                return;
+                var index = items.FindIndex(static item => HeaderEquals(item, "Editor"));
+                existing = new TabItem { Header = "Preview", Content = BuildCenterPreviewSurface() };
+                items.Insert(Math.Clamp(index + 1, 0, items.Count), existing);
+                tabs.ItemsSource = items.ToArray();
             }
-
-            var editorIndex = items.FindIndex(static item => HeaderEquals(item, "Editor"));
-            _centerPreviewTab = new TabItem { Header = "Preview", Content = BuildCenterPreviewSurface() };
-            items.Insert(Math.Clamp(editorIndex + 1, 0, items.Count), _centerPreviewTab);
-            tabs.ItemsSource = items.ToArray();
+            else
+            {
+                existing.Content = BuildCenterPreviewSurface();
+            }
             _centerPreviewInstalled = true;
             UpdateCenterPreview();
             return;
         }
     }
 
-    private Control BuildCenterPreviewSurface()
+    private Grid BuildCenterPreviewSurface()
     {
         var heading = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto") };
-        heading.Children.Add(_centerPreviewTitle);
-        Grid.SetRow(_centerPreviewMeta, 1);
-        heading.Children.Add(_centerPreviewMeta);
+        heading.Children.Add(_previewTitle);
+        Grid.SetRow(_previewMeta, 1);
+        heading.Children.Add(_previewMeta);
 
         var scroll = new ScrollViewer
         {
-            Content = _centerPreviewText,
+            Content = _previewText,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
         };
@@ -494,39 +485,37 @@ internal sealed class WorkspaceUxCompletionFeature
     private void UpdateCenterPreview()
     {
         if (!_centerPreviewInstalled) return;
-        if (_viewModel.HasDocument)
+        if (!_viewModel.HasDocument)
         {
-            _centerPreviewTitle.Text = _viewModel.SelectedTitle;
-            _centerPreviewMeta.Text = $"Formatted manuscript preview · {_viewModel.WordCount:N0} words";
-            _centerPreviewText.Text = string.IsNullOrWhiteSpace(_viewModel.PreviewText)
-                ? "Nothing to preview yet."
-                : _viewModel.PreviewText;
+            _previewTitle.Text = "Preview";
+            _previewMeta.Text = "Select a manuscript document to preview it.";
+            _previewText.Text = string.Empty;
+            return;
         }
-        else
-        {
-            _centerPreviewTitle.Text = "Preview";
-            _centerPreviewMeta.Text = "Select a manuscript document to preview it.";
-            _centerPreviewText.Text = string.Empty;
-        }
+        _previewTitle.Text = _viewModel.SelectedTitle;
+        _previewMeta.Text = $"Formatted manuscript preview · {_viewModel.WordCount:N0} words";
+        _previewText.Text = string.IsNullOrWhiteSpace(_viewModel.PreviewText)
+            ? "Nothing to preview yet."
+            : _viewModel.PreviewText;
     }
 
-    private void RemoveLegacyProjectTabs()
+    private void RemoveLegacyLeftTabs()
     {
-        if (_leftTabsCleaned) return;
-        var tabs = _window.GetVisualDescendants().OfType<TabControl>()
-            .FirstOrDefault(control => TabItems(control).Any(static item =>
-                HeaderEquals(item, "Binder") || HeaderEquals(item, "Project")) &&
-                TabItems(control).Any(static item => HeaderEquals(item, "Bookmarks")));
-        if (tabs is null) return;
-
-        var items = TabItems(tabs);
-        var filtered = items.Where(static item =>
-            !HeaderEquals(item, "Search") &&
-            !HeaderEquals(item, "Collections") &&
-            !HeaderEquals(item, "Favorites")).ToArray();
-        if (filtered.Length != items.Count) tabs.ItemsSource = filtered;
-        if (tabs.SelectedIndex < 0 && filtered.Length > 0) tabs.SelectedIndex = 0;
-        _leftTabsCleaned = true;
+        if (_leftCleaned) return;
+        foreach (var tabs in _window.GetVisualDescendants().OfType<TabControl>())
+        {
+            var items = TabItems(tabs);
+            if (!items.Any(static item => HeaderEquals(item, "Bookmarks"))) continue;
+            if (!items.Any(static item => HeaderEquals(item, "Binder") || HeaderEquals(item, "Project"))) continue;
+            var filtered = items.Where(static item =>
+                !HeaderEquals(item, "Search") &&
+                !HeaderEquals(item, "Collections") &&
+                !HeaderEquals(item, "Favorites")).ToArray();
+            if (filtered.Length != items.Count) tabs.ItemsSource = filtered;
+            if (tabs.SelectedIndex < 0 && filtered.Length > 0) tabs.SelectedIndex = 0;
+            _leftCleaned = true;
+            return;
+        }
     }
 
     private void ArrangeInspectorTabs()
@@ -535,37 +524,36 @@ internal sealed class WorkspaceUxCompletionFeature
         foreach (var tabs in _window.GetVisualDescendants().OfType<TabControl>())
         {
             var items = TabItems(tabs);
+            if (items.Any(static item => HeaderEquals(item, "Editor"))) continue;
             if (!items.Any(static item => HeaderEquals(item, "Comments")) ||
                 !items.Any(static item => HeaderEquals(item, "Snapshots")) ||
                 !items.Any(static item => HeaderEquals(item, "Project")))
                 continue;
-            if (items.Any(static item => HeaderEquals(item, "Editor"))) continue;
 
             var preview = items.FirstOrDefault(static item => HeaderEquals(item, "PDF") || HeaderEquals(item, "Preview"));
             if (preview is null) continue;
             preview.Header = "Preview";
-
             var ordered = new List<TabItem> { preview };
-            AddIfPresent(ordered, items, "Comments");
-            AddIfPresent(ordered, items, "Outline");
-            AddIfPresent(ordered, items, "Snapshots");
-            AddIfPresent(ordered, items, "Project");
+            AddTab(ordered, items, "Comments");
+            AddTab(ordered, items, "Outline");
+            AddTab(ordered, items, "Snapshots");
+            AddTab(ordered, items, "Project");
             foreach (var item in items)
             {
                 if (HeaderEquals(item, "Inspector")) continue;
                 if (!ordered.Contains(item)) ordered.Add(item);
             }
-            var oldSelection = tabs.SelectedItem as TabItem;
+            var selected = tabs.SelectedItem as TabItem;
             tabs.ItemsSource = ordered.ToArray();
-            tabs.SelectedItem = oldSelection is not null && ordered.Contains(oldSelection) ? oldSelection : preview;
+            tabs.SelectedItem = selected is not null && ordered.Contains(selected) ? selected : preview;
             _inspectorArranged = true;
             return;
         }
     }
 
-    private static void AddIfPresent(ICollection<TabItem> output, IEnumerable<TabItem> items, string header)
+    private static void AddTab(List<TabItem> output, IEnumerable<TabItem> source, string header)
     {
-        var item = items.FirstOrDefault(candidate => HeaderEquals(candidate, header));
+        var item = source.FirstOrDefault(candidate => HeaderEquals(candidate, header));
         if (item is not null && !output.Contains(item)) output.Add(item);
     }
 
@@ -573,27 +561,28 @@ internal sealed class WorkspaceUxCompletionFeature
     {
         if (_bookmarksPolished) return;
         var tab = FindTab("Bookmarks", leftSide: true);
-        if (tab?.Content is not Control oldContent) return;
-        WrapSection(tab, oldContent, "ux-bookmarks", "Bookmarks", "Save important manuscript positions. Add uses the current editor caret; double-click a bookmark to jump back.");
-        foreach (var button in EnumerateControls(oldContent).OfType<Button>())
+        if (tab?.Content is not Control content) return;
+        ToolTip.SetTip(tab, "Bookmarks · save and revisit exact manuscript positions");
+        foreach (var button in EnumerateControls(content).OfType<Button>())
         {
             var text = ButtonText(button);
             if (string.Equals(text, "Add Bookmark", StringComparison.Ordinal))
             {
                 button.Content = "+ Bookmark";
                 button.MinWidth = 100;
-                ToolTip.SetTip(button, "Add a labeled bookmark at the current caret");
+                ToolTip.SetTip(button, "Add a labeled bookmark at the current editor caret");
             }
             else if (string.Equals(text, "Remove", StringComparison.Ordinal))
             {
-                button.Content = "Remove";
                 ToolTip.SetTip(button, "Remove the selected bookmark");
             }
+            button.MinHeight = 29;
+            button.Padding = new Thickness(9, 3);
         }
-        foreach (var list in EnumerateControls(oldContent).OfType<ListBox>())
+        foreach (var list in EnumerateControls(content).OfType<ListBox>())
         {
-            list.Margin = new Thickness(10, 4, 10, 10);
-            ToolTip.SetTip(list, "Double-click a bookmark to navigate to it");
+            list.Margin = new Thickness(8, 4, 8, 8);
+            ToolTip.SetTip(list, "Double-click a bookmark to jump to it");
         }
         _bookmarksPolished = true;
     }
@@ -602,19 +591,26 @@ internal sealed class WorkspaceUxCompletionFeature
     {
         if (_commentsPolished) return;
         var tab = FindTab("Comments", leftSide: false);
-        if (tab?.Content is not Control oldContent) return;
-        WrapSection(tab, oldContent, "ux-comments", "Comments", "Attach notes to the current cursor location without changing manuscript text. Double-click an item to jump to its source line.");
-        foreach (var button in EnumerateControls(oldContent).OfType<Button>())
+        if (tab?.Content is not Control content) return;
+        ToolTip.SetTip(tab, "Comments · attach notes to the current source location without changing manuscript text");
+        foreach (var button in EnumerateControls(content).OfType<Button>())
         {
             var text = ButtonText(button);
-            if (string.Equals(text, "Add at Caret", StringComparison.Ordinal)) button.Content = "+ Comment";
-            else if (string.Equals(text, "Resolve / Reopen", StringComparison.Ordinal)) button.Content = "Toggle Resolved";
-            else if (string.Equals(text, "Delete", StringComparison.Ordinal)) button.Content = "Delete";
+            if (string.Equals(text, "Add at Caret", StringComparison.Ordinal))
+            {
+                button.Content = "+ Comment";
+                ToolTip.SetTip(button, "Add a comment at the current editor caret");
+            }
+            else if (string.Equals(text, "Resolve / Reopen", StringComparison.Ordinal))
+                button.Content = "Toggle Resolved";
             button.MinHeight = 29;
             button.Padding = new Thickness(9, 3);
         }
-        foreach (var list in EnumerateControls(oldContent).OfType<ListBox>())
+        foreach (var list in EnumerateControls(content).OfType<ListBox>())
+        {
             list.Margin = new Thickness(8, 4, 8, 8);
+            ToolTip.SetTip(list, "Double-click a comment to jump to its source line");
+        }
         _commentsPolished = true;
     }
 
@@ -622,12 +618,15 @@ internal sealed class WorkspaceUxCompletionFeature
     {
         if (_snapshotsPolished) return;
         var tab = FindTab("Snapshots", leftSide: false);
-        if (tab?.Content is not Control oldContent) return;
-        WrapSection(tab, oldContent, "ux-snapshots", "Snapshots", "Capture a named version before major edits. Compare, selectively restore changed paragraphs, or restore the complete snapshot.");
-        foreach (var button in EnumerateControls(oldContent).OfType<Button>())
+        if (tab?.Content is not Control content) return;
+        ToolTip.SetTip(tab, "Snapshots · capture, compare and restore manuscript versions");
+        foreach (var button in EnumerateControls(content).OfType<Button>())
         {
-            var text = ButtonText(button);
-            if (string.Equals(text, "Take Snapshot", StringComparison.Ordinal)) button.Content = "+ Snapshot";
+            if (string.Equals(ButtonText(button), "Take Snapshot", StringComparison.Ordinal))
+            {
+                button.Content = "+ Snapshot";
+                ToolTip.SetTip(button, "Create a named snapshot of the current manuscript text");
+            }
             button.MinHeight = 29;
             button.Padding = new Thickness(9, 3);
         }
@@ -636,62 +635,56 @@ internal sealed class WorkspaceUxCompletionFeature
 
     private void PolishProjectTargets()
     {
-        if (_projectTargetsPolished) return;
+        if (_targetsPolished) return;
         var tab = FindTab("Project", leftSide: false);
-        if (tab?.Content is not Control oldContent) return;
-        WrapSection(tab, oldContent, "ux-project-targets", "Writing Targets", "Set project, daily, and session word targets. Project progress tracks the complete manuscript.");
-        var inputs = EnumerateControls(oldContent).OfType<TextBox>().ToArray();
+        if (tab?.Content is not Control content) return;
+        ToolTip.SetTip(tab, "Writing targets · project, daily and session word goals");
+        var inputs = EnumerateControls(content).OfType<Avalonia.Controls.TextBox>().ToArray();
         for (var index = 0; index < Math.Min(3, inputs.Length); index++)
         {
             inputs[index].MinHeight = 32;
             inputs[index].Padding = new Thickness(8, 4);
             inputs[index].MinWidth = 140;
         }
-        foreach (var button in EnumerateControls(oldContent).OfType<Button>())
+        if (inputs.Length > 0)
+            ToolTip.SetTip(inputs[0], "Project word target · set 0 to disable the goal");
+        foreach (var button in EnumerateControls(content).OfType<Button>())
         {
             if (string.Equals(ButtonText(button), "Save Writing Targets", StringComparison.Ordinal))
                 button.Content = "Save Targets";
         }
-        _projectTargetsPolished = true;
+        _targetsPolished = true;
     }
 
-    private void InstallOutlinerLabelPalette()
+    private void InstallOutlinerLabelControls()
     {
-        if (_outlinerPaletteInstalled) return;
+        if (_outlinerLabelsInstalled) return;
         _outlinerTab ??= FindCenterTab("Outliner");
         if (_outlinerTab?.Content is not Control oldContent) return;
 
-        var label = new TextBlock
+        var labelTitle = new TextBlock
         {
             Text = "Label",
             FontWeight = FontWeight.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(3, 0)
         };
-        var color = new TextBlock
+        var colorTitle = new TextBlock
         {
             Text = "Color",
-            VerticalAlignment = VerticalAlignment.Center,
             Opacity = 0.72,
+            VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(9, 0, 3, 0)
         };
-        _outlinerLabelBox.Margin = new Thickness(3, 0);
-        _outlinerLabelSwatch.Margin = new Thickness(3, 0);
-        _outlinerLabelColor.Margin = new Thickness(3, 0);
-        _outlinerApplyLabel.Margin = new Thickness(3, 0);
         var bar = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(10, 6, 10, 2),
             VerticalAlignment = VerticalAlignment.Center,
-            Children =
-            {
-                label, _outlinerLabelBox, color, _outlinerLabelSwatch,
-                _outlinerLabelColor, _outlinerApplyLabel
-            }
+            Children = { labelTitle, _labelBox, colorTitle, _labelSwatch, _labelColor, _applyLabel }
         };
-        ToolTip.SetTip(_outlinerLabelColor, "Choose the shared color used for this label in the Outliner");
-        ToolTip.SetTip(_outlinerApplyLabel, "Apply the label and color to the selected manuscript item");
+        ToolTip.SetTip(_labelColor, "Choose the shared color for this label");
+        ToolTip.SetTip(_applyLabel, "Apply the label and color to the selected Outliner document");
 
         _outlinerTab.Content = null;
         var wrapper = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
@@ -700,115 +693,116 @@ internal sealed class WorkspaceUxCompletionFeature
         Grid.SetRow(oldContent, 1);
         wrapper.Children.Add(oldContent);
         _outlinerTab.Content = wrapper;
-        _outlinerPaletteInstalled = true;
+        _outlinerLabelsInstalled = true;
         EnsureLabelColorProject();
-        UpdateOutlinerLabelControls();
-        UpdateLabelSwatch();
+        UpdateLabelControls();
     }
 
     private async Task ApplySelectedLabelAsync()
     {
-        if (_syncingLabelControls) return;
+        if (_syncingLabelUi) return;
         var node = _viewModel.SelectedRow?.Node;
         if (node?.IsDocument != true) return;
-        var value = _outlinerLabelBox.Text?.Trim() ?? string.Empty;
-        var choice = _outlinerLabelColor.SelectedItem as PaletteChoice ?? LabelPalette[0];
 
+        var label = _labelBox.Text?.Trim() ?? string.Empty;
+        var choice = _labelColor.SelectedItem as LabelColorChoice ?? LabelColors[0];
         await _viewModel.SaveSelectedMetadataAsync(
             node.Synopsis,
             node.Notes,
             node.Status,
-            value,
+            label,
             node.Keywords,
             node.TargetWords);
 
         EnsureLabelColorProject();
-        if (!string.IsNullOrWhiteSpace(value))
+        if (!string.IsNullOrWhiteSpace(label))
         {
-            if (string.IsNullOrWhiteSpace(choice.Hex)) _labelColors.Remove(value);
-            else _labelColors[value] = choice.Hex;
+            if (string.IsNullOrWhiteSpace(choice.Hex)) _labelColorMap.Remove(label);
+            else _labelColorMap[label] = choice.Hex;
             SaveLabelColors();
         }
-        UpdateOutlinerLabelControls();
+        UpdateLabelControls();
         StyleOutlinerLabelCells();
     }
 
-    private void UpdateOutlinerLabelControls()
+    private void UpdateLabelControls()
     {
-        if (!_outlinerPaletteInstalled) return;
+        if (!_outlinerLabelsInstalled) return;
         var node = _viewModel.SelectedRow?.Node;
         var enabled = node?.IsDocument == true;
-        _syncingLabelControls = true;
+        _syncingLabelUi = true;
         try
         {
-            _outlinerLabelBox.IsEnabled = enabled;
-            _outlinerLabelColor.IsEnabled = enabled;
-            _outlinerApplyLabel.IsEnabled = enabled;
-            _outlinerLabelBox.Text = enabled ? node!.Label : string.Empty;
-            var selected = LabelPalette[0];
+            _labelBox.IsEnabled = enabled;
+            _labelColor.IsEnabled = enabled;
+            _applyLabel.IsEnabled = enabled;
+            _labelBox.Text = enabled ? node!.Label : string.Empty;
+
+            var selected = LabelColors[0];
             if (enabled && !string.IsNullOrWhiteSpace(node!.Label) &&
-                _labelColors.TryGetValue(node.Label, out var hex))
+                _labelColorMap.TryGetValue(node.Label, out var hex))
             {
-                selected = LabelPalette.FirstOrDefault(choice =>
-                    string.Equals(choice.Hex, hex, StringComparison.OrdinalIgnoreCase)) ?? LabelPalette[0];
+                selected = LabelColors.FirstOrDefault(choice =>
+                    string.Equals(choice.Hex, hex, StringComparison.OrdinalIgnoreCase)) ?? LabelColors[0];
             }
-            _outlinerLabelColor.SelectedItem = selected;
+            _labelColor.SelectedItem = selected;
             UpdateLabelSwatch();
         }
-        finally { _syncingLabelControls = false; }
+        finally
+        {
+            _syncingLabelUi = false;
+        }
     }
 
     private void UpdateLabelSwatch()
     {
-        var choice = _outlinerLabelColor.SelectedItem as PaletteChoice;
-        _outlinerLabelSwatch.Background = string.IsNullOrWhiteSpace(choice?.Hex)
-            ? Brushes.Transparent
-            : Brush(choice!.Hex!);
+        var choice = _labelColor.SelectedItem as LabelColorChoice;
+        _labelSwatch.Background = string.IsNullOrWhiteSpace(choice?.Hex) ? Brushes.Transparent : Brush(choice!.Hex!);
     }
 
     private void StyleOutlinerLabelCells()
     {
-        if (!_outlinerPaletteInstalled || _outlinerTab?.Content is not Control root) return;
+        if (!_outlinerLabelsInstalled || _outlinerTab?.Content is not Control root) return;
         foreach (var grid in EnumerateControls(root).OfType<Grid>())
         {
-            var label = grid.Children.OfType<TextBox>().FirstOrDefault(box => Grid.GetColumn(box) == 3);
-            if (label is null) continue;
-            var text = label.Text?.Trim();
-            if (string.IsNullOrWhiteSpace(text) || !_labelColors.TryGetValue(text, out var hex))
+            var box = grid.Children.OfType<Avalonia.Controls.TextBox>()
+                .FirstOrDefault(candidate => Grid.GetColumn(candidate) == 3);
+            if (box is null) continue;
+            var label = box.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(label) || !_labelColorMap.TryGetValue(label, out var hex))
             {
-                label.ClearValue(TextBox.BackgroundProperty);
-                label.ClearValue(TextBox.BorderBrushProperty);
-                label.ClearValue(TextBox.BorderThicknessProperty);
+                box.ClearValue(Avalonia.Controls.TextBox.BackgroundProperty);
+                box.ClearValue(Avalonia.Controls.TextBox.BorderBrushProperty);
+                box.ClearValue(Avalonia.Controls.TextBox.BorderThicknessProperty);
                 continue;
             }
             var color = Color.Parse(hex);
-            label.Background = new SolidColorBrush(Color.FromArgb(32, color.R, color.G, color.B));
-            label.BorderBrush = new SolidColorBrush(color);
-            label.BorderThickness = new Thickness(3, 1, 1, 1);
+            box.Background = new SolidColorBrush(Color.FromArgb(32, color.R, color.G, color.B));
+            box.BorderBrush = new SolidColorBrush(color);
+            box.BorderThickness = new Thickness(3, 1, 1, 1);
         }
     }
 
     private void EnsureLabelColorProject()
     {
-        var project = CurrentProject();
-        var root = project?.RootPath;
-        if (string.Equals(root, _loadedLabelProject, StringComparison.Ordinal)) return;
-        _loadedLabelProject = root;
-        _labelColors.Clear();
+        var root = CurrentProject()?.RootPath;
+        if (string.Equals(root, _labelProjectRoot, StringComparison.Ordinal)) return;
+        _labelProjectRoot = root;
+        _labelColorMap.Clear();
         if (root is null) return;
         var path = LabelColorPath(root);
         if (!File.Exists(path)) return;
         try
         {
-            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path));
-            if (data is null) return;
-            foreach (var pair in data)
-                if (!string.IsNullOrWhiteSpace(pair.Key) && IsHexColor(pair.Value))
-                    _labelColors[pair.Key] = pair.Value;
+            foreach (var line in File.ReadLines(path))
+            {
+                var parts = line.Split('\t', 2);
+                if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]) && IsHexColor(parts[1]))
+                    _labelColorMap[parts[0]] = parts[1];
+            }
         }
         catch
         {
-            // Label color preferences are presentation-only and should never block authoring.
         }
     }
 
@@ -820,63 +814,58 @@ internal sealed class WorkspaceUxCompletionFeature
         {
             var path = LabelColorPath(root);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(_labelColors, new JsonSerializerOptions { WriteIndented = true }));
+            var lines = _labelColorMap
+                .OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(static pair => pair.Key.Replace('\t', ' ') + "\t" + pair.Value);
+            File.WriteAllLines(path, lines);
         }
         catch
         {
         }
     }
 
-    private static string LabelColorPath(string root)
-        => Path.Combine(root, ".typescribe", "label-colors.json");
+    private static string LabelColorPath(string projectRoot)
+        => Path.Combine(projectRoot, ".typescribe", "label-colors.tsv");
 
-    private void PolishOpenCardEditors()
+    private void PolishCardDialogs()
     {
-        if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
+        if (AvaloniaApplication.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
         foreach (var dialog in desktop.Windows)
         {
-            if (dialog == _window || !dialog.IsVisible) continue;
+            if (ReferenceEquals(dialog, _window) || !dialog.IsVisible) continue;
             if (dialog.Title?.StartsWith("Edit Corkboard Card", StringComparison.Ordinal) != true) continue;
-            if (dialog.Classes.Contains("typescribe-card-editor-polished")) continue;
-            dialog.Classes.Add("typescribe-card-editor-polished");
-            dialog.Width = double.IsNaN(dialog.Width) ? 620 : Math.Max(dialog.Width, 620);
-            dialog.Height = double.IsNaN(dialog.Height) ? 650 : Math.Max(dialog.Height, 650);
+            if (dialog.Classes.Contains("card-editor-polished")) continue;
+            dialog.Classes.Add("card-editor-polished");
+            dialog.Width = double.IsNaN(dialog.Width) ? 620 : Math.Max(620, dialog.Width);
+            dialog.Height = double.IsNaN(dialog.Height) ? 650 : Math.Max(650, dialog.Height);
 
-            if (dialog.Content is not Control content) continue;
-            var inputs = EnumerateControls(content).OfType<TextBox>().ToArray();
-            foreach (var input in inputs)
+            if (dialog.Content is not Control root) continue;
+            foreach (var input in EnumerateControls(root).OfType<Avalonia.Controls.TextBox>())
             {
-                input.HorizontalAlignment = HorizontalAlignment.Stretch;
                 input.MinHeight = 34;
                 input.Padding = new Thickness(9, 5);
-                if (string.Equals(input.Watermark, "Synopsis", StringComparison.Ordinal))
+                input.HorizontalAlignment = HorizontalAlignment.Stretch;
+                var placeholder = input.PlaceholderText ?? string.Empty;
+                if (string.Equals(placeholder, "Synopsis", StringComparison.Ordinal))
                 {
                     input.MinHeight = 150;
                     input.AcceptsReturn = true;
                     input.TextWrapping = TextWrapping.Wrap;
                 }
-                else if (string.Equals(input.Watermark, "Draft / Revised / Final", StringComparison.Ordinal))
+                else if (placeholder.Contains("Draft", StringComparison.OrdinalIgnoreCase))
+                    input.PlaceholderText = "Status — Draft, Revised, Final…";
+                else if (placeholder.Contains("storyline", StringComparison.OrdinalIgnoreCase))
+                    input.PlaceholderText = "Label — storyline, POV, character arc…";
+                else if (placeholder.Contains("keywords", StringComparison.OrdinalIgnoreCase))
+                    input.PlaceholderText = "Keywords — comma separated";
+                else if (placeholder.Contains("Word target", StringComparison.OrdinalIgnoreCase))
                 {
-                    input.Watermark = "Status — Draft, Revised, Final…";
-                }
-                else if (string.Equals(input.Watermark, "Label / storyline / POV", StringComparison.Ordinal))
-                {
-                    input.Watermark = "Label — storyline, POV, character arc…";
-                }
-                else if (string.Equals(input.Watermark, "comma-separated keywords", StringComparison.Ordinal))
-                {
-                    input.Watermark = "Keywords — comma separated";
-                }
-                else if (string.Equals(input.Watermark, "Word target", StringComparison.Ordinal))
-                {
-                    input.Watermark = "Word target — 0 for none";
+                    input.PlaceholderText = "Word target — 0 for none";
                     input.MaxWidth = 220;
                     input.HorizontalAlignment = HorizontalAlignment.Left;
                 }
             }
-            foreach (var stack in EnumerateControls(content).OfType<StackPanel>())
-                if (stack.Children.OfType<TextBox>().Any()) stack.Spacing = Math.Max(8, stack.Spacing);
-            foreach (var button in EnumerateControls(content).OfType<Button>())
+            foreach (var button in EnumerateControls(root).OfType<Button>())
             {
                 if (string.Equals(ButtonText(button), "Save", StringComparison.Ordinal)) button.Content = "Save Card";
                 button.MinHeight = 32;
@@ -910,44 +899,31 @@ internal sealed class WorkspaceUxCompletionFeature
         return null;
     }
 
-    private static void WrapSection(TabItem tab, Control oldContent, string marker, string title, string description)
-    {
-        if (oldContent.Classes.Contains(marker)) return;
-        var heading = new StackPanel
-        {
-            Margin = new Thickness(10, 10, 10, 5),
-            Spacing = 3,
-            Children =
-            {
-                new TextBlock { Text = title, FontSize = 17, FontWeight = FontWeight.SemiBold },
-                new TextBlock { Text = description, TextWrapping = TextWrapping.Wrap, Opacity = 0.64 }
-            }
-        };
-        tab.Content = null;
-        var wrapper = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        wrapper.Classes.Add(marker);
-        wrapper.Children.Add(heading);
-        Grid.SetRow(oldContent, 1);
-        wrapper.Children.Add(oldContent);
-        tab.Content = wrapper;
-    }
-
     private BookProject? CurrentProject()
         => typeof(WorkspaceViewModel)
             .GetField("_project", BindingFlags.Instance | BindingFlags.NonPublic)
             ?.GetValue(_viewModel) as BookProject;
 
-    private UiSettings LoadSettings()
+    private void LoadSettings()
     {
         try
         {
             var path = SettingsPath();
-            if (!File.Exists(path)) return new UiSettings();
-            return JsonSerializer.Deserialize<UiSettings>(File.ReadAllText(path)) ?? new UiSettings();
+            if (!File.Exists(path)) return;
+            foreach (var line in File.ReadLines(path))
+            {
+                var split = line.IndexOf('=');
+                if (split <= 0) continue;
+                var key = line[..split].Trim();
+                var value = line[(split + 1)..].Trim();
+                if (string.Equals(key, "theme", StringComparison.OrdinalIgnoreCase))
+                    _theme = NormalizeTheme(value);
+                else if (string.Equals(key, "lineNumbers", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out var enabled))
+                    _showLineNumbers = enabled;
+            }
         }
         catch
         {
-            return new UiSettings();
         }
     }
 
@@ -957,7 +933,7 @@ internal sealed class WorkspaceUxCompletionFeature
         {
             var path = SettingsPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllLines(path, ["theme=" + NormalizeTheme(_theme), "lineNumbers=" + _showLineNumbers]);
         }
         catch
         {
@@ -968,20 +944,23 @@ internal sealed class WorkspaceUxCompletionFeature
     {
         var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(root)) root = Path.GetTempPath();
-        return Path.Combine(root, "Typescribe", "ui-settings.json");
+        return Path.Combine(root, "Typescribe", "ui-settings.txt");
     }
 
     private static string NormalizeTheme(string? theme)
-        => theme is "Light" or "System" ? theme : "Dark";
+        => string.Equals(theme, "Light", StringComparison.OrdinalIgnoreCase)
+            ? "Light"
+            : string.Equals(theme, "System", StringComparison.OrdinalIgnoreCase)
+                ? "System"
+                : "Dark";
 
     private static bool IsHexColor(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Length != 7 || value[0] != '#') return false;
-        return value.AsSpan(1).ToArray().All(static ch => Uri.IsHexDigit(ch));
-    }
+        => !string.IsNullOrWhiteSpace(value) &&
+           value.Length == 7 && value[0] == '#' &&
+           value.AsSpan(1).ToArray().All(static ch => Uri.IsHexDigit(ch));
 
-    private static Control Field(string label, Control input)
-        => new StackPanel
+    private static StackPanel LabeledField(string label, Control input)
+        => new()
         {
             Spacing = 4,
             Children =
@@ -990,9 +969,6 @@ internal sealed class WorkspaceUxCompletionFeature
                 input
             }
         };
-
-    private static string ButtonGlyph(Button button)
-        => button.Content is TextBlock text ? text.Text ?? string.Empty : button.Content?.ToString() ?? string.Empty;
 
     private static string ButtonText(Button button)
         => button.Content is TextBlock text ? text.Text ?? string.Empty : button.Content?.ToString() ?? string.Empty;
@@ -1014,18 +990,18 @@ internal sealed class WorkspaceUxCompletionFeature
         yield return root;
         if (root is Panel panel)
         {
-            foreach (var child in panel.Children)
-                foreach (var descendant in EnumerateControls(child))
+            foreach (var panelChild in panel.Children)
+                foreach (var descendant in EnumerateControls(panelChild))
                     yield return descendant;
         }
-        if (root is Decorator { Child: Control child })
+        if (root is Decorator { Child: Control decoratorChild })
         {
-            foreach (var descendant in EnumerateControls(child))
+            foreach (var descendant in EnumerateControls(decoratorChild))
                 yield return descendant;
         }
-        if (root is ContentControl { Content: Control content })
+        if (root is ContentControl { Content: Control contentChild })
         {
-            foreach (var descendant in EnumerateControls(content))
+            foreach (var descendant in EnumerateControls(contentChild))
                 yield return descendant;
         }
         if (root is TabControl tabs)
@@ -1040,21 +1016,15 @@ internal sealed class WorkspaceUxCompletionFeature
     private void WindowClosed(object? sender, EventArgs e)
     {
         _disposed = true;
-        _dialogPolishTimer.Stop();
+        _cardDialogTimer.Stop();
         _viewModel.StateChanged -= ViewModelStateChanged;
         _window.Opened -= WindowOpened;
         _window.LayoutUpdated -= WindowLayoutUpdated;
         _window.Closed -= WindowClosed;
     }
 
-    private sealed record PaletteChoice(string Name, string? Hex)
+    private sealed record LabelColorChoice(string Name, string? Hex)
     {
         public override string ToString() => Name;
-    }
-
-    private sealed class UiSettings
-    {
-        public string Theme { get; set; } = "Dark";
-        public bool ShowLineNumbers { get; set; }
     }
 }
