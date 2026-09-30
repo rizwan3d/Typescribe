@@ -37,7 +37,7 @@ public sealed class App : AvaloniaApplication
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var repository = new TrackingProjectRepository(new FileSystemProjectRepository());
-            var parser = new DocumentParser();
+            var parser = new AdvancedDocumentParser();
             var renderer = new LuaLatexSafeDocumentRenderer();
             var publishingEngine = new LuaLatexPublishingEngine();
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
@@ -65,6 +65,7 @@ public sealed class App : AvaloniaApplication
 
             ManuscriptEditorUpgrade.Apply(window, viewModel);
             LongFormEditorFeature.Apply(window, viewModel);
+            ProfessionalEditorSuite.Apply(window, viewModel, repository);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             BookDesignFeature.Apply(window, viewModel);
 
