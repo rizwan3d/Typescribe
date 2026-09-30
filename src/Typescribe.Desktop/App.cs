@@ -64,6 +64,7 @@ public sealed class App : AvaloniaApplication
             PdfAutoFitEnhancement.Apply(window);
 
             ManuscriptEditorUpgrade.Apply(window, viewModel);
+            LongFormEditorFeature.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             BookDesignFeature.Apply(window, viewModel);
 
