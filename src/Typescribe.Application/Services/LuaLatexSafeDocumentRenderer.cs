@@ -24,7 +24,7 @@ public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
         "amsfonts"
     };
 
-    private readonly DocumentRenderer _inner = new();
+    private readonly AdvancedDocumentRenderer _inner = new();
 
     public string RenderPreview(DocumentAst document) => _inner.RenderPreview(document);
 
@@ -61,7 +61,7 @@ public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
             AppendLine(output, line);
         }
 
-        // DocumentRenderer always emits fontspec today, but keep the normalizer defensive
+        // The semantic renderer emits fontspec today, but keep the normalizer defensive
         // so future renderer changes still receive a valid math stack.
         if (!managedMathStackWritten)
         {
