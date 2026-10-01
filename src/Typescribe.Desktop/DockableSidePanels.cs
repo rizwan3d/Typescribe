@@ -8,9 +8,9 @@ using Avalonia.Media;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Adds Visual Studio-like tool-window headers and auto-hide rails to the left and right
-/// workspace panes. Pinned panes stay open; auto-hidden panes fold to the edge and reopen
-/// from a narrow rail until the user clicks elsewhere or pins them again.
+/// Adds Visual Studio-like tool-window behavior to the outer workspace panes. Project and
+/// Inspector can be pinned, auto-hidden, folded to a rail, or moved into independent windows.
+/// Every tab inside the workspace is also made floatable by WorkspaceDockingFeature.
 /// </summary>
 internal sealed class DockableSidePanels
 {
@@ -37,15 +37,24 @@ internal sealed class DockableSidePanels
     public static void Apply(StudioWorkspaceWindow window)
     {
         ArgumentNullException.ThrowIfNull(window);
-        if (window.Content is not Grid root) return;
+        if (window.Content is not Grid root)
+        {
+            WorkspaceDockingFeature.Apply(window);
+            return;
+        }
 
         var workspace = root.Children
             .OfType<Grid>()
             .FirstOrDefault(grid => Grid.GetRow(grid) == 2);
-        if (workspace is null || workspace.ColumnDefinitions.Count < 5) return;
+        if (workspace is null || workspace.ColumnDefinitions.Count < 5)
+        {
+            WorkspaceDockingFeature.Apply(window);
+            return;
+        }
 
         var docking = new DockableSidePanels(window, workspace);
         docking.Install();
+        WorkspaceDockingFeature.Apply(window);
     }
 
     private void Install()
@@ -93,10 +102,14 @@ internal sealed class DockableSidePanels
             : new GridLength(4);
 
         var pinButton = ToolButton("AUTO", 38, "Auto-hide this panel");
+        var floatButton = ToolButton("FLOAT", 42, $"Move {title} to a separate window");
         var foldButton = ToolButton(foldsLeft ? "‹" : "›", 24, "Fold panel to the side");
+        Control? panelContent = null;
+        Grid? contentHost = null;
 
-        if (pane is Border border && border.Child is Control panelContent)
+        if (pane is Border border && border.Child is Control currentContent)
         {
+            panelContent = currentContent;
             border.Child = null;
             border.Padding = new Thickness(0);
             border.CornerRadius = new CornerRadius(0);
@@ -109,7 +122,7 @@ internal sealed class DockableSidePanels
             {
                 Height = 26,
                 MinHeight = 26,
-                ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
+                ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
                 Background = SurfaceBrush,
                 Margin = new Thickness(0),
                 Children =
@@ -128,18 +141,24 @@ internal sealed class DockableSidePanels
 
             Grid.SetColumn(pinButton, 1);
             header.Children.Add(pinButton);
-            Grid.SetColumn(foldButton, 2);
+            Grid.SetColumn(floatButton, 2);
+            header.Children.Add(floatButton);
+            Grid.SetColumn(foldButton, 3);
             header.Children.Add(foldButton);
 
-            var host = new Grid
+            contentHost = new Grid
             {
                 RowDefinitions = new RowDefinitions("26,*"),
                 Background = SurfaceBrush
             };
-            host.Children.Add(header);
+            contentHost.Children.Add(header);
             Grid.SetRow(panelContent, 1);
-            host.Children.Add(panelContent);
-            border.Child = host;
+            contentHost.Children.Add(panelContent);
+            border.Child = contentHost;
+        }
+        else
+        {
+            floatButton.IsEnabled = false;
         }
 
         var rail = new Button
@@ -177,6 +196,7 @@ internal sealed class DockableSidePanels
             pane,
             rail,
             pinButton,
+            floatButton,
             foldButton,
             splitter,
             column,
@@ -185,17 +205,26 @@ internal sealed class DockableSidePanels
             expandedMinWidth,
             splitterWidth,
             title,
-            foldsLeft);
+            foldsLeft,
+            panelContent,
+            contentHost);
 
         pinButton.Click += (_, _) => TogglePinned(state);
+        floatButton.Click += (_, _) => FloatPane(state);
         foldButton.Click += (_, _) =>
         {
+            if (state.FloatingWindow is not null) return;
             state.IsPinned = false;
             UpdatePinButton(state);
             Collapse(state);
         };
         rail.Click += (_, _) =>
         {
+            if (state.FloatingWindow is { } floating)
+            {
+                floating.Activate();
+                return;
+            }
             state.IsPinned = false;
             UpdatePinButton(state);
             Expand(state);
@@ -205,6 +234,115 @@ internal sealed class DockableSidePanels
         rail.PointerExited += (_, _) => rail.Background = ChromeBrush;
         UpdatePinButton(state);
         return state;
+    }
+
+    private void FloatPane(PaneState state)
+    {
+        if (_disposed) return;
+        if (state.FloatingWindow is { } existing)
+        {
+            existing.Activate();
+            return;
+        }
+        if (state.PanelContent is null || state.ContentHost is null) return;
+
+        if (state.Column.Width.Value >= 80)
+            state.ExpandedWidth = state.Column.Width;
+
+        state.ContentHost.Children.Remove(state.PanelContent);
+
+        var dockButton = ToolButton("DOCK", 46, $"Dock {state.Title} back into Typescribe");
+        if (dockButton.Content is TextBlock dockLabel)
+            dockLabel.Foreground = AccentBrush;
+
+        var title = new TextBlock
+        {
+            Text = state.Title.ToUpperInvariant(),
+            FontSize = 10,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = TextBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0)
+        };
+        var header = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Height = 28,
+            MinHeight = 28,
+            Background = SurfaceBrush
+        };
+        header.Children.Add(title);
+        Grid.SetColumn(dockButton, 1);
+        header.Children.Add(dockButton);
+
+        var shell = new Grid
+        {
+            RowDefinitions = new RowDefinitions("28,*"),
+            Background = SurfaceBrush
+        };
+        shell.Children.Add(new Border
+        {
+            Background = SurfaceBrush,
+            BorderBrush = BorderBrush,
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = header
+        });
+        Grid.SetRow(state.PanelContent, 1);
+        shell.Children.Add(state.PanelContent);
+
+        var width = state.FoldsLeft ? 460 : 560;
+        var floating = new Window
+        {
+            Title = $"{state.Title} — Typescribe",
+            Width = width,
+            Height = 780,
+            MinWidth = 320,
+            MinHeight = 380,
+            Background = SurfaceBrush,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = shell
+        };
+
+        state.FloatingWindow = floating;
+        state.FloatingShell = shell;
+        state.IsPinned = false;
+        UpdatePinButton(state);
+        CollapseToRail(state);
+        ToolTip.SetTip(state.Rail, $"Focus floating {state.Title} window");
+
+        dockButton.Click += (_, _) => floating.Close();
+        floating.Closed += (_, _) => DockFloatingPane(state, floating);
+
+        try
+        {
+            floating.Show(_window);
+        }
+        catch
+        {
+            floating.Show();
+        }
+    }
+
+    private void DockFloatingPane(PaneState state, Window floating)
+    {
+        if (!ReferenceEquals(state.FloatingWindow, floating)) return;
+
+        floating.Content = null;
+        if (state.PanelContent is not null && state.FloatingShell is not null)
+        {
+            state.FloatingShell.Children.Remove(state.PanelContent);
+            Grid.SetRow(state.PanelContent, 1);
+            state.ContentHost?.Children.Add(state.PanelContent);
+        }
+
+        state.FloatingWindow = null;
+        state.FloatingShell = null;
+        ToolTip.SetTip(state.Rail, $"Show {state.Title} (auto-hidden)");
+        if (_disposed) return;
+
+        state.IsPinned = true;
+        UpdatePinButton(state);
+        Expand(state);
     }
 
     private static Button ToolButton(string text, double width, string tip)
@@ -242,6 +380,7 @@ internal sealed class DockableSidePanels
 
     private static void TogglePinned(PaneState state)
     {
+        if (state.FloatingWindow is not null) return;
         if (state.IsPinned)
         {
             state.IsPinned = false;
@@ -270,8 +409,12 @@ internal sealed class DockableSidePanels
 
     private static void Collapse(PaneState state)
     {
-        if (!state.IsExpanded) return;
+        if (!state.IsExpanded || state.FloatingWindow is not null) return;
+        CollapseToRail(state);
+    }
 
+    private static void CollapseToRail(PaneState state)
+    {
         if (state.Column.Width.Value >= 80)
             state.ExpandedWidth = state.Column.Width;
 
@@ -287,7 +430,7 @@ internal sealed class DockableSidePanels
 
     private static void Expand(PaneState state)
     {
-        if (state.IsExpanded) return;
+        if (state.IsExpanded || state.FloatingWindow is not null) return;
 
         state.Column.MinWidth = state.ExpandedMinWidth;
         state.Column.Width = state.ExpandedWidth;
@@ -309,7 +452,7 @@ internal sealed class DockableSidePanels
 
     private static void AutoHideIfOutside(PaneState? state, object? source)
     {
-        if (state is null || state.IsPinned || !state.IsExpanded) return;
+        if (state is null || state.IsPinned || !state.IsExpanded || state.FloatingWindow is not null) return;
         if (IsInside(source, state.Pane) || IsInside(source, state.Rail)) return;
         Collapse(state);
     }
@@ -328,12 +471,24 @@ internal sealed class DockableSidePanels
         _disposed = true;
         _window.RemoveHandler(InputElement.PointerPressedEvent, WindowPointerPressed);
         _window.Closed -= WindowClosed;
+        CloseFloatingWithoutDock(_left);
+        CloseFloatingWithoutDock(_right);
+    }
+
+    private static void CloseFloatingWithoutDock(PaneState? state)
+    {
+        if (state?.FloatingWindow is not { } floating) return;
+        floating.Content = null;
+        state.FloatingWindow = null;
+        state.FloatingShell = null;
+        floating.Close();
     }
 
     private sealed class PaneState(
         Control pane,
         Button rail,
         Button pinButton,
+        Button floatButton,
         Button foldButton,
         GridSplitter? splitter,
         ColumnDefinition column,
@@ -342,11 +497,14 @@ internal sealed class DockableSidePanels
         double expandedMinWidth,
         GridLength expandedSplitterWidth,
         string title,
-        bool foldsLeft)
+        bool foldsLeft,
+        Control? panelContent,
+        Grid? contentHost)
     {
         public Control Pane { get; } = pane;
         public Button Rail { get; } = rail;
         public Button PinButton { get; } = pinButton;
+        public Button FloatButton { get; } = floatButton;
         public Button FoldButton { get; } = foldButton;
         public GridSplitter? Splitter { get; } = splitter;
         public ColumnDefinition Column { get; } = column;
@@ -356,6 +514,10 @@ internal sealed class DockableSidePanels
         public GridLength ExpandedSplitterWidth { get; } = expandedSplitterWidth;
         public string Title { get; } = title;
         public bool FoldsLeft { get; } = foldsLeft;
+        public Control? PanelContent { get; } = panelContent;
+        public Grid? ContentHost { get; } = contentHost;
+        public Window? FloatingWindow { get; set; }
+        public Grid? FloatingShell { get; set; }
         public bool IsPinned { get; set; } = true;
         public bool IsExpanded { get; set; } = true;
     }
