@@ -2,6 +2,7 @@ using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Typescribe.Domain.Models;
 
 namespace Typescribe.Desktop;
@@ -10,7 +11,21 @@ internal static class DesktopDialogService
 {
     public static async Task<string?> PromptAsync(Window owner, string title, string label, string initialValue = "")
     {
-        var input = new TextBox { Text = initialValue, MinWidth = 320 };
+        var input = new TextBox
+        {
+            Text = initialValue,
+            MinWidth = 320,
+            MinHeight = 36,
+            Height = 36,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(10, 5),
+            Background = new SolidColorBrush(Color.Parse("#252526")),
+            Foreground = new SolidColorBrush(Color.Parse("#F1F1F1")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#5A5A5A")),
+            BorderThickness = new Thickness(1),
+            Watermark = label
+        };
         var ok = new Button { Content = "OK", MinWidth = 80 };
         var cancel = new Button { Content = "Cancel", MinWidth = 80 };
         var buttons = new StackPanel
@@ -24,21 +39,31 @@ internal static class DesktopDialogService
         {
             Title = title,
             Width = 460,
-            Height = 190,
+            Height = 220,
+            MinWidth = 420,
+            MinHeight = 200,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
+            Content = new Grid
             {
+                RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
                 Margin = new Thickness(20),
-                Spacing = 10,
                 Children =
                 {
-                    new TextBlock { Text = label },
+                    new TextBlock
+                    {
+                        Text = label,
+                        FontWeight = FontWeight.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 6)
+                    },
                     input,
                     buttons
                 }
             }
         };
+        Grid.SetRow(input, 1);
+        Grid.SetRow(buttons, 3);
+        buttons.Margin = new Thickness(0, 18, 0, 0);
 
         ok.Click += (_, _) =>
         {
@@ -54,6 +79,16 @@ internal static class DesktopDialogService
                 var value = input.Text?.Trim();
                 if (!string.IsNullOrWhiteSpace(value)) dialog.Close(value);
             }
+            else if (e.Key == Avalonia.Input.Key.Escape)
+            {
+                e.Handled = true;
+                dialog.Close(null);
+            }
+        };
+        dialog.Opened += (_, _) =>
+        {
+            input.Focus();
+            input.SelectAll();
         };
 
         var result = await dialog.ShowDialog<string?>(owner);
