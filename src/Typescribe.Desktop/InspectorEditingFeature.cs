@@ -1,5 +1,7 @@
 using System.Reflection;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Typescribe.Desktop.ViewModels;
 
@@ -68,8 +70,10 @@ internal sealed class InspectorEditingFeature
         Register(_keywords!, () => _viewModel.SelectedKeywords);
         Register(_target!, () => _viewModel.SelectedTargetWords.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
+        PolishInputs();
         _selectionId = _viewModel.SelectedRow?.Node.PersistentId;
         UpdateEnabledState();
+        UpdateTargetValidation();
         _installed = true;
         _window.LayoutUpdated -= OnLayoutUpdated;
     }
@@ -85,6 +89,33 @@ internal sealed class InspectorEditingFeature
         box.GotFocus += BoxGotFocus;
         box.LostFocus += BoxLostFocus;
         box.TextChanged += BoxTextChanged;
+    }
+
+    private void PolishInputs()
+    {
+        if (_synopsis is null || _notes is null || _status is null || _label is null || _keywords is null || _target is null)
+            return;
+
+        _synopsis.Watermark = "Short synopsis for this document…";
+        _notes.Watermark = "Notes, reminders, research links…";
+        _status.Watermark = "Draft / In Progress / Revised / Final";
+        _label.Watermark = "Storyline, POV, character arc…";
+        _keywords.Watermark = "Comma-separated keywords";
+        _target.Watermark = "0";
+
+        foreach (var box in new[] { _synopsis, _notes, _status, _label, _keywords, _target })
+        {
+            box.MinHeight = Math.Max(32, box.MinHeight);
+            box.Padding = new Thickness(8, 4);
+            box.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
+        }
+
+        ToolTip.SetTip(_synopsis, "Synopsis shown in Corkboard cards and project metadata.");
+        ToolTip.SetTip(_notes, "Private document notes stored outside manuscript text.");
+        ToolTip.SetTip(_status, "Free-form document status, for example Draft or Final.");
+        ToolTip.SetTip(_label, "Project label such as POV, storyline or character arc.");
+        ToolTip.SetTip(_keywords, "Comma-separated keywords used for project organization and search.");
+        ToolTip.SetTip(_target, "Document word target. Enter 0 for no target.");
     }
 
     private void BoxGotFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -108,6 +139,7 @@ internal sealed class InspectorEditingFeature
         }
 
         _drafts[box] = text;
+        if (ReferenceEquals(box, _target)) UpdateTargetValidation();
         ScheduleSave();
     }
 
@@ -117,6 +149,7 @@ internal sealed class InspectorEditingFeature
         try { await CommitAsync(CancellationToken.None); }
         catch { }
         _drafts.Remove(box);
+        if (ReferenceEquals(box, _target)) UpdateTargetValidation();
     }
 
     private void RestoreDraft(Avalonia.Controls.TextBox box, string draft)
@@ -154,7 +187,11 @@ internal sealed class InspectorEditingFeature
     private async Task CommitAsync(CancellationToken cancellationToken)
     {
         if (!_installed || !_viewModel.HasSelection || _target is null) return;
-        if (!int.TryParse(_target.Text, out var target) || target < 0) return;
+
+        // An invalid target must not prevent Synopsis/Notes/Status/Label/Keywords from saving.
+        // Keep the previously persisted target until the target field itself becomes valid.
+        var validTarget = int.TryParse(_target.Text, out var parsedTarget) && parsedTarget >= 0;
+        var target = validTarget ? parsedTarget : _viewModel.SelectedTargetWords;
 
         await _viewModel.SaveSelectedMetadataAsync(
             _synopsis?.Text ?? string.Empty,
@@ -164,6 +201,21 @@ internal sealed class InspectorEditingFeature
             _keywords?.Text ?? string.Empty,
             target,
             cancellationToken);
+    }
+
+    private void UpdateTargetValidation()
+    {
+        if (_target is null) return;
+        var valid = int.TryParse(_target.Text, out var value) && value >= 0;
+        if (valid || !_target.IsEnabled)
+        {
+            _target.ClearValue(Avalonia.Controls.TextBox.BorderBrushProperty);
+            ToolTip.SetTip(_target, "Document word target. Enter 0 for no target.");
+            return;
+        }
+
+        _target.BorderBrush = new SolidColorBrush(Color.Parse("#F14C4C"));
+        ToolTip.SetTip(_target, "Enter a whole number of 0 or more. Other Inspector fields will still save.");
     }
 
     private void OnStateChanged(object? sender, EventArgs e)
@@ -179,6 +231,7 @@ internal sealed class InspectorEditingFeature
             }
 
             UpdateEnabledState();
+            UpdateTargetValidation();
             foreach (var pair in _drafts.ToArray())
             {
                 if (pair.Key.IsKeyboardFocusWithin)
