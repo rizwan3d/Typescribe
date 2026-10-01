@@ -1,16 +1,19 @@
 using System.Collections;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Typescribe.Desktop.Editing;
 using Typescribe.Desktop.ViewModels;
 
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Keeps the injected Bookmarks tab useful and self-explanatory without changing
-/// StudioScriveningsFeatures' bookmark persistence/navigation behavior.
+/// Keeps the injected Bookmarks tab useful and self-explanatory while preserving
+/// StudioScriveningsFeatures' bookmark persistence and add/remove behavior.
 /// </summary>
 internal sealed class BookmarkNavigationPolish
 {
@@ -23,6 +26,7 @@ internal sealed class BookmarkNavigationPolish
     private Button? _removeButton;
     private TextBlock? _emptyState;
     private bool _wired;
+    private bool _navigatingSelection;
     private bool _disposed;
 
     private BookmarkNavigationPolish(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
@@ -53,7 +57,7 @@ internal sealed class BookmarkNavigationPolish
     }
 
     private void OnStateChanged(object? sender, EventArgs e)
-        => Avalonia.Threading.Dispatcher.UIThread.Post(UpdateState);
+        => Dispatcher.UIThread.Post(UpdateState);
 
     private void TryInstall()
     {
@@ -84,15 +88,15 @@ internal sealed class BookmarkNavigationPolish
         _addButton.MinWidth = 112;
         _removeButton.MinWidth = 74;
         _bookmarkList.Margin = new Thickness(8, 0, 8, 8);
-        _bookmarkList.SelectionChanged += (_, _) => UpdateState();
+        _bookmarkList.SelectionChanged += BookmarkSelectionChanged;
 
-        ToolTip.SetTip(_addButton, "Add a bookmark at the caret in the selected document");
+        ToolTip.SetTip(_addButton, "Add a bookmark at the current editor caret and enter a bookmark name");
         ToolTip.SetTip(_removeButton, "Remove the selected bookmark");
-        ToolTip.SetTip(_bookmarkList, "Double-click a bookmark to jump to it");
+        ToolTip.SetTip(_bookmarkList, "Select a bookmark to jump to its saved line");
 
         _emptyState = new TextBlock
         {
-            Text = "No bookmarks yet.\nSelect a document, place the caret, then choose Add Bookmark.",
+            Text = "No bookmarks yet.\nPlace the editor caret on a line, choose Add Bookmark, then enter a name.",
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -109,6 +113,73 @@ internal sealed class BookmarkNavigationPolish
         UpdateState();
     }
 
+    private async void BookmarkSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        UpdateState();
+        if (_disposed || _navigatingSelection || _bookmarkList?.SelectedItem is not { } bookmark) return;
+
+        _navigatingSelection = true;
+        try
+        {
+            await NavigateToBookmarkAsync(bookmark);
+        }
+        catch
+        {
+            // Bookmark navigation should never make the workspace unusable.
+        }
+        finally
+        {
+            _navigatingSelection = false;
+        }
+    }
+
+    private async Task NavigateToBookmarkAsync(object bookmark)
+    {
+        if (!TryReadBookmark(bookmark, out var persistentId, out var line, out var column)) return;
+
+        var row = _viewModel.BinderRows.FirstOrDefault(candidate =>
+            string.Equals(candidate.Node.PersistentId, persistentId, StringComparison.Ordinal));
+        if (row is null) return;
+
+        await _viewModel.SelectAsync(row);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed) return;
+
+            foreach (var tabs in _window.GetVisualDescendants().OfType<TabControl>())
+            {
+                var editorTab = TabItems(tabs).FirstOrDefault(item =>
+                    string.Equals(item.Header?.ToString(), "Editor", StringComparison.OrdinalIgnoreCase));
+                if (editorTab is null) continue;
+                tabs.SelectedItem = editorTab;
+                break;
+            }
+
+            var editors = _window.GetVisualDescendants().OfType<ManuscriptEditor>().ToArray();
+            var editor = editors.FirstOrDefault(candidate =>
+                string.Equals(candidate.DocumentIdentity, persistentId, StringComparison.Ordinal))
+                ?? editors.FirstOrDefault();
+            if (editor is null) return;
+
+            editor.NavigateToLine(Math.Max(1, line), Math.Max(1, column));
+            editor.Focus();
+        }, DispatcherPriority.Background);
+    }
+
+    private static bool TryReadBookmark(object bookmark, out string persistentId, out int line, out int column)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var type = bookmark.GetType();
+        persistentId = type.GetProperty("PersistentId", flags)?.GetValue(bookmark) as string ?? string.Empty;
+        line = ReadInt(type.GetProperty("Line", flags)?.GetValue(bookmark), 1);
+        column = ReadInt(type.GetProperty("Column", flags)?.GetValue(bookmark), 1);
+        return !string.IsNullOrWhiteSpace(persistentId);
+    }
+
+    private static int ReadInt(object? value, int fallback)
+        => value is int number && number > 0 ? number : fallback;
+
     private void UpdateState()
     {
         if (_disposed || !_wired) return;
@@ -118,7 +189,7 @@ internal sealed class BookmarkNavigationPolish
         {
             _addButton.IsEnabled = canAdd;
             ToolTip.SetTip(_addButton, canAdd
-                ? "Add a bookmark at the caret in the selected document"
+                ? "Add a bookmark at the current editor caret and enter a bookmark name"
                 : "Select a document before adding a bookmark");
         }
 
@@ -132,6 +203,8 @@ internal sealed class BookmarkNavigationPolish
     private void OnClosed(object? sender, EventArgs e)
     {
         _disposed = true;
+        if (_bookmarkList is not null)
+            _bookmarkList.SelectionChanged -= BookmarkSelectionChanged;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
