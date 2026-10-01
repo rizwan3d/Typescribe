@@ -103,7 +103,7 @@ internal sealed class WorkspaceInteractionCompletenessFeature
 
         _commentInput = new TextBox
         {
-            Watermark = "Write a comment for the current caret…",
+            PlaceholderText = "Write a comment for the current caret…",
             MinHeight = 32,
             Padding = new Thickness(8, 4),
             HorizontalAlignment = HorizontalAlignment.Stretch
@@ -190,7 +190,7 @@ internal sealed class WorkspaceInteractionCompletenessFeature
 
         _snapshotInput = new TextBox
         {
-            Watermark = "Snapshot label (optional)",
+            PlaceholderText = "Snapshot label (optional)",
             MinHeight = 32,
             Padding = new Thickness(8, 4),
             HorizontalAlignment = HorizontalAlignment.Stretch
@@ -343,7 +343,7 @@ internal sealed class WorkspaceInteractionCompletenessFeature
 
     private static Exception Unwrap(Exception exception)
         => exception is TargetInvocationException { InnerException: not null } invocation
-            ? invocation.InnerException
+            ? invocation.InnerException!
             : exception;
 
     private void OnClosed(object? sender, EventArgs e)
