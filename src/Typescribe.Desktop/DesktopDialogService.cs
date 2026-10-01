@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Typescribe.Domain.Models;
+using NativeTextBox = Avalonia.Controls.TextBox;
 
 namespace Typescribe.Desktop;
 
@@ -11,7 +12,11 @@ internal static class DesktopDialogService
 {
     public static async Task<string?> PromptAsync(Window owner, string title, string label, string initialValue = "")
     {
-        var input = new TextBox
+        // Use Avalonia's native TextBox directly. Typescribe also has a small TextBox
+        // compatibility subclass for code-created workspace editors; that subclass does not
+        // receive the Fluent TextBox control theme in standalone prompt windows on every
+        // platform, which can leave the editor with no rendered template.
+        var input = new NativeTextBox
         {
             Text = initialValue,
             MinWidth = 320,
@@ -20,12 +25,23 @@ internal static class DesktopDialogService
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Center,
             Padding = new Thickness(10, 5),
-            Background = new SolidColorBrush(Color.Parse("#252526")),
+            Background = Brushes.Transparent,
             Foreground = new SolidColorBrush(Color.Parse("#F1F1F1")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#5A5A5A")),
-            BorderThickness = new Thickness(1),
+            BorderThickness = new Thickness(0),
             Watermark = label
         };
+        var inputFrame = new Border
+        {
+            MinHeight = 40,
+            Height = 40,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Background = new SolidColorBrush(Color.Parse("#252526")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#6A6A6A")),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Child = input
+        };
+
         var ok = new Button { Content = "OK", MinWidth = 80 };
         var cancel = new Button { Content = "Cancel", MinWidth = 80 };
         var buttons = new StackPanel
@@ -35,6 +51,23 @@ internal static class DesktopDialogService
             Spacing = 8,
             Children = { cancel, ok }
         };
+        var content = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+            Margin = new Thickness(20)
+        };
+        content.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+        Grid.SetRow(inputFrame, 1);
+        content.Children.Add(inputFrame);
+        Grid.SetRow(buttons, 3);
+        buttons.Margin = new Thickness(0, 18, 0, 0);
+        content.Children.Add(buttons);
+
         var dialog = new Window
         {
             Title = title,
@@ -44,26 +77,8 @@ internal static class DesktopDialogService
             MinHeight = 200,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
-                Margin = new Thickness(20),
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = label,
-                        FontWeight = FontWeight.SemiBold,
-                        Margin = new Thickness(0, 0, 0, 6)
-                    },
-                    input,
-                    buttons
-                }
-            }
+            Content = content
         };
-        Grid.SetRow(input, 1);
-        Grid.SetRow(buttons, 3);
-        buttons.Margin = new Thickness(0, 18, 0, 0);
 
         ok.Click += (_, _) =>
         {
@@ -238,17 +253,17 @@ internal static class DesktopDialogService
         return row;
     }
 
-    private static TextBox Input(string value) => new() { Text = value };
-    private static TextBox Input(double value) => new() { Text = value.ToString("0.###", CultureInfo.InvariantCulture) };
+    private static NativeTextBox Input(string value) => new() { Text = value };
+    private static NativeTextBox Input(double value) => new() { Text = value.ToString("0.###", CultureInfo.InvariantCulture) };
 
-    private static string Required(TextBox input, string label)
+    private static string Required(NativeTextBox input, string label)
     {
         var value = input.Text?.Trim();
         if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException($"{label} is required.");
         return value;
     }
 
-    private static double Number(TextBox input, string label)
+    private static double Number(NativeTextBox input, string label)
     {
         var value = input.Text?.Trim() ?? string.Empty;
         if (double.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out var current)) return current;
