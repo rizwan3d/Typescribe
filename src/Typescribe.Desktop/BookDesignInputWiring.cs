@@ -5,6 +5,8 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Threading;
 using Typescribe.Desktop.ViewModels;
+using NativeTextBlock = Avalonia.Controls.TextBlock;
+using NativeTextBox = Avalonia.Controls.TextBox;
 
 namespace Typescribe.Desktop;
 
@@ -58,7 +60,7 @@ internal static class BookDesignInputWiring
             var rowSpan = Grid.GetRowSpan(combo);
             var columnSpan = Grid.GetColumnSpan(combo);
 
-            var editor = new TextBox
+            var editor = new NativeTextBox
             {
                 Text = GetEditorString(dialog, spec.Property),
                 Watermark = spec.Watermark,
@@ -164,7 +166,7 @@ internal static class BookDesignInputWiring
 
         foreach (var candidate in EnumerateControls(content).OfType<Grid>())
         {
-            var labelBlock = candidate.Children.OfType<TextBlock>()
+            var labelBlock = candidate.Children.OfType<NativeTextBlock>()
                 .FirstOrDefault(block => string.Equals(block.Text, label, StringComparison.Ordinal));
             if (labelBlock is null) continue;
 
@@ -223,10 +225,10 @@ internal static class BookDesignInputWiring
         string Watermark,
         double PresetWidth);
 
-    private sealed class WiredInput(FieldSpec spec, TextBox editor)
+    private sealed class WiredInput(FieldSpec spec, NativeTextBox editor)
     {
         public FieldSpec Spec { get; } = spec;
-        public TextBox Editor { get; } = editor;
+        public NativeTextBox Editor { get; } = editor;
         public bool Syncing { get; set; }
     }
 }
