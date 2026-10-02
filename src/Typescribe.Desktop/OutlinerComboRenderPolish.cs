@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -45,8 +46,7 @@ internal sealed class OutlinerComboRenderPolish
 
     private void WindowLayoutUpdated(object? sender, EventArgs e)
     {
-        // LayoutUpdated is discovery-only. Any changes made by Scan are idempotent so they cannot
-        // feed another measure/arrange pass forever.
+        // Discovery only. Normalization below is idempotent and never forces measure/arrange.
         if (!_disposed) Scan();
     }
 
@@ -117,9 +117,9 @@ internal sealed class OutlinerComboRenderPolish
             e.Property != ComboBox.BorderThicknessProperty)
             return;
 
-        // EventDrivenLabelEditingFeature can apply a color tint after this polish has already
-        // normalized the cell. Editable ComboBox templates expose that outer tint as clipped
-        // corner fragments, so remove it as soon as it is reapplied.
+        // The label feature may apply a semantic tint to the editable ComboBox. Avalonia's
+        // editable template draws that outer tint in disconnected pieces around its inner editor.
+        // Keep the ComboBox chrome transparent and let the dedicated frame draw one clean border.
         QueueTintCleanup(combo);
     }
 
@@ -133,9 +133,9 @@ internal sealed class OutlinerComboRenderPolish
             {
                 if (_disposed || !combo.IsAttachedToVisualTree()) return;
 
-                combo.ClearValue(ComboBox.BackgroundProperty);
-                combo.ClearValue(ComboBox.BorderBrushProperty);
-                combo.ClearValue(ComboBox.BorderThicknessProperty);
+                combo.Background = Brushes.Transparent;
+                combo.BorderBrush = Brushes.Transparent;
+                combo.BorderThickness = new Thickness(0);
                 combo.InvalidateVisual();
 
                 var cell = combo.GetVisualAncestors()
@@ -157,8 +157,7 @@ internal sealed class OutlinerComboRenderPolish
 
     private void QueueStableRerender(ComboBox combo)
     {
-        // Repaint after the popup closes without forcing a new measure/arrange cycle. Forcing
-        // layout from LayoutUpdated was the source of Avalonia's "Infinite layout loop detected".
+        // Repaint after the popup closes without forcing a new measure/arrange cycle.
         Dispatcher.UIThread.Post(() =>
         {
             if (_disposed || !combo.IsAttachedToVisualTree()) return;
@@ -176,6 +175,9 @@ internal sealed class OutlinerComboRenderPolish
             .OfType<Grid>()
             .FirstOrDefault(static grid => grid.Classes.Contains("ux-outliner-label-cell"));
         labelCell?.InvalidateVisual();
+        labelCell?.Children.OfType<Border>()
+            .FirstOrDefault(static border => border.Classes.Contains("ux-outliner-label-frame"))
+            ?.InvalidateVisual();
 
         var row = combo.GetVisualAncestors()
             .OfType<Grid>()
@@ -190,16 +192,14 @@ internal sealed class OutlinerComboRenderPolish
             .FirstOrDefault(static grid => grid.Classes.Contains("ux-outliner-label-cell"));
         if (cell is null) return;
 
-        var combos = cell.Children.OfType<ComboBox>().ToArray();
-        if (combos.Length < 2) return;
-
-        var label = combos.FirstOrDefault(static candidate => candidate.IsEditable);
-        var color = combos.FirstOrDefault(static candidate => !candidate.IsEditable);
+        var label = cell.GetVisualDescendants()
+            .OfType<ComboBox>()
+            .FirstOrDefault(static candidate => candidate.IsEditable);
+        var color = cell.Children.OfType<ComboBox>()
+            .FirstOrDefault(static candidate => !candidate.IsEditable);
         if (label is null || color is null) return;
 
-        // The outer Label / Color column can temporarily be 230px while the legacy Outliner
-        // repair pass and the event-driven label editor settle. Keep this inner grid compact so
-        // its controls never request more width than the host and spill into adjacent columns.
+        // Keep the whole Label / Color editor compact enough for the 230px legacy host width.
         if (cell.ColumnDefinitions.Count != 3)
         {
             cell.ColumnDefinitions = new ColumnDefinitions("*,92,28");
@@ -223,18 +223,24 @@ internal sealed class OutlinerComboRenderPolish
         cell.HorizontalAlignment = HorizontalAlignment.Stretch;
         cell.ClipToBounds = true;
 
-        label.Height = 32;
-        label.MinWidth = 0;
-        label.Margin = new Thickness(1, 1, 0, 1);
-        label.HorizontalAlignment = HorizontalAlignment.Stretch;
-        label.VerticalContentAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(label, 0);
+        var frame = EnsureLabelFrame(cell, label);
+        frame.Height = 32;
+        frame.MinWidth = 0;
+        frame.Margin = new Thickness(1);
+        frame.HorizontalAlignment = HorizontalAlignment.Stretch;
+        frame.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(frame, 0);
 
-        // Keep the editable label control on the native Avalonia theme. The adjacent color selector
-        // and swatch carry the color information without corrupting the editable ComboBox border.
-        label.ClearValue(ComboBox.BackgroundProperty);
-        label.ClearValue(ComboBox.BorderBrushProperty);
-        label.ClearValue(ComboBox.BorderThicknessProperty);
+        label.Height = 30;
+        label.MinWidth = 0;
+        label.Margin = new Thickness(0);
+        label.Padding = new Thickness(7, 2, 4, 2);
+        label.HorizontalAlignment = HorizontalAlignment.Stretch;
+        label.VerticalAlignment = VerticalAlignment.Stretch;
+        label.VerticalContentAlignment = VerticalAlignment.Center;
+        label.Background = Brushes.Transparent;
+        label.BorderBrush = Brushes.Transparent;
+        label.BorderThickness = new Thickness(0);
 
         color.MinWidth = 0;
         color.Width = double.NaN;
@@ -253,6 +259,37 @@ internal sealed class OutlinerComboRenderPolish
         swatch.HorizontalAlignment = HorizontalAlignment.Center;
         swatch.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(swatch, 2);
+    }
+
+    private static Border EnsureLabelFrame(Grid cell, ComboBox label)
+    {
+        var frame = cell.Children.OfType<Border>()
+            .FirstOrDefault(static border => border.Classes.Contains("ux-outliner-label-frame"));
+        if (frame is not null) return frame;
+
+        // Reparent once: the wrapper owns the visual border, while the editable ComboBox owns only
+        // text editing and its drop-down button. This avoids the split/cut border seen in the
+        // editable Avalonia ComboBox template when runtime colors are applied.
+        if (cell.Children.Contains(label))
+            cell.Children.Remove(label);
+
+        frame = new Border
+        {
+            Child = label,
+            BorderBrush = new SolidColorBrush(Color.Parse("#5A5A5F")),
+            Background = new SolidColorBrush(Color.Parse("#202020")),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            ClipToBounds = true
+        };
+        frame.Classes.Add("ux-outliner-label-frame");
+        cell.Children.Insert(0, frame);
+
+        var normal = new SolidColorBrush(Color.Parse("#5A5A5F"));
+        var focused = new SolidColorBrush(Color.Parse("#7A7A80"));
+        label.GotFocus += (_, _) => frame.BorderBrush = focused;
+        label.LostFocus += (_, _) => frame.BorderBrush = normal;
+        return frame;
     }
 
     private void RerenderOutliner()
