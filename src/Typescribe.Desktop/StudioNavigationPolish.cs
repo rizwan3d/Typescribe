@@ -32,7 +32,7 @@ internal sealed class StudioNavigationPolish
         ArgumentNullException.ThrowIfNull(viewModel);
 
         InspectorEditingFeature.Apply(window, viewModel);
-        OutlinerSpreadsheetFeature.Apply(window, viewModel);
+        ReliableOutlinerFeature.Apply(window, viewModel);
         SnapshotHistoryFeature.Apply(window, viewModel);
         WorkspaceUxCompletionFeature.Apply(window, viewModel);
         CorkboardOutlinerUiRepairFeature.Apply(window, viewModel);
