@@ -2,6 +2,7 @@ using System.Collections;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Threading;
@@ -11,10 +12,9 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop.Editing;
 
 /// <summary>
-/// Gives authors direct control over which editor analysis categories are active.
-/// Spelling is delegated to <see cref="RealSpellCheckFeature"/> while grammar,
-/// style, and readability are analyzed here so each category can be switched
-/// independently without disabling the others.
+/// Lets authors choose which editor analysis categories are active. Spelling stays
+/// delegated to <see cref="RealSpellCheckFeature"/> while grammar, style, and
+/// readability checks can be enabled independently.
 /// </summary>
 internal sealed class SelectableEditorAnalysisFeature
 {
@@ -33,7 +33,6 @@ internal sealed class SelectableEditorAnalysisFeature
     private readonly TrackingProjectRepository _repository;
     private readonly DispatcherTimer _analysisTimer;
     private readonly List<AnalysisIssue> _issues = [];
-    private readonly ProjectAnalysisSettingsStore _settings = new();
 
     private ManuscriptEditor? _editor;
     private ToggleButton? _spellingToggle;
@@ -130,8 +129,8 @@ internal sealed class SelectableEditorAnalysisFeature
                 StringComparison.OrdinalIgnoreCase));
         if (legacyAnalysis?.Parent is not StackPanel panel) return;
 
-        // ProfessionalEditorSuite owns the old all-or-nothing analysis pass. Keep it
-        // disabled so category-specific diagnostics do not race with that pass.
+        // ProfessionalEditorSuite owns the old all-or-nothing pass. Keep it off so
+        // it cannot overwrite category-specific or dictionary spelling diagnostics.
         legacyAnalysis.IsChecked = false;
         ReplaceLegacyAnalysisControls(panel, legacyAnalysis);
 
@@ -142,9 +141,9 @@ internal sealed class SelectableEditorAnalysisFeature
         ExtendContextMenu();
 
         _window.AddHandler(
-            Avalonia.Input.InputElement.KeyDownEvent,
+            InputElement.KeyDownEvent,
             WindowPreviewKeyDown,
-            Avalonia.Interactivity.RoutingStrategies.Tunnel,
+            RoutingStrategies.Tunnel,
             handledEventsToo: true);
 
         _installed = true;
@@ -159,9 +158,8 @@ internal sealed class SelectableEditorAnalysisFeature
         var legacyIndex = panel.Children.IndexOf(legacyAnalysis);
         if (legacyIndex < 0) return;
 
-        // Hide the old Analysis toggle, navigation buttons, fix button and old status
-        // until the next separator. Their backing issue list belongs to the disabled
-        // all-or-nothing analyzer.
+        // Hide the legacy Analysis toggle, issue navigation, fix action and status.
+        // The next Border is the separator inserted by ProfessionalEditorSuite.
         for (var index = legacyIndex; index < panel.Children.Count; index++)
         {
             if (index > legacyIndex && panel.Children[index] is Border) break;
@@ -177,31 +175,10 @@ internal sealed class SelectableEditorAnalysisFeature
                 Opacity = 0.72,
                 Margin = new Thickness(2, 0, 3, 0)
             },
-            CreateToggle("Spell", "Enable or disable dictionary spell checking", value =>
-            {
-                _spellingEnabled = value;
-                PersistSelection();
-                ApplySpellingPreference();
-                RefreshUi();
-            }, out _spellingToggle),
-            CreateToggle("Grammar", "Repeated words, spacing and punctuation checks", value =>
-            {
-                _grammarEnabled = value;
-                PersistSelection();
-                ScheduleAnalysis();
-            }, out _grammarToggle),
-            CreateToggle("Style", "Concision and passive-construction checks", value =>
-            {
-                _styleEnabled = value;
-                PersistSelection();
-                ScheduleAnalysis();
-            }, out _styleToggle),
-            CreateToggle("Readability", "Long sentence and dense paragraph checks", value =>
-            {
-                _readabilityEnabled = value;
-                PersistSelection();
-                ScheduleAnalysis();
-            }, out _readabilityToggle),
+            CreateToggle("Spell", "Dictionary spell checking", OnSpellingChanged, out _spellingToggle),
+            CreateToggle("Grammar", "Repeated words, spacing and punctuation", OnGrammarChanged, out _grammarToggle),
+            CreateToggle("Style", "Concision and passive-construction suggestions", OnStyleChanged, out _styleToggle),
+            CreateToggle("Readability", "Long sentence and dense paragraph warnings", OnReadabilityChanged, out _readabilityToggle),
             CreateButton("‹", "Previous enabled analysis issue", () => NavigateIssue(-1)),
             CreateButton("›", "Next enabled analysis issue", () => NavigateIssue(1)),
             CreateButton("Fix", "Apply the current analysis issue's suggested fix", ApplyCurrentFix),
@@ -224,7 +201,7 @@ internal sealed class SelectableEditorAnalysisFeature
         Action<bool> changed,
         out ToggleButton toggle)
     {
-        toggle = new ToggleButton
+        var created = new ToggleButton
         {
             Content = label,
             Height = 27,
@@ -234,9 +211,10 @@ internal sealed class SelectableEditorAnalysisFeature
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
-        ToolTip.SetTip(toggle, tip);
-        toggle.IsCheckedChanged += (_, _) => changed(toggle.IsChecked == true);
-        return toggle;
+        ToolTip.SetTip(created, tip);
+        created.IsCheckedChanged += (_, _) => changed(created.IsChecked == true);
+        toggle = created;
+        return created;
     }
 
     private static Button CreateButton(string label, string tip, Action action)
@@ -256,6 +234,39 @@ internal sealed class SelectableEditorAnalysisFeature
         return button;
     }
 
+    private void OnSpellingChanged(bool enabled)
+    {
+        if (_syncingUi) return;
+        _spellingEnabled = enabled;
+        PersistSelection();
+        ApplySpellingPreference();
+        RefreshUi();
+    }
+
+    private void OnGrammarChanged(bool enabled)
+    {
+        if (_syncingUi) return;
+        _grammarEnabled = enabled;
+        PersistSelection();
+        ScheduleAnalysis();
+    }
+
+    private void OnStyleChanged(bool enabled)
+    {
+        if (_syncingUi) return;
+        _styleEnabled = enabled;
+        PersistSelection();
+        ScheduleAnalysis();
+    }
+
+    private void OnReadabilityChanged(bool enabled)
+    {
+        if (_syncingUi) return;
+        _readabilityEnabled = enabled;
+        PersistSelection();
+        ScheduleAnalysis();
+    }
+
     private void ExtendContextMenu()
     {
         if (_editor?.ContextMenu is null) return;
@@ -266,31 +277,26 @@ internal sealed class SelectableEditorAnalysisFeature
                 string.Equals(item.Header?.ToString(), "Analysis Types", StringComparison.Ordinal)))
             return;
 
-        _spellingContextItem = CreateContextToggle("Spelling", value =>
+        // These actions belong to the disabled all-or-nothing analyzer. Replace them
+        // with navigation actions that operate on the enabled category set.
+        foreach (var legacy in existing.OfType<MenuItem>())
         {
-            _spellingEnabled = value;
-            PersistSelection();
-            ApplySpellingPreference();
-            RefreshUi();
-        });
-        _grammarContextItem = CreateContextToggle("Grammar", value =>
-        {
-            _grammarEnabled = value;
-            PersistSelection();
-            ScheduleAnalysis();
-        });
-        _styleContextItem = CreateContextToggle("Style", value =>
-        {
-            _styleEnabled = value;
-            PersistSelection();
-            ScheduleAnalysis();
-        });
-        _readabilityContextItem = CreateContextToggle("Readability", value =>
-        {
-            _readabilityEnabled = value;
-            PersistSelection();
-            ScheduleAnalysis();
-        });
+            if (string.Equals(legacy.Header?.ToString(), "Next Writing Issue", StringComparison.Ordinal) ||
+                string.Equals(legacy.Header?.ToString(), "Apply Suggested Fix", StringComparison.Ordinal))
+                legacy.IsVisible = false;
+        }
+
+        _spellingContextItem = CreateContextToggle("Spelling", OnSpellingChanged);
+        _grammarContextItem = CreateContextToggle("Grammar", OnGrammarChanged);
+        _styleContextItem = CreateContextToggle("Style", OnStyleChanged);
+        _readabilityContextItem = CreateContextToggle("Readability", OnReadabilityChanged);
+
+        var previous = new MenuItem { Header = "Previous Analysis Issue" };
+        previous.Click += (_, _) => NavigateIssue(-1);
+        var next = new MenuItem { Header = "Next Analysis Issue" };
+        next.Click += (_, _) => NavigateIssue(1);
+        var fix = new MenuItem { Header = "Apply Analysis Fix" };
+        fix.Click += (_, _) => ApplyCurrentFix();
 
         var analysisMenu = new MenuItem
         {
@@ -300,7 +306,11 @@ internal sealed class SelectableEditorAnalysisFeature
                 _spellingContextItem,
                 _grammarContextItem,
                 _styleContextItem,
-                _readabilityContextItem
+                _readabilityContextItem,
+                new Separator(),
+                previous,
+                next,
+                fix
             }
         };
         existing.Add(new Separator());
@@ -329,7 +339,7 @@ internal sealed class SelectableEditorAnalysisFeature
         if (string.Equals(root, _loadedProjectRoot, StringComparison.Ordinal)) return;
 
         _loadedProjectRoot = root;
-        var selection = _settings.Load(root);
+        var selection = ProjectAnalysisSettingsStore.Load(root);
         _spellingEnabled = selection.Spelling;
         _grammarEnabled = selection.Grammar;
         _styleEnabled = selection.Style;
@@ -343,7 +353,7 @@ internal sealed class SelectableEditorAnalysisFeature
 
     private void PersistSelection()
     {
-        _settings.Save(
+        ProjectAnalysisSettingsStore.Save(
             _loadedProjectRoot,
             new AnalysisSelection(
                 _spellingEnabled,
@@ -378,8 +388,7 @@ internal sealed class SelectableEditorAnalysisFeature
     private void ApplySpellingPreference()
     {
         TryBindSpellingToggle();
-        if (_spellingSourceItem is null) return;
-        if (_spellingSourceItem.IsChecked == _spellingEnabled) return;
+        if (_spellingSourceItem is null || _spellingSourceItem.IsChecked == _spellingEnabled) return;
 
         _syncingSpellingBridge = true;
         try
@@ -456,15 +465,13 @@ internal sealed class SelectableEditorAnalysisFeature
         return enabled;
     }
 
-    private static IReadOnlyList<AnalysisIssue> Analyze(string text, AnalysisKind enabled)
+    private static AnalysisIssue[] Analyze(string text, AnalysisKind enabled)
     {
         var issues = new List<AnalysisIssue>();
         var words = ExtractWords(text);
 
-        if (enabled.HasFlag(AnalysisKind.Grammar))
-            AddGrammarIssues(text, words, issues);
-        if (enabled.HasFlag(AnalysisKind.Style))
-            AddStyleIssues(text, words, issues);
+        if (enabled.HasFlag(AnalysisKind.Grammar)) AddGrammarIssues(text, words, issues);
+        if (enabled.HasFlag(AnalysisKind.Style)) AddStyleIssues(text, words, issues);
         if (enabled.HasFlag(AnalysisKind.Readability))
         {
             AddLongSentenceIssues(text, words, issues);
@@ -706,8 +713,7 @@ internal sealed class SelectableEditorAnalysisFeature
             _issueIndex = index;
             return issue;
         }
-        if (_issueIndex >= 0 && _issueIndex < _issues.Count) return _issues[_issueIndex];
-        return null;
+        return _issueIndex >= 0 && _issueIndex < _issues.Count ? _issues[_issueIndex] : null;
     }
 
     private void SelectIssue(AnalysisIssue issue)
@@ -735,12 +741,12 @@ internal sealed class SelectableEditorAnalysisFeature
         _editor.Focus();
     }
 
-    private void WindowPreviewKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    private void WindowPreviewKeyDown(object? sender, KeyEventArgs e)
     {
-        if (_editor is null || !_viewModel.HasDocument || e.Key != Avalonia.Input.Key.F7) return;
+        if (_editor is null || !_viewModel.HasDocument || e.Key != Key.F7) return;
         if (!_grammarEnabled && !_styleEnabled && !_readabilityEnabled) return;
         e.Handled = true;
-        NavigateIssue(e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift) ? -1 : 1);
+        NavigateIssue(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
     }
 
     private void RefreshUi()
@@ -762,15 +768,13 @@ internal sealed class SelectableEditorAnalysisFeature
             _syncingUi = false;
         }
 
-        if (_status is not null)
-        {
-            var enabledCount = (_grammarEnabled ? 1 : 0) + (_styleEnabled ? 1 : 0) + (_readabilityEnabled ? 1 : 0);
-            _status.Text = enabledCount == 0
-                ? "writing off"
-                : _issues.Count == 1 ? "1 issue" : $"{_issues.Count} issues";
-            var current = ResolveCurrentIssue();
-            if (current is not null) ToolTip.SetTip(_status, FormatMessage(current));
-        }
+        if (_status is null) return;
+        var enabledCount = (_grammarEnabled ? 1 : 0) + (_styleEnabled ? 1 : 0) + (_readabilityEnabled ? 1 : 0);
+        _status.Text = enabledCount == 0
+            ? "writing off"
+            : _issues.Count == 1 ? "1 issue" : $"{_issues.Count} issues";
+        var current = ResolveCurrentIssue();
+        if (current is not null) ToolTip.SetTip(_status, FormatMessage(current));
     }
 
     private static void SetChecked(ToggleButton? item, bool value)
@@ -791,7 +795,7 @@ internal sealed class SelectableEditorAnalysisFeature
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
-        _window.RemoveHandler(Avalonia.Input.InputElement.KeyDownEvent, WindowPreviewKeyDown);
+        _window.RemoveHandler(InputElement.KeyDownEvent, WindowPreviewKeyDown);
 
         if (_spellingSourceItem is not null)
             _spellingSourceItem.Click -= SpellingSourceItemClicked;
@@ -823,9 +827,9 @@ internal sealed class SelectableEditorAnalysisFeature
         string? Replacement);
 }
 
-internal sealed class ProjectAnalysisSettingsStore
+internal static class ProjectAnalysisSettingsStore
 {
-    public AnalysisSelection Load(string? projectRoot)
+    public static AnalysisSelection Load(string? projectRoot)
     {
         if (string.IsNullOrWhiteSpace(projectRoot)) return AnalysisSelection.Default;
         try
@@ -849,7 +853,7 @@ internal sealed class ProjectAnalysisSettingsStore
         }
     }
 
-    public void Save(string? projectRoot, AnalysisSelection selection)
+    public static void Save(string? projectRoot, AnalysisSelection selection)
     {
         if (string.IsNullOrWhiteSpace(projectRoot)) return;
         try
