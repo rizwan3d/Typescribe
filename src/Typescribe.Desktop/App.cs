@@ -69,6 +69,7 @@ public sealed class App : AvaloniaApplication
             ProfessionalEditorSuite.Apply(window, viewModel, repository);
             EditorDefaultStateFeature.Apply(window);
             RealSpellCheckFeature.Apply(window, viewModel, repository);
+            SelectableEditorAnalysisFeature.Apply(window, viewModel, repository);
             EditorAnalysisDetailsFeature.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             BookDesignFeature.Apply(window, viewModel);
