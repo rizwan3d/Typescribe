@@ -4,6 +4,8 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Typescribe.Desktop.ViewModels;
+using Typescribe.Domain.Models;
+using Typescribe.Infrastructure.Services;
 
 namespace Typescribe.Desktop;
 
@@ -16,6 +18,8 @@ internal sealed class InspectorEditingFeature
 {
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
+    private readonly FileSystemProjectRepository _repository = new();
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly Dictionary<Avalonia.Controls.TextBox, string> _drafts = [];
     private readonly Dictionary<Avalonia.Controls.TextBox, Func<string>> _modelValues = [];
     private Avalonia.Controls.TextBox? _synopsis;
@@ -25,6 +29,7 @@ internal sealed class InspectorEditingFeature
     private Avalonia.Controls.TextBox? _keywords;
     private Avalonia.Controls.TextBox? _target;
     private CancellationTokenSource? _saveCts;
+    private MetadataDraft? _pendingDraft;
     private string? _selectionId;
     private bool _installed;
     private bool _restoring;
@@ -146,8 +151,14 @@ internal sealed class InspectorEditingFeature
     private async void BoxLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (sender is not Avalonia.Controls.TextBox box) return;
-        try { await CommitAsync(CancellationToken.None); }
+        var draft = _pendingDraft ?? CaptureDraft();
+        CancelScheduledSave(clearPending: false);
+        try
+        {
+            if (draft is not null) await CommitDraftSafelyAsync(draft, CancellationToken.None);
+        }
         catch { }
+        if (ReferenceEquals(_pendingDraft, draft)) _pendingDraft = null;
         _drafts.Remove(box);
         if (ReferenceEquals(box, _target)) UpdateTargetValidation();
     }
@@ -167,40 +178,95 @@ internal sealed class InspectorEditingFeature
 
     private void ScheduleSave()
     {
-        _saveCts?.Cancel();
-        _saveCts?.Dispose();
+        var draft = CaptureDraft();
+        if (draft is null) return;
+        _pendingDraft = draft;
+        CancelScheduledSave(clearPending: false);
         _saveCts = new CancellationTokenSource();
-        _ = SaveAfterDelayAsync(_saveCts.Token);
+        _ = SaveAfterDelayAsync(draft, _saveCts.Token);
     }
 
-    private async Task SaveAfterDelayAsync(CancellationToken cancellationToken)
+    private async Task SaveAfterDelayAsync(MetadataDraft draft, CancellationToken cancellationToken)
     {
         try
         {
             await Task.Delay(280, cancellationToken);
-            await CommitAsync(cancellationToken);
+            await CommitDraftSafelyAsync(draft, cancellationToken);
+            if (ReferenceEquals(_pendingDraft, draft)) _pendingDraft = null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch { }
     }
 
-    private async Task CommitAsync(CancellationToken cancellationToken)
+    private async Task CommitDraftSafelyAsync(MetadataDraft draft, CancellationToken cancellationToken)
     {
-        if (!_installed || !_viewModel.HasSelection || _target is null) return;
+        await _saveGate.WaitAsync(cancellationToken);
+        try
+        {
+            await CommitDraftAsync(draft, cancellationToken);
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
 
-        // An invalid target must not prevent Synopsis/Notes/Status/Label/Keywords from saving.
-        // Keep the previously persisted target until the target field itself becomes valid.
+    private async Task CommitDraftAsync(MetadataDraft draft, CancellationToken cancellationToken)
+    {
+        var project = CurrentProject();
+        if (project is null) return;
+
+        var selected = _viewModel.SelectedRow?.Node;
+        if (selected is not null && string.Equals(selected.PersistentId, draft.Node.PersistentId, StringComparison.Ordinal))
+        {
+            await _viewModel.SaveSelectedMetadataAsync(
+                draft.Synopsis,
+                draft.Notes,
+                draft.Status,
+                draft.Label,
+                draft.Keywords,
+                draft.TargetWords,
+                cancellationToken);
+            return;
+        }
+
+        await _repository.SaveNodeMetadataAsync(
+            project,
+            draft.Node,
+            draft.Synopsis,
+            draft.Notes,
+            draft.Status,
+            draft.Label,
+            draft.Keywords,
+            draft.TargetWords,
+            cancellationToken);
+    }
+
+    private MetadataDraft? CaptureDraft()
+    {
+        if (!_installed || !_viewModel.HasSelection || _target is null) return null;
+        var node = _viewModel.SelectedRow?.Node;
+        if (node is null) return null;
+
+        // An invalid target must not prevent the remaining metadata fields from being saved.
         var validTarget = int.TryParse(_target.Text, out var parsedTarget) && parsedTarget >= 0;
-        var target = validTarget ? parsedTarget : _viewModel.SelectedTargetWords;
-
-        await _viewModel.SaveSelectedMetadataAsync(
+        var target = validTarget ? parsedTarget : node.TargetWords;
+        return new MetadataDraft(
+            node,
             _synopsis?.Text ?? string.Empty,
             _notes?.Text ?? string.Empty,
             _status?.Text ?? string.Empty,
             _label?.Text ?? string.Empty,
             _keywords?.Text ?? string.Empty,
-            target,
-            cancellationToken);
+            target);
+    }
+
+    private void CancelScheduledSave(bool clearPending)
+    {
+        _saveCts?.Cancel();
+        _saveCts?.Dispose();
+        _saveCts = null;
+        if (clearPending) _pendingDraft = null;
     }
 
     private void UpdateTargetValidation()
@@ -226,6 +292,10 @@ internal sealed class InspectorEditingFeature
             var id = _viewModel.SelectedRow?.Node.PersistentId;
             if (!string.Equals(id, _selectionId, StringComparison.Ordinal))
             {
+                var oldDraft = _pendingDraft;
+                CancelScheduledSave(clearPending: true);
+                if (oldDraft is not null)
+                    _ = CommitDraftSafelyAsync(oldDraft, CancellationToken.None);
                 _selectionId = id;
                 _drafts.Clear();
             }
@@ -250,11 +320,19 @@ internal sealed class InspectorEditingFeature
         }
     }
 
+    private BookProject? CurrentProject()
+        => typeof(WorkspaceViewModel)
+            .GetField("_project", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.GetValue(_viewModel) as BookProject;
+
     private void OnClosed(object? sender, EventArgs e)
     {
+        var pending = _pendingDraft;
+        CancelScheduledSave(clearPending: true);
+        if (pending is not null)
+            _ = CommitDraftSafelyAsync(pending, CancellationToken.None);
+
         _disposed = true;
-        _saveCts?.Cancel();
-        _saveCts?.Dispose();
         _viewModel.StateChanged -= OnStateChanged;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
@@ -266,4 +344,13 @@ internal sealed class InspectorEditingFeature
             box.TextChanged -= BoxTextChanged;
         }
     }
+
+    private sealed record MetadataDraft(
+        ProjectNode Node,
+        string Synopsis,
+        string Notes,
+        string Status,
+        string Label,
+        string Keywords,
+        int TargetWords);
 }
