@@ -24,6 +24,9 @@ namespace Typescribe.Desktop;
 /// </summary>
 internal sealed class EventDrivenLabelEditingFeature
 {
+    private const double OutlinerLabelColumnWidth = 230;
+    private const double OutlinerSwatchColumnWidth = 34;
+
     private static readonly ColorChoice[] ColorChoices =
     [
         new("Automatic", null),
@@ -53,7 +56,7 @@ internal sealed class EventDrivenLabelEditingFeature
     private readonly Dictionary<string, string> _headingLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<Grid, ProjectNode> _outlinerNodes = [];
     private readonly HashSet<Grid> _upgradedCells = [];
-    private readonly Dictionary<ComboBox, CancellationTokenSource> _pendingSaves = [];
+    private readonly Dictionary<Control, CancellationTokenSource> _pendingSaves = [];
     private readonly Dictionary<TreeViewItem, string> _treeVisualSignatures = [];
 
     private TreeView? _projectTree;
@@ -209,7 +212,7 @@ internal sealed class EventDrivenLabelEditingFeature
         foreach (var grid in surface.GetVisualDescendants().OfType<Grid>())
         {
             if (grid.ColumnDefinitions.Count >= 7)
-                grid.ColumnDefinitions[3].Width = new GridLength(330);
+                grid.ColumnDefinitions[3].Width = new GridLength(OutlinerLabelColumnWidth);
         }
 
         var used = new HashSet<string>(StringComparer.Ordinal);
@@ -272,49 +275,40 @@ internal sealed class EventDrivenLabelEditingFeature
         var explicitColor = ExplicitColor(storageKey, node.Label);
         string? customHex = IsCustomHex(explicitColor) ? explicitColor : null;
 
-        var label = new ComboBox
+        var label = new NativeTextBox
         {
-            IsEditable = true,
-            ItemsSource = ExistingLabels(),
             Text = node.Label,
-            PlaceholderText = "Label",
+            Watermark = "Label",
             MinHeight = 32,
+            Height = 32,
             Margin = new Thickness(1),
+            Padding = new Thickness(7, 4),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Center
         };
-        ToolTip.SetTip(label, "Type a new label or choose one already used in this project");
+        ToolTip.SetTip(label, "Type a label for this document");
 
-        var color = new ComboBox
-        {
-            ItemsSource = ColorChoices,
-            SelectedItem = ChoiceForHex(explicitColor),
-            Width = 96,
-            Height = 32,
-            Margin = new Thickness(2, 1),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        ToolTip.SetTip(color, "Preset color, Automatic, or Custom color picker");
+        var selectedColor = ChoiceForHex(explicitColor);
 
         var swatch = new Button
         {
-            Content = "●",
-            Width = 32,
+            Content = BuildColorChip(explicitColor ?? DisplayColor(storageKey, node.Label), true),
+            Width = OutlinerSwatchColumnWidth,
             Height = 32,
             Padding = new Thickness(0),
-            Margin = new Thickness(2, 1, 1, 1),
+            Margin = new Thickness(0, 1, 1, 1),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
-        ToolTip.SetTip(swatch, "Open custom color picker");
+        ToolTip.SetTip(swatch, "Choose label color");
 
         cell.Children.Remove(oldLabel);
         cell.Children.Remove(oldColor);
-        cell.ColumnDefinitions = new ColumnDefinitions("*,100,36");
+        cell.ColumnDefinitions = new ColumnDefinitions($"*,{OutlinerSwatchColumnWidth}");
+        cell.ColumnSpacing = 4;
+        cell.ClipToBounds = true;
         cell.Children.Add(label);
-        Grid.SetColumn(color, 1);
-        cell.Children.Add(color);
-        Grid.SetColumn(swatch, 2);
+        Grid.SetColumn(swatch, 1);
         cell.Children.Add(swatch);
 
         _upgradedCells.Add(cell);
@@ -324,61 +318,21 @@ internal sealed class EventDrivenLabelEditingFeature
         void RefreshAppearance()
         {
             var text = label.Text?.Trim() ?? string.Empty;
-            var choice = color.SelectedItem as ColorChoice ?? ColorChoices[0];
-            var hex = EffectiveColor(storageKey, text, choice, customHex);
-            ApplyComboTint(label, text, hex);
+            var hex = EffectiveColor(storageKey, text, selectedColor, customHex);
+            ApplyTextBoxTint(label, text, hex);
             ApplySwatch(swatch, hex);
         }
 
-        label.PropertyChanged += (_, e) =>
-        {
-            if (e.Property != ComboBox.TextProperty || syncing) return;
-            var text = label.Text?.Trim() ?? string.Empty;
-            var known = ExplicitColor(storageKey, text);
-            if (!string.IsNullOrWhiteSpace(known))
-            {
-                syncing = true;
-                color.SelectedItem = ChoiceForHex(known);
-                customHex = IsCustomHex(known) ? known : null;
-                syncing = false;
-            }
-            else if (text.Length > 0)
-            {
-                syncing = true;
-                color.SelectedItem = ColorChoices[0];
-                customHex = null;
-                syncing = false;
-            }
-            RefreshAppearance();
-            ScheduleOutlinerSave(label, node, color, () => customHex);
-        };
-
-        label.SelectionChanged += (_, _) =>
-        {
-            if (label.SelectedItem is string selected) label.Text = selected;
-        };
-
-        label.LostFocus += async (_, _) => await SaveOutlinerAsync(node, label, color, customHex);
-        label.KeyDown += async (_, e) =>
-        {
-            if (e.Key != Key.Enter) return;
-            e.Handled = true;
-            await SaveOutlinerAsync(node, label, color, customHex);
-        };
-
-        color.SelectionChanged += async (_, _) =>
+        async Task ApplyColorChoiceAsync(ColorChoice choice)
         {
             if (syncing) return;
-            var choice = color.SelectedItem as ColorChoice ?? ColorChoices[0];
             if (choice.IsCustom)
             {
                 var initial = customHex ?? ExplicitColor(storageKey, label.Text) ?? FallbackColor(label.Text ?? string.Empty);
                 var picked = await PickColorAsync(_window, initial);
                 if (picked is null)
                 {
-                    syncing = true;
-                    color.SelectedItem = ChoiceForHex(ExplicitColor(storageKey, label.Text));
-                    syncing = false;
+                    selectedColor = ChoiceForHex(ExplicitColor(storageKey, label.Text));
                     RefreshAppearance();
                     return;
                 }
@@ -389,34 +343,51 @@ internal sealed class EventDrivenLabelEditingFeature
                 customHex = null;
             }
 
+            selectedColor = choice;
             RefreshAppearance();
-            await SaveOutlinerAsync(node, label, color, customHex);
+            await SaveOutlinerAsync(node, label, selectedColor, customHex);
+        }
+
+        swatch.Flyout = BuildColorFlyout(ApplyColorChoiceAsync);
+
+        label.TextChanged += (_, _) =>
+        {
+            if (syncing) return;
+            var text = label.Text?.Trim() ?? string.Empty;
+            var known = ExplicitColor(storageKey, text);
+            if (!string.IsNullOrWhiteSpace(known))
+            {
+                syncing = true;
+                selectedColor = ChoiceForHex(known);
+                customHex = IsCustomHex(known) ? known : null;
+                syncing = false;
+            }
+            else if (text.Length > 0)
+            {
+                syncing = true;
+                selectedColor = ColorChoices[0];
+                customHex = null;
+                syncing = false;
+            }
+            RefreshAppearance();
+            ScheduleOutlinerSave(label, node, () => selectedColor, () => customHex);
         };
 
-        swatch.Click += async (_, _) =>
+        label.LostFocus += async (_, _) => await SaveOutlinerAsync(node, label, selectedColor, customHex);
+        label.KeyDown += async (_, e) =>
         {
-            var initial = EffectiveColor(
-                storageKey,
-                label.Text ?? string.Empty,
-                color.SelectedItem as ColorChoice ?? ColorChoices[0],
-                customHex) ?? "#64748B";
-            var picked = await PickColorAsync(_window, initial);
-            if (picked is null) return;
-            customHex = picked;
-            syncing = true;
-            color.SelectedItem = ColorChoices[^1];
-            syncing = false;
-            RefreshAppearance();
-            await SaveOutlinerAsync(node, label, color, customHex);
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            await SaveOutlinerAsync(node, label, selectedColor, customHex);
         };
 
         RefreshAppearance();
     }
 
     private void ScheduleOutlinerSave(
-        ComboBox label,
+        NativeTextBox label,
         ProjectNode node,
-        ComboBox color,
+        Func<ColorChoice> color,
         Func<string?> customHex)
     {
         if (_pendingSaves.Remove(label, out var previous))
@@ -431,16 +402,16 @@ internal sealed class EventDrivenLabelEditingFeature
     }
 
     private async Task SaveAfterDelayAsync(
-        ComboBox label,
+        NativeTextBox label,
         ProjectNode node,
-        ComboBox color,
+        Func<ColorChoice> color,
         Func<string?> customHex,
         CancellationToken cancellationToken)
     {
         try
         {
             await Task.Delay(260, cancellationToken);
-            await SaveOutlinerAsync(node, label, color, customHex(), cancellationToken);
+            await SaveOutlinerAsync(node, label, color(), customHex(), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -449,15 +420,14 @@ internal sealed class EventDrivenLabelEditingFeature
 
     private async Task SaveOutlinerAsync(
         ProjectNode node,
-        ComboBox label,
-        ComboBox color,
+        NativeTextBox label,
+        ColorChoice choice,
         string? customHex,
         CancellationToken cancellationToken = default)
     {
         if (_disposed || CurrentProject() is not { } project) return;
 
         var value = label.Text?.Trim() ?? string.Empty;
-        var choice = color.SelectedItem as ColorChoice ?? ColorChoices[0];
         var explicitHex = choice.IsCustom ? NormalizeHex(customHex) : NormalizeHex(choice.Hex);
         if (choice.IsCustom && explicitHex is null) return;
 
@@ -1054,30 +1024,36 @@ internal sealed class EventDrivenLabelEditingFeature
         => IsHexColor(hex) && !ColorChoices.Any(choice =>
             !choice.IsCustom && string.Equals(choice.Hex, hex, StringComparison.OrdinalIgnoreCase));
 
-    private static void ApplyComboTint(ComboBox combo, string label, string? hex)
+    private static void ApplyTextBoxTint(NativeTextBox box, string label, string? hex)
     {
         if (!IsHexColor(hex))
         {
-            combo.ClearValue(ComboBox.BackgroundProperty);
-            combo.ClearValue(ComboBox.BorderBrushProperty);
-            combo.ClearValue(ComboBox.BorderThicknessProperty);
+            box.ClearValue(NativeTextBox.BackgroundProperty);
+            box.ClearValue(NativeTextBox.BorderBrushProperty);
+            box.ClearValue(NativeTextBox.BorderThicknessProperty);
             return;
         }
 
         var parsed = Color.Parse(hex!);
-        combo.Background = new SolidColorBrush(Color.FromArgb(24, parsed.R, parsed.G, parsed.B));
-        combo.BorderBrush = new SolidColorBrush(parsed);
-        combo.BorderThickness = new Thickness(3, 1, 1, 1);
-        ToolTip.SetTip(combo, string.IsNullOrWhiteSpace(label) ? "Color-only item" : $"Label: {label}");
+        box.Background = new SolidColorBrush(Color.FromArgb(24, parsed.R, parsed.G, parsed.B));
+        box.BorderBrush = new SolidColorBrush(parsed);
+        box.BorderThickness = new Thickness(3, 1, 1, 1);
+        ToolTip.SetTip(box, string.IsNullOrWhiteSpace(label) ? "Color-only item" : $"Label: {label}");
     }
 
     private static void ApplySwatch(Button swatch, string? hex)
     {
+        var chip = swatch.Content as Border;
         if (!IsHexColor(hex))
         {
             swatch.Foreground = new SolidColorBrush(Color.Parse("#969696"));
             swatch.Background = Brushes.Transparent;
             swatch.BorderBrush = new SolidColorBrush(Color.Parse("#55555A"));
+            if (chip is not null)
+            {
+                chip.Background = Brushes.Transparent;
+                chip.BorderBrush = new SolidColorBrush(Color.Parse("#777777"));
+            }
             return;
         }
 
@@ -1085,6 +1061,54 @@ internal sealed class EventDrivenLabelEditingFeature
         swatch.Foreground = new SolidColorBrush(parsed);
         swatch.Background = new SolidColorBrush(Color.FromArgb(42, parsed.R, parsed.G, parsed.B));
         swatch.BorderBrush = new SolidColorBrush(parsed);
+        if (chip is not null)
+        {
+            chip.Background = new SolidColorBrush(parsed);
+            chip.BorderBrush = new SolidColorBrush(parsed);
+        }
+    }
+
+    private static MenuFlyout BuildColorFlyout(Func<ColorChoice, Task> choose)
+    {
+        var items = new List<object>();
+        foreach (var choice in ColorChoices)
+        {
+            if (choice.IsCustom && items.Count > 0)
+                items.Add(new Separator());
+
+            var item = new MenuItem
+            {
+                Header = choice.Name,
+                Icon = BuildColorChip(ColorForChoice(choice), false)
+            };
+            item.Click += async (_, _) => await choose(choice);
+            items.Add(item);
+        }
+
+        return new MenuFlyout { ItemsSource = items };
+    }
+
+    private static Border BuildColorChip(string? hex, bool large)
+    {
+        var hasColor = IsHexColor(hex);
+        var parsed = hasColor ? Color.Parse(hex!) : Color.Parse("#777777");
+        return new Border
+        {
+            Width = large ? 14 : 13,
+            Height = large ? 14 : 13,
+            CornerRadius = new CornerRadius(3),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(hasColor ? parsed : Color.Parse("#777777")),
+            Background = hasColor ? new SolidColorBrush(parsed) : Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    private static string? ColorForChoice(ColorChoice choice)
+    {
+        if (!string.IsNullOrWhiteSpace(choice.Hex)) return choice.Hex;
+        return choice.IsCustom ? "#A78BFA" : null;
     }
 
     private static async Task<string?> PickColorAsync(Window owner, string? initialHex)

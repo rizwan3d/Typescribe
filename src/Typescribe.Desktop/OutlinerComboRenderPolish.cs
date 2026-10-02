@@ -13,6 +13,9 @@ namespace Typescribe.Desktop;
 /// </summary>
 internal sealed class OutlinerComboRenderPolish
 {
+    private const double ColorColumnWidth = 52;
+    private const double SwatchColumnWidth = 32;
+
     private readonly StudioWorkspaceWindow _window;
     private readonly HashSet<ComboBox> _hookedCombos = [];
     private readonly HashSet<ComboBox> _pendingTintCleanups = [];
@@ -200,15 +203,15 @@ internal sealed class OutlinerComboRenderPolish
 
         if (cell.ColumnDefinitions.Count != 3)
         {
-            cell.ColumnDefinitions = new ColumnDefinitions("*,92,28");
+            cell.ColumnDefinitions = new ColumnDefinitions($"*,{ColorColumnWidth},{SwatchColumnWidth}");
         }
         else
         {
             var expected = new[]
             {
                 new GridLength(1, GridUnitType.Star),
-                new GridLength(92),
-                new GridLength(28)
+                new GridLength(ColorColumnWidth),
+                new GridLength(SwatchColumnWidth)
             };
             for (var index = 0; index < expected.Length; index++)
             {
@@ -237,17 +240,18 @@ internal sealed class OutlinerComboRenderPolish
         label.ClearValue(ComboBox.BorderThicknessProperty);
 
         color.MinWidth = 0;
-        color.Width = double.NaN;
+        color.Width = ColorColumnWidth;
         color.Height = 32;
         color.Margin = new Thickness(0, 1);
         color.HorizontalAlignment = HorizontalAlignment.Stretch;
+        color.HorizontalContentAlignment = HorizontalAlignment.Center;
         color.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(color, 1);
 
         var swatch = cell.Children.OfType<Button>().FirstOrDefault();
         if (swatch is null) return;
         swatch.MinWidth = 0;
-        swatch.Width = 26;
+        swatch.Width = SwatchColumnWidth - 2;
         swatch.Height = 32;
         swatch.Margin = new Thickness(0, 1);
         swatch.HorizontalAlignment = HorizontalAlignment.Center;
