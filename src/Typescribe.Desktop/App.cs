@@ -36,7 +36,9 @@ public sealed class App : AvaloniaApplication
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var repository = new TrackingProjectRepository(new FileSystemProjectRepository());
+            var mutationService = new FileSystemProjectMutationService();
+            var repository = new TrackingProjectRepository(
+                new TransactionalProjectRepository(new FileSystemProjectRepository(), mutationService));
             var parser = new AdvancedDocumentParser();
             var renderer = new LuaLatexSafeDocumentRenderer();
             var publishingEngine = new LuaLatexPublishingEngine();
@@ -56,6 +58,8 @@ public sealed class App : AvaloniaApplication
             StudioAuthoringEnhancements.Apply(window, viewModel);
             StudioNavigationPolish.Apply(window, viewModel);
             StudioScriveningsFeatures.Apply(window, viewModel, repository);
+            ProjectReliabilityFeature.Apply(window, viewModel, repository, mutationService);
+            RecoveryJournalFeature.Apply(window, viewModel, repository);
             BookmarkNavigationPolish.Apply(window, viewModel);
             CorkboardProFeature.Apply(window, viewModel, repository);
 

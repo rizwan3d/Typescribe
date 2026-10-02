@@ -26,6 +26,7 @@ Domain has no package dependencies. Application depends only on Domain. Infrastr
 ## Design patterns
 
 - **Repository** — `IProjectRepository` hides project filesystem and binder metadata persistence.
+- **Transactional Mutation Service** — `IProjectMutationService` is the single boundary for destructive binder mutations and persists restart-safe undo/recovery records.
 - **Strategy / Adapter** — `IPdfPublishingEngine` isolates the LuaLaTeX process adapter.
 - **Ports and Adapters** — Application interfaces define the boundaries implemented by Infrastructure.
 - **Presentation Model** — `WorkspaceViewModel` owns editor, binder, outline, search, and live-preview state without Avalonia file-picker dependencies.
@@ -38,7 +39,7 @@ Domain has no package dependencies. Application depends only on Domain. Infrastr
 
 - `net10.0` + Native AOT release configuration.
 - No dynamic proxy container or runtime assembly scanning.
-- No reflection-based project serializer.
+- No reflection-based canonical project serializer.
 - Code-only Avalonia UI.
 - LuaLaTeX executes as an isolated external publishing process rather than being loaded into the application process.
 - In-app PDF pages are rendered through PDFtoImage/PDFium/SkiaSharp, keeping the preview cross-platform without embedding a browser control.
@@ -74,9 +75,29 @@ Heading nodes also drive the desktop outline. Each outline item retains its sour
 
 The physical manuscript hierarchy remains under `manuscript/`. Binder-specific information that does not belong in manuscript text is stored in `.typescribe/binder.tsv`.
 
-The sidecar persists node type, include/exclude state, project-relative path, display title, and sibling ordering through record order. Filesystem paths remain the durable ownership boundary while the sidecar provides application-specific organization without introducing a proprietary manuscript database.
+The sidecar persists node type, include/exclude state, project-relative path, display title, metadata, persistent document ID, and sibling ordering through record order. Filesystem paths remain the durable ownership boundary while the sidecar provides application-specific organization without introducing a proprietary manuscript database.
 
-Binder drag/drop is implemented through the repository boundary rather than directly in the Avalonia view. The UI expresses an intended placement—before, after, or inside a container—and `FileSystemProjectRepository.ReparentNodeAsync` performs the durable tree/filesystem operation. Cross-container moves physically move the corresponding file or directory, recursively repath moved descendants, preserve binder ordering, avoid filename collisions, and reject cyclic parent/descendant moves.
+Destructive binder changes are routed through `IProjectMutationService`. `TransactionalProjectRepository` decorates the existing filesystem repository so current rename, delete, reorder, and drag/drop/reparent flows automatically use the transaction boundary. Before touching manuscript files, `FileSystemProjectMutationService` writes a prepared transaction to `.typescribe/history/<transaction-id>.json` containing the pre-mutation binder snapshot and filesystem movement information. The transaction is marked complete only after the filesystem change and updated binder sidecar are durable. If a prepared transaction is found when a project is reopened, it is rolled back before the binder is loaded.
+
+Undo and redo operate from those persisted transaction records, so rename, delete, sibling reorder, and cross-container moves remain reversible after restart. A new mutation abandons an outstanding redo stack rather than replaying stale filesystem intent.
+
+Deleting a binder item does not initially destroy its file or directory. The payload moves into `.typescribe/trash/<transaction-id>/payload/` and a companion trash record stores its original path, persistent ID, metadata, parent persistent ID, binder position, and deletion timestamp. **Project → Trash…** can restore the item to its original binder position without changing its persistent ID, or permanently remove it when explicitly requested.
+
+## Working-state recovery
+
+Canonical autosave and crash recovery are intentionally separate mechanisms. A small recovery journal under `.typescribe/recovery/` captures editor buffers that differ from the canonical manuscript:
+
+```text
+.typescribe/recovery/
+    session.json
+    <persistent-document-id>.recovery.md
+```
+
+The journal is refreshed on a short interval and removed on a clean shutdown. If a previous-session journal remains, the next project open presents **Restore All**, **Review Changes**, and **Discard Recovery**. Recovered text never overwrites canonical manuscript files merely because a journal exists; only an explicit restore action writes recovery content back to the project.
+
+## Backups and restore
+
+Timed and manual ZIP backups continue to live under `.typescribe/backups/`. **Project → Backup Manager…** presents backup timestamp, archive size, backup count, and an estimate of files changed since each backup. Restore always extracts into a unique new project directory (or a new directory under a user-selected parent) and then opens that restored copy. The active project directory is never overwritten in place. ZIP extraction canonicalizes every destination path and rejects entries that would escape the selected restore directory.
 
 ## Desktop workspace
 
@@ -150,8 +171,10 @@ Final **Publish PDF** ignores temporary preview scope, flushes manuscript autosa
 ## Security boundaries
 
 - Project-relative paths are canonicalized and checked against the project root.
-- Binder file operations resolve through the project repository.
+- Binder file operations resolve through the project repository and destructive mutations use the transaction service.
 - Drag/drop rejects self/descendant cycles before durable filesystem moves.
+- Backup restore rejects ZIP entries that escape the destination directory.
+- Crash recovery never overwrites canonical manuscript text without an explicit restore action.
 - Manuscript prose is escaped before generated LaTeX output.
 - LuaLaTeX receives generated source, not arbitrary manuscript shell commands.
 - Shell escape is explicitly disabled.
@@ -162,7 +185,6 @@ Final **Publish PDF** ignores temporary preview scope, flushes manuscript autosa
 ## Known limitations
 
 - Workspace dimensions, pane visibility, active tabs, and preview zoom are not yet persisted between sessions.
-- Binder drag/drop is durable but not yet undoable as a filesystem transaction.
 - The embedded PDF preview is page-raster based; exact cursor-to-PDF synchronization, text selection, thumbnail navigation, and virtualized multi-page scrolling are future work.
 - Figures, tables, footnotes, citations, bibliography, and cross-references are not yet represented in the AST.
 - Search is a file scan rather than an incremental SQLite FTS index.
