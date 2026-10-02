@@ -17,6 +17,17 @@ Typescribe uses third-party components and can download optional publishing comp
 
 AvaloniaEdit provides the cross-platform, virtualized text engine underneath Typescribe's `ManuscriptEditor`. Typescribe supplies its own manuscript rendering and authoring semantics on top of that engine.
 
+## LibreOffice English Hunspell dictionaries / SCOWL
+
+Typescribe can download English Hunspell dictionaries (`en_US`, `en_GB`, `en_CA`, and `en_AU`) from the public LibreOffice dictionaries repository and cache them under the user's local application-data directory for offline spell checking.
+
+- LibreOffice dictionaries source: https://github.com/LibreOffice/dictionaries
+- Pinned source revision: `32b006a2c22a4ac7e8ed3f03346f7b3d85a970a4`
+- English dictionary documentation and licensing: https://github.com/LibreOffice/dictionaries/blob/32b006a2c22a4ac7e8ed3f03346f7b3d85a970a4/en/README_en_US.txt
+- Upstream word-list project: SCOWL / Kevin Atkinson's word lists
+
+The English dictionaries are derived from SCOWL and other sources described in the upstream README. Their copyright, permission notices, public-domain statements, and other upstream license terms continue to apply. Typescribe does not modify the downloaded dictionary files.
+
 ## PDFtoImage
 
 - Project: PDFtoImage
