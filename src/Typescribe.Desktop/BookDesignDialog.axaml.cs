@@ -11,6 +11,8 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Domain.Models;
+using NativeTextBlock = Avalonia.Controls.TextBlock;
+using NativeTextBox = Avalonia.Controls.TextBox;
 
 namespace Typescribe.Desktop;
 
@@ -41,14 +43,18 @@ public sealed partial class BookDesignDialog : Window
     private bool _previewScheduled;
     private Border? _previewPage;
     private StackPanel? _previewContent;
-    private TextBlock? _previewHeader;
-    private TextBlock? _previewChapter;
-    private TextBlock? _previewSection;
-    private TextBlock? _previewBody;
-    private TextBlock? _previewQuote;
+    private NativeTextBlock? _previewHeader;
+    private NativeTextBlock? _previewChapter;
+    private NativeTextBlock? _previewSection;
+    private NativeTextBlock? _previewBody;
+    private NativeTextBlock? _previewQuote;
+    private NativeTextBlock? _previewLink;
     private Border? _previewCodeBox;
-    private TextBlock? _previewCode;
-    private TextBlock? _previewFooter;
+    private NativeTextBlock? _previewCodeKeyword;
+    private NativeTextBlock? _previewCodeText;
+    private NativeTextBlock? _previewCodeString;
+    private NativeTextBlock? _previewCodeComment;
+    private NativeTextBlock? _previewFooter;
 
     public BookDesignDialog()
     {
@@ -114,7 +120,9 @@ public sealed partial class BookDesignDialog : Window
 
     private void SetError(string message)
     {
-        var error = this.FindControl<TextBlock>("ErrorText");
+        // XAML creates Avalonia.Controls.TextBlock. Do not resolve the Typescribe convenience
+        // subclass here or FindControl<T> will throw when validation needs to show an error.
+        var error = this.FindControl<NativeTextBlock>("ErrorText");
         if (error is not null) error.Text = message ?? string.Empty;
     }
 
@@ -157,13 +165,17 @@ public sealed partial class BookDesignDialog : Window
         ReplaceWithColorSelector(tabs, "Comments", nameof(BookDesignEditorViewModel.CodeCommentHex));
         ReplaceWithColorSelector(tabs, "Frame", nameof(BookDesignEditorViewModel.CodeFrameHex));
 
+        // XAML controls are native Avalonia controls. Listening to the Typescribe convenience
+        // subclasses misses every XAML-created editor and leaves the live preview frozen.
         foreach (var tab in TabItems(tabs))
         {
             if (tab.Content is not Control content) continue;
-            foreach (var textBox in EnumerateControls(content).OfType<TextBox>())
+            foreach (var textBox in EnumerateControls(content).OfType<NativeTextBox>())
                 textBox.TextChanged += (_, _) => QueuePreviewUpdate();
             foreach (var checkBox in EnumerateControls(content).OfType<CheckBox>())
                 checkBox.Click += (_, _) => QueuePreviewUpdate();
+            foreach (var comboBox in EnumerateControls(content).OfType<ComboBox>())
+                comboBox.SelectionChanged += (_, _) => QueuePreviewUpdate();
         }
 
         SyncSelectorValues();
@@ -171,35 +183,35 @@ public sealed partial class BookDesignDialog : Window
 
     private Control BuildPreviewSurface()
     {
-        _previewHeader = new TextBlock
+        _previewHeader = new NativeTextBlock
         {
             Text = "TYPESCRIBE • SAMPLE BOOK",
             FontSize = 9,
-            Opacity = 0.6,
+            Foreground = new SolidColorBrush(Color.Parse("#4B5563")),
             TextAlignment = TextAlignment.Center
         };
-        _previewChapter = new TextBlock
+        _previewChapter = new NativeTextBlock
         {
             Text = "Chapter Seven",
             FontSize = 28,
             FontWeight = FontWeight.SemiBold,
             TextWrapping = TextWrapping.Wrap
         };
-        _previewSection = new TextBlock
+        _previewSection = new NativeTextBlock
         {
             Text = "The Archive Below",
             FontSize = 18,
             FontWeight = FontWeight.SemiBold,
             TextWrapping = TextWrapping.Wrap
         };
-        _previewBody = new TextBlock
+        _previewBody = new NativeTextBlock
         {
-            Text = "Rain had been falling over Meridian City since dawn. The preview page reacts to your typeface, size, margins, spacing and color choices before you apply them to the project.",
+            Text = "Rain had been falling over Meridian City since dawn. The preview page reacts immediately to your typeface, size, margins, spacing and color choices.",
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Justify
         };
-        _previewQuote = new TextBlock
+        _previewQuote = new NativeTextBlock
         {
             Text = "“Typography should guide the reader without calling attention to itself.”",
             FontSize = 11,
@@ -207,25 +219,34 @@ public sealed partial class BookDesignDialog : Window
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(16, 4)
         };
-        _previewCode = new TextBlock
+        _previewLink = new NativeTextBlock
         {
-            Text = "public sealed class Chapter\n{\n    public string Title { get; init; }\n}",
-            FontFamily = new FontFamily("monospace"),
-            FontSize = 10,
-            TextWrapping = TextWrapping.NoWrap
+            Text = "Reference link → typescribe.example",
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        _previewCodeKeyword = PreviewCodeLine("public sealed class Chapter");
+        _previewCodeText = PreviewCodeLine("{    public string Title { get; init; } =");
+        _previewCodeString = PreviewCodeLine("    \"The Archive\";");
+        _previewCodeComment = PreviewCodeLine("    // LuaLaTeX-ready code block    }");
+        var codeLines = new StackPanel
+        {
+            Spacing = 2,
+            Children = { _previewCodeKeyword, _previewCodeText, _previewCodeString, _previewCodeComment }
         };
         _previewCodeBox = new Border
         {
             Padding = new Thickness(12),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
-            Child = _previewCode
+            Child = codeLines
         };
-        _previewFooter = new TextBlock
+        _previewFooter = new NativeTextBlock
         {
             Text = "7",
             FontSize = 9,
-            Opacity = 0.65,
+            Foreground = new SolidColorBrush(Color.Parse("#4B5563")),
             TextAlignment = TextAlignment.Center
         };
 
@@ -240,6 +261,7 @@ public sealed partial class BookDesignDialog : Window
                 _previewSection,
                 _previewBody,
                 _previewQuote,
+                _previewLink,
                 _previewCodeBox,
                 new Border { Height = 18, Background = Brushes.Transparent },
                 _previewFooter
@@ -251,47 +273,63 @@ public sealed partial class BookDesignDialog : Window
             Width = 330,
             Height = 520,
             Padding = new Thickness(34, 36),
-            Background = Brushes.White,
-            BorderBrush = new SolidColorBrush(Color.Parse("#D1D5DB")),
+            Background = new SolidColorBrush(Color.Parse("#FFFDF8")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#6B7280")),
             BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(2),
             Child = _previewContent,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(18)
         };
 
-        var label = new TextBlock
+        var label = new NativeTextBlock
         {
             Text = "Live design preview",
             FontSize = 15,
             FontWeight = FontWeight.SemiBold,
+            Foreground = new SolidColorBrush(Color.Parse("#F3F4F6")),
             Margin = new Thickness(12, 10, 12, 4)
         };
-        var help = new TextBlock
+        var help = new NativeTextBlock
         {
-            Text = "A fast simulated page preview. Apply/Save still controls the real LuaLaTeX project style.",
+            Text = "Changes below are simulated immediately. Apply/Save updates the real LuaLaTeX project style.",
             FontSize = 11,
-            Opacity = 0.65,
+            Foreground = new SolidColorBrush(Color.Parse("#B9C1CC")),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(12, 0, 12, 8)
         };
         var scroll = new ScrollViewer
         {
             Content = _previewPage,
+            Background = new SolidColorBrush(Color.Parse("#20242A")),
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto
         };
         var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
         panel.Children.Add(label);
-        Grid.SetRow(help, 1); panel.Children.Add(help);
-        Grid.SetRow(scroll, 2); panel.Children.Add(scroll);
+        Grid.SetRow(help, 1);
+        panel.Children.Add(help);
+        Grid.SetRow(scroll, 2);
+        panel.Children.Add(scroll);
         return new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#E8EBF1")),
+            Background = new SolidColorBrush(Color.Parse("#252A31")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#3B424C")),
+            BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Child = panel
         };
     }
+
+    private static NativeTextBlock PreviewCodeLine(string text)
+        => new()
+        {
+            Text = text,
+            FontFamily = new FontFamily("monospace"),
+            FontSize = 10,
+            TextWrapping = TextWrapping.NoWrap
+        };
 
     private void ReplaceWithFontSelector(TabControl tabs, string label, string propertyName)
     {
@@ -330,7 +368,7 @@ public sealed partial class BookDesignDialog : Window
         _colorSelectors[propertyName] = combo;
     }
 
-    private static void ReplaceGridChild(Grid grid, TextBox oldControl, Control newControl)
+    private static void ReplaceGridChild(Grid grid, NativeTextBox oldControl, Control newControl)
     {
         var row = Grid.GetRow(oldControl);
         var column = Grid.GetColumn(oldControl);
@@ -344,18 +382,18 @@ public sealed partial class BookDesignDialog : Window
         grid.Children.Add(newControl);
     }
 
-    private static bool TryFindLabeledTextBox(TabControl tabs, string label, out Grid grid, out TextBox editor)
+    private static bool TryFindLabeledTextBox(TabControl tabs, string label, out Grid grid, out NativeTextBox editor)
     {
         foreach (var tab in TabItems(tabs))
         {
             if (tab.Content is not Control content) continue;
             foreach (var candidate in EnumerateControls(content).OfType<Grid>())
             {
-                var labelBlock = candidate.Children.OfType<TextBlock>()
+                var labelBlock = candidate.Children.OfType<NativeTextBlock>()
                     .FirstOrDefault(block => string.Equals(block.Text, label, StringComparison.Ordinal));
                 if (labelBlock is null) continue;
                 var row = Grid.GetRow(labelBlock);
-                var textBox = candidate.Children.OfType<TextBox>()
+                var textBox = candidate.Children.OfType<NativeTextBox>()
                     .FirstOrDefault(box => Grid.GetRow(box) == row && Grid.GetColumn(box) == 1);
                 if (textBox is null) continue;
                 grid = candidate;
@@ -415,7 +453,9 @@ public sealed partial class BookDesignDialog : Window
     {
         if (_previewPage is null || _previewContent is null || _previewHeader is null ||
             _previewChapter is null || _previewSection is null || _previewBody is null ||
-            _previewQuote is null || _previewCodeBox is null || _previewCode is null || _previewFooter is null)
+            _previewQuote is null || _previewLink is null || _previewCodeBox is null ||
+            _previewCodeKeyword is null || _previewCodeText is null || _previewCodeString is null ||
+            _previewCodeComment is null || _previewFooter is null)
             return;
 
         var pageWidth = ReadDouble(Editor.PageWidthInches, 6);
@@ -433,7 +473,9 @@ public sealed partial class BookDesignDialog : Window
         var monoFont = SafeFont(Editor.MonospaceFontFamily, "monospace");
         var bodyBrush = SafeBrush(Editor.BodyColorHex, "#111111");
         var headingBrush = SafeBrush(Editor.HeadingColorHex, "#263238");
+        var linkBrush = Editor.ColorLinks ? SafeBrush(Editor.LinkColorHex, "#2563EB") : bodyBrush;
         var bodySize = Math.Clamp(ReadDouble(Editor.BodyFontSizePoints, 11) * 1.02, 8, 18);
+        var lineSpacing = Math.Clamp(ReadDouble(Editor.LineSpacing, 1.15), 0.8, 2.5);
 
         _previewContent.Spacing = Math.Clamp(6 + ReadDouble(Editor.ParagraphSpacingPoints, 3) * 0.45, 5, 18);
         _previewHeader.FontFamily = bodyFont;
@@ -451,18 +493,29 @@ public sealed partial class BookDesignDialog : Window
         _previewBody.FontFamily = bodyFont;
         _previewBody.Foreground = bodyBrush;
         _previewBody.FontSize = bodySize;
+        _previewBody.LineHeight = Math.Max(bodySize, bodySize * lineSpacing);
         _previewBody.TextAlignment = Editor.JustifyBody ? TextAlignment.Justify : TextAlignment.Left;
         _previewQuote.FontFamily = bodyFont;
         _previewQuote.Foreground = bodyBrush;
         _previewQuote.FontSize = Math.Clamp(ReadDouble(Editor.QuoteFontSizePoints, bodySize) * 0.95, 8, 17);
         _previewQuote.FontStyle = Editor.QuoteItalic ? FontStyle.Italic : FontStyle.Normal;
         _previewQuote.Margin = new Thickness(Math.Clamp(ReadDouble(Editor.QuoteIndentEm, 2) * 8, 8, 40), 4);
+        _previewLink.FontFamily = bodyFont;
+        _previewLink.Foreground = linkBrush;
+        _previewLink.FontSize = Math.Clamp(bodySize * 0.94, 8, 16);
 
         _previewCodeBox.Background = SafeBrush(Editor.CodeBackgroundHex, "#F3F4F6");
         _previewCodeBox.BorderBrush = SafeBrush(Editor.CodeFrameHex, "#D1D5DB");
-        _previewCode.FontFamily = monoFont;
-        _previewCode.Foreground = SafeBrush(Editor.CodeTextHex, "#1F2937");
-        _previewCode.FontSize = Math.Clamp(ReadDouble(Editor.CodeFontSizePoints, 9.5), 7, 14);
+        var codeSize = Math.Clamp(ReadDouble(Editor.CodeFontSizePoints, 9.5), 7, 14);
+        foreach (var line in new[] { _previewCodeKeyword, _previewCodeText, _previewCodeString, _previewCodeComment })
+        {
+            line.FontFamily = monoFont;
+            line.FontSize = codeSize;
+        }
+        _previewCodeKeyword.Foreground = SafeBrush(Editor.CodeKeywordHex, "#4F46E5");
+        _previewCodeText.Foreground = SafeBrush(Editor.CodeTextHex, "#1F2937");
+        _previewCodeString.Foreground = SafeBrush(Editor.CodeStringHex, "#059669");
+        _previewCodeComment.Foreground = SafeBrush(Editor.CodeCommentHex, "#6B7280");
 
         _previewFooter.FontFamily = bodyFont;
         _previewFooter.Foreground = bodyBrush;
