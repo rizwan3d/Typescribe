@@ -79,8 +79,10 @@ public sealed class AssetManagerService(IProjectRepository repository, IDocument
     public async Task<IReadOnlyList<ProjectAsset>> ListAsync(BookProject project, CancellationToken cancellationToken = default)
     {
         var usages = new Dictionary<string, List<AssetUsage>>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var (node, content) in repository.EnumerateDocumentsAsync(project, cancellationToken))
+        foreach (var node in EnumerateAllDocuments(project.Root))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = await repository.ReadDocumentAsync(project, node, cancellationToken);
             var ast = parser.Parse(content);
             foreach (var figure in ast.Blocks.OfType<FigureBlock>())
             {
@@ -145,8 +147,10 @@ public sealed class AssetManagerService(IProjectRepository repository, IDocument
     private async Task RewriteReferencesAsync(BookProject project, string oldPath, string newPath, CancellationToken cancellationToken)
     {
         var changes = new List<(ProjectNode Node, string Old, string New)>();
-        await foreach (var (node, content) in repository.EnumerateDocumentsAsync(project, cancellationToken))
+        foreach (var node in EnumerateAllDocuments(project.Root))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = await repository.ReadDocumentAsync(project, node, cancellationToken);
             var updated = content
                 .Replace("](" + oldPath + ")", "](" + newPath + ")", StringComparison.Ordinal)
                 .Replace("](" + oldPath.Replace('/', '\\') + ")", "](" + newPath + ")", StringComparison.Ordinal);
@@ -168,6 +172,14 @@ public sealed class AssetManagerService(IProjectRepository repository, IDocument
                 await repository.SaveDocumentAsync(project, rollback.Node, rollback.Old, CancellationToken.None);
             throw;
         }
+    }
+
+    private static IEnumerable<ProjectNode> EnumerateAllDocuments(ProjectNode node)
+    {
+        if (node.IsDocument) yield return node;
+        foreach (var child in node.Children)
+            foreach (var document in EnumerateAllDocuments(child))
+                yield return document;
     }
 
     private static string ToProjectPath(BookProject project, string absolutePath)
