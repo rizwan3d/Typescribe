@@ -44,6 +44,8 @@ internal sealed class OutlinerComboRenderPolish
 
     private void WindowLayoutUpdated(object? sender, EventArgs e)
     {
+        // LayoutUpdated is discovery-only. Any changes made by Scan are idempotent so they cannot
+        // feed another measure/arrange pass forever.
         if (!_disposed) Scan();
     }
 
@@ -59,7 +61,6 @@ internal sealed class OutlinerComboRenderPolish
         Dispatcher.UIThread.Post(() =>
         {
             Scan();
-            NormalizeAllLabelCells();
             RerenderOutliner();
         }, DispatcherPriority.Background);
     }
@@ -104,46 +105,30 @@ internal sealed class OutlinerComboRenderPolish
 
     private void QueueStableRerender(ComboBox combo)
     {
+        // Repaint after the popup closes without forcing a new measure/arrange cycle. Forcing
+        // layout from LayoutUpdated was the source of Avalonia's "Infinite layout loop detected".
         Dispatcher.UIThread.Post(() =>
         {
             if (_disposed || !combo.IsAttachedToVisualTree()) return;
             NormalizeLabelCell(combo);
-            InvalidateComboAndRow(combo);
+            InvalidateComboAndRowVisuals(combo);
             RerenderOutliner();
-
-            // Editable ComboBox templates settle one dispatcher turn after the popup closes.
-            // A render-priority pass removes the clipped/half-border artifact seen in Label / Color.
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (_disposed || !combo.IsAttachedToVisualTree()) return;
-                NormalizeLabelCell(combo);
-                InvalidateComboAndRow(combo);
-                RerenderOutliner();
-            }, DispatcherPriority.Render);
-        }, DispatcherPriority.Background);
+        }, DispatcherPriority.Render);
     }
 
-    private static void InvalidateComboAndRow(ComboBox combo)
+    private static void InvalidateComboAndRowVisuals(ComboBox combo)
     {
-        combo.InvalidateMeasure();
-        combo.InvalidateArrange();
         combo.InvalidateVisual();
+
+        var labelCell = combo.GetVisualAncestors()
+            .OfType<Grid>()
+            .FirstOrDefault(static grid => grid.Classes.Contains("ux-outliner-label-cell"));
+        labelCell?.InvalidateVisual();
 
         var row = combo.GetVisualAncestors()
             .OfType<Grid>()
             .FirstOrDefault(grid => !grid.Classes.Contains("ux-outliner-label-cell"));
-        if (row is null) return;
-        row.InvalidateMeasure();
-        row.InvalidateArrange();
-        row.InvalidateVisual();
-    }
-
-    private void NormalizeAllLabelCells()
-    {
-        var surface = _outlinerSurface;
-        if (surface is null) return;
-        foreach (var combo in surface.GetVisualDescendants().OfType<ComboBox>())
-            NormalizeLabelCell(combo);
+        row?.InvalidateVisual();
     }
 
     private static void NormalizeLabelCell(ComboBox combo)
@@ -160,8 +145,27 @@ internal sealed class OutlinerComboRenderPolish
         var color = combos.FirstOrDefault(static candidate => !candidate.IsEditable);
         if (label is null || color is null) return;
 
-        // Keep the three controls inside the Label / Color column with predictable spacing.
-        cell.ColumnDefinitions = new ColumnDefinitions("*,108,38");
+        // Never replace ColumnDefinitions on every LayoutUpdated. Mutate the existing definitions
+        // only when necessary so this normalization is safe to run during layout discovery.
+        if (cell.ColumnDefinitions.Count != 3)
+        {
+            cell.ColumnDefinitions = new ColumnDefinitions("*,108,38");
+        }
+        else
+        {
+            var expected = new[]
+            {
+                new GridLength(1, GridUnitType.Star),
+                new GridLength(108),
+                new GridLength(38)
+            };
+            for (var index = 0; index < expected.Length; index++)
+            {
+                if (cell.ColumnDefinitions[index].Width != expected[index])
+                    cell.ColumnDefinitions[index].Width = expected[index];
+            }
+        }
+
         cell.ColumnSpacing = 4;
         cell.HorizontalAlignment = HorizontalAlignment.Stretch;
         cell.ClipToBounds = false;
@@ -172,9 +176,9 @@ internal sealed class OutlinerComboRenderPolish
         label.HorizontalAlignment = HorizontalAlignment.Stretch;
         label.VerticalContentAlignment = VerticalAlignment.Center;
 
-        // The editable ComboBox template does not render reliably when its outer background and
-        // border are replaced at runtime. Use the native theme and leave color indication to the
-        // dedicated color selector/swatch beside it.
+        // Editable ComboBox templates render unreliably when their outer border/background are
+        // overridden at runtime. Keep the native theme and let the adjacent selector/swatch show
+        // the label color. ClearValue is a no-op once no local value is present.
         label.ClearValue(ComboBox.BackgroundProperty);
         label.ClearValue(ComboBox.BorderBrushProperty);
         label.ClearValue(ComboBox.BorderThicknessProperty);
@@ -187,19 +191,13 @@ internal sealed class OutlinerComboRenderPolish
         Grid.SetColumn(color, 1);
 
         var swatch = cell.Children.OfType<Button>().FirstOrDefault();
-        if (swatch is not null)
-        {
-            swatch.Width = 34;
-            swatch.Height = 32;
-            swatch.Margin = new Thickness(0, 1);
-            swatch.HorizontalAlignment = HorizontalAlignment.Center;
-            swatch.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(swatch, 2);
-        }
-
-        cell.InvalidateMeasure();
-        cell.InvalidateArrange();
-        cell.InvalidateVisual();
+        if (swatch is null) return;
+        swatch.Width = 34;
+        swatch.Height = 32;
+        swatch.Margin = new Thickness(0, 1);
+        swatch.HorizontalAlignment = HorizontalAlignment.Center;
+        swatch.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(swatch, 2);
     }
 
     private void RerenderOutliner()
@@ -212,10 +210,7 @@ internal sealed class OutlinerComboRenderPolish
             surface = _outlinerSurface;
         }
 
-        if (surface is null) return;
-        surface.InvalidateMeasure();
-        surface.InvalidateArrange();
-        surface.InvalidateVisual();
+        surface?.InvalidateVisual();
     }
 
     private static void ResizeCustomColorWindow()
@@ -228,10 +223,10 @@ internal sealed class OutlinerComboRenderPolish
                      string.Equals(candidate.Title, "Select Custom Color", StringComparison.Ordinal)))
         {
             dialog.SizeToContent = SizeToContent.Manual;
-            dialog.Width = Math.Max(dialog.Width, 535);
-            dialog.Height = Math.Max(dialog.Height, 535);
-            dialog.MinWidth = Math.Max(dialog.MinWidth, 500);
-            dialog.MinHeight = Math.Max(dialog.MinHeight, 500);
+            if (double.IsNaN(dialog.Width) || dialog.Width < 535) dialog.Width = 535;
+            if (double.IsNaN(dialog.Height) || dialog.Height < 535) dialog.Height = 535;
+            if (dialog.MinWidth < 500) dialog.MinWidth = 500;
+            if (dialog.MinHeight < 500) dialog.MinHeight = 500;
         }
     }
 
