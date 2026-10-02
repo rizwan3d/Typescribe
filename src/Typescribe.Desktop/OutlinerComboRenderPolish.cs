@@ -15,6 +15,7 @@ internal sealed class OutlinerComboRenderPolish
 {
     private readonly StudioWorkspaceWindow _window;
     private readonly HashSet<ComboBox> _hookedCombos = [];
+    private readonly HashSet<ComboBox> _pendingTintCleanups = [];
     private Grid? _outlinerSurface;
     private bool _disposed;
 
@@ -81,12 +82,15 @@ internal sealed class OutlinerComboRenderPolish
             if (!_hookedCombos.Add(combo)) continue;
             combo.DropDownClosed += ComboDropDownClosed;
             combo.LostFocus += ComboLostFocus;
+            combo.PropertyChanged += ComboPropertyChanged;
         }
 
         foreach (var stale in _hookedCombos.Where(combo => !combo.IsAttachedToVisualTree()).ToArray())
         {
             stale.DropDownClosed -= ComboDropDownClosed;
             stale.LostFocus -= ComboLostFocus;
+            stale.PropertyChanged -= ComboPropertyChanged;
+            _pendingTintCleanups.Remove(stale);
             _hookedCombos.Remove(stale);
         }
     }
@@ -102,6 +106,54 @@ internal sealed class OutlinerComboRenderPolish
         if (_disposed || sender is not ComboBox combo || combo.IsDropDownOpen) return;
         QueueStableRerender(combo);
     }
+
+    private void ComboPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (_disposed || sender is not ComboBox combo || !combo.IsEditable || !IsOutlinerLabelCombo(combo))
+            return;
+
+        if (e.Property != ComboBox.BackgroundProperty &&
+            e.Property != ComboBox.BorderBrushProperty &&
+            e.Property != ComboBox.BorderThicknessProperty)
+            return;
+
+        // EventDrivenLabelEditingFeature can apply a color tint after this polish has already
+        // normalized the cell. Editable ComboBox templates expose that outer tint as clipped
+        // corner fragments, so remove it as soon as it is reapplied.
+        QueueTintCleanup(combo);
+    }
+
+    private void QueueTintCleanup(ComboBox combo)
+    {
+        if (!_pendingTintCleanups.Add(combo)) return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (_disposed || !combo.IsAttachedToVisualTree()) return;
+
+                combo.ClearValue(ComboBox.BackgroundProperty);
+                combo.ClearValue(ComboBox.BorderBrushProperty);
+                combo.ClearValue(ComboBox.BorderThicknessProperty);
+                combo.InvalidateVisual();
+
+                var cell = combo.GetVisualAncestors()
+                    .OfType<Grid>()
+                    .FirstOrDefault(static grid => grid.Classes.Contains("ux-outliner-label-cell"));
+                cell?.InvalidateVisual();
+            }
+            finally
+            {
+                _pendingTintCleanups.Remove(combo);
+            }
+        }, DispatcherPriority.Render);
+    }
+
+    private static bool IsOutlinerLabelCombo(ComboBox combo)
+        => combo.GetVisualAncestors()
+            .OfType<Grid>()
+            .Any(static grid => grid.Classes.Contains("ux-outliner-label-cell"));
 
     private void QueueStableRerender(ComboBox combo)
     {
@@ -176,9 +228,8 @@ internal sealed class OutlinerComboRenderPolish
         label.HorizontalAlignment = HorizontalAlignment.Stretch;
         label.VerticalContentAlignment = VerticalAlignment.Center;
 
-        // Editable ComboBox templates render unreliably when their outer border/background are
-        // overridden at runtime. Keep the native theme and let the adjacent selector/swatch show
-        // the label color. ClearValue is a no-op once no local value is present.
+        // Keep the editable label control on the native Avalonia theme. The adjacent color selector
+        // and swatch carry the color information without corrupting the editable ComboBox border.
         label.ClearValue(ComboBox.BackgroundProperty);
         label.ClearValue(ComboBox.BorderBrushProperty);
         label.ClearValue(ComboBox.BorderThicknessProperty);
@@ -243,7 +294,9 @@ internal sealed class OutlinerComboRenderPolish
         {
             combo.DropDownClosed -= ComboDropDownClosed;
             combo.LostFocus -= ComboLostFocus;
+            combo.PropertyChanged -= ComboPropertyChanged;
         }
+        _pendingTintCleanups.Clear();
         _hookedCombos.Clear();
     }
 }
