@@ -39,6 +39,7 @@ internal sealed class StudioNavigationPolish
         CenterPdfPreviewFeature.Apply(window, viewModel);
         WorkspaceInteractionCompletenessFeature.Apply(window, viewModel);
         EventDrivenLabelEditingFeature.Apply(window, viewModel);
+        OutlinerComboRenderPolish.Apply(window);
 
         var polish = new StudioNavigationPolish(window);
         polish.Attach();
