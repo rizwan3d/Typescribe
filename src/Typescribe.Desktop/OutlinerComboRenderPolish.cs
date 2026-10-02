@@ -197,19 +197,20 @@ internal sealed class OutlinerComboRenderPolish
         var color = combos.FirstOrDefault(static candidate => !candidate.IsEditable);
         if (label is null || color is null) return;
 
-        // Never replace ColumnDefinitions on every LayoutUpdated. Mutate the existing definitions
-        // only when necessary so this normalization is safe to run during layout discovery.
+        // The outer Label / Color column can temporarily be 230px while the legacy Outliner
+        // repair pass and the event-driven label editor settle. Keep this inner grid compact so
+        // its controls never request more width than the host and spill into adjacent columns.
         if (cell.ColumnDefinitions.Count != 3)
         {
-            cell.ColumnDefinitions = new ColumnDefinitions("*,108,38");
+            cell.ColumnDefinitions = new ColumnDefinitions("*,92,28");
         }
         else
         {
             var expected = new[]
             {
                 new GridLength(1, GridUnitType.Star),
-                new GridLength(108),
-                new GridLength(38)
+                new GridLength(92),
+                new GridLength(28)
             };
             for (var index = 0; index < expected.Length; index++)
             {
@@ -220,13 +221,14 @@ internal sealed class OutlinerComboRenderPolish
 
         cell.ColumnSpacing = 4;
         cell.HorizontalAlignment = HorizontalAlignment.Stretch;
-        cell.ClipToBounds = false;
+        cell.ClipToBounds = true;
 
         label.Height = 32;
-        label.MinWidth = 150;
+        label.MinWidth = 0;
         label.Margin = new Thickness(1, 1, 0, 1);
         label.HorizontalAlignment = HorizontalAlignment.Stretch;
         label.VerticalContentAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(label, 0);
 
         // Keep the editable label control on the native Avalonia theme. The adjacent color selector
         // and swatch carry the color information without corrupting the editable ComboBox border.
@@ -234,7 +236,8 @@ internal sealed class OutlinerComboRenderPolish
         label.ClearValue(ComboBox.BorderBrushProperty);
         label.ClearValue(ComboBox.BorderThicknessProperty);
 
-        color.Width = 108;
+        color.MinWidth = 0;
+        color.Width = double.NaN;
         color.Height = 32;
         color.Margin = new Thickness(0, 1);
         color.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -243,7 +246,8 @@ internal sealed class OutlinerComboRenderPolish
 
         var swatch = cell.Children.OfType<Button>().FirstOrDefault();
         if (swatch is null) return;
-        swatch.Width = 34;
+        swatch.MinWidth = 0;
+        swatch.Width = 26;
         swatch.Height = 32;
         swatch.Margin = new Thickness(0, 1);
         swatch.HorizontalAlignment = HorizontalAlignment.Center;
