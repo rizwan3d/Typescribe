@@ -68,6 +68,7 @@ public sealed class App : AvaloniaApplication
             LongFormEditorFeature.Apply(window, viewModel);
             ProfessionalEditorSuite.Apply(window, viewModel, repository);
             EditorDefaultStateFeature.Apply(window);
+            RealSpellCheckFeature.Apply(window, viewModel, repository);
             EditorAnalysisDetailsFeature.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             BookDesignFeature.Apply(window, viewModel);
