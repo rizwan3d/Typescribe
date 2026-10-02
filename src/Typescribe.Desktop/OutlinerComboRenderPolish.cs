@@ -128,7 +128,7 @@ internal sealed class OutlinerComboRenderPolish
 
     private static void ResizeCustomColorWindow()
     {
-        if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+        if (Avalonia.Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
             return;
 
         foreach (var dialog in desktop.Windows.Where(static candidate =>
