@@ -177,12 +177,16 @@ internal sealed class CorkboardOutlinerUiRepairFeature
             .FirstOrDefault(box => Grid.GetColumn(box) == 3);
         if (labelBox is null) return;
 
-        // Explicitly detach before reparenting. This is the important difference from the old
-        // Corkboard dialog polish that caused the "already has a visual parent" exception.
+        // Explicitly detach before reparenting. Reset its attached Grid.Column as well: the
+        // editor previously kept column 3 from the outer Outliner grid, so once it was moved
+        // into this two-column label/color cell Avalonia laid it outside the visible columns.
         row.Children.Remove(labelBox);
+        Grid.SetColumn(labelBox, 0);
         labelBox.Margin = new Thickness(1);
         labelBox.Padding = new Thickness(7, 4);
         labelBox.MinHeight = 32;
+        labelBox.MinWidth = 0;
+        labelBox.HorizontalAlignment = HorizontalAlignment.Stretch;
         labelBox.PlaceholderText = "Label";
 
         var color = new ComboBox
@@ -192,11 +196,16 @@ internal sealed class CorkboardOutlinerUiRepairFeature
             MinWidth = 86,
             Height = 32,
             Margin = new Thickness(2, 1, 1, 1),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Center
         };
         ToolTip.SetTip(color, "Color used by this label");
 
-        var cell = new Grid { ColumnDefinitions = new ColumnDefinitions("*,92") };
+        var cell = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,92"),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
         cell.Classes.Add("ux-outliner-label-cell");
         cell.Children.Add(labelBox);
         Grid.SetColumn(color, 1);
