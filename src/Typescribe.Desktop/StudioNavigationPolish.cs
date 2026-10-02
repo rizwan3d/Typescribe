@@ -39,6 +39,7 @@ internal sealed class StudioNavigationPolish
         CenterPdfPreviewFeature.Apply(window, viewModel);
         WorkspaceInteractionCompletenessFeature.Apply(window, viewModel);
         ProjectExplorerLabelFeature.Apply(window, viewModel);
+        UnifiedLabelEditingFeature.Apply(window, viewModel);
 
         var polish = new StudioNavigationPolish(window);
         polish.Attach();
