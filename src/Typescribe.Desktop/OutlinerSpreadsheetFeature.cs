@@ -30,6 +30,8 @@ internal sealed class OutlinerSpreadsheetFeature
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
     private readonly FileSystemProjectRepository _repository = new();
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+    private readonly List<DispatcherTimer> _editTimers = [];
     private readonly TextBox _filter = new()
     {
         Watermark = "Filter rows",
@@ -93,6 +95,13 @@ internal sealed class OutlinerSpreadsheetFeature
         {
             _fieldSignature = fieldSignature;
             _collectionSignature = collectionSignature;
+            if (_outlinerTab?.IsKeyboardFocusWithin == true)
+                _refreshPending = true;
+            else
+                RefreshRows();
+        }
+        else if (_refreshPending && _outlinerTab?.IsKeyboardFocusWithin != true)
+        {
             RefreshRows();
         }
     }
@@ -171,6 +180,7 @@ internal sealed class OutlinerSpreadsheetFeature
     {
         if (!_installed || _disposed || _features is null) return;
         _refreshPending = false;
+        StopEditTimers();
         var fields = CustomFields();
         var nodes = SortedAndFilteredNodes(fields).ToArray();
         var active = ActiveCollection();
@@ -226,8 +236,7 @@ internal sealed class OutlinerSpreadsheetFeature
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions(columns), Margin = new Thickness(4, 1) };
 
         var title = CellTextBox(node.Title);
-        title.LostFocus += async (_, _) => await CommitTitleAsync(node, title.Text ?? string.Empty);
-        title.KeyDown += (_, e) => CommitOnEnter(e, title);
+        WireTextAutosave(title, value => CommitTitleAsync(node, value));
         Add(row, title, 0);
 
         var type = new ComboBox
@@ -240,18 +249,16 @@ internal sealed class OutlinerSpreadsheetFeature
         type.SelectionChanged += async (_, _) =>
         {
             if (type.SelectedItem is NodeKind kind && kind != node.Kind)
-                await CommitKindAsync(node, kind);
+                await RunSaveAsync(() => CommitKindAsync(node, kind));
         };
         Add(row, type, 1);
 
         var status = CellTextBox(node.Status);
-        status.LostFocus += async (_, _) => await CommitMetadataAsync(node, status: status.Text);
-        status.KeyDown += (_, e) => CommitOnEnter(e, status);
+        WireTextAutosave(status, value => CommitMetadataAsync(node, status: value));
         Add(row, status, 2);
 
         var label = CellTextBox(node.Label);
-        label.LostFocus += async (_, _) => await CommitMetadataAsync(node, label: label.Text);
-        label.KeyDown += (_, e) => CommitOnEnter(e, label);
+        WireTextAutosave(label, value => CommitMetadataAsync(node, label: value));
         Add(row, label, 3);
 
         var words = new TextBlock
@@ -263,14 +270,16 @@ internal sealed class OutlinerSpreadsheetFeature
         Add(row, words, 4);
 
         var target = CellTextBox(node.TargetWords > 0 ? node.TargetWords.ToString() : "0");
-        target.LostFocus += async (_, _) =>
+        WireTextAutosave(target, async value =>
         {
-            if (int.TryParse(target.Text, out var value) && value >= 0)
-                await CommitMetadataAsync(node, target: value);
-            else
+            if (int.TryParse(value, out var targetWords) && targetWords >= 0)
+                await CommitMetadataAsync(node, target: targetWords);
+        });
+        target.LostFocus += (_, _) =>
+        {
+            if (!int.TryParse(target.Text, out var value) || value < 0)
                 target.Text = node.TargetWords.ToString();
         };
-        target.KeyDown += (_, e) => CommitOnEnter(e, target);
         Add(row, target, 5);
 
         var compile = new CheckBox
@@ -280,15 +289,14 @@ internal sealed class OutlinerSpreadsheetFeature
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4)
         };
-        compile.Click += async (_, _) => await CommitCompileAsync(node, compile.IsChecked == true);
+        compile.Click += async (_, _) => await RunSaveAsync(() => CommitCompileAsync(node, compile.IsChecked == true));
         Add(row, compile, 6);
 
         for (var index = 0; index < fields.Length; index++)
         {
             var field = fields[index];
             var input = CellTextBox(node.CustomMetadata.GetValueOrDefault(field.Key));
-            input.LostFocus += async (_, _) => await CommitCustomAsync(node, field.Key, input.Text ?? string.Empty);
-            input.KeyDown += (_, e) => CommitOnEnter(e, input);
+            WireTextAutosave(input, value => CommitCustomAsync(node, field.Key, value));
             Add(row, input, 7 + index);
         }
 
@@ -309,11 +317,62 @@ internal sealed class OutlinerSpreadsheetFeature
         VerticalContentAlignment = VerticalAlignment.Center
     };
 
-    private void CommitOnEnter(KeyEventArgs e, Avalonia.Controls.TextBox box)
+    private void WireTextAutosave(Avalonia.Controls.TextBox box, Func<string, Task> commit)
     {
-        if (e.Key != Key.Enter) return;
-        e.Handled = true;
-        _window.Focus();
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(320) };
+        timer.Tick += async (_, _) =>
+        {
+            timer.Stop();
+            var value = box.Text ?? string.Empty;
+            await RunSaveAsync(() => commit(value));
+        };
+        _editTimers.Add(timer);
+
+        box.TextChanged += (_, _) =>
+        {
+            if (_disposed) return;
+            timer.Stop();
+            timer.Start();
+        };
+        box.LostFocus += async (_, _) =>
+        {
+            timer.Stop();
+            var value = box.Text ?? string.Empty;
+            await RunSaveAsync(() => commit(value));
+        };
+        box.KeyDown += async (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            timer.Stop();
+            var value = box.Text ?? string.Empty;
+            await RunSaveAsync(() => commit(value));
+            _window.Focus();
+        };
+    }
+
+    private async Task RunSaveAsync(Func<Task> save)
+    {
+        if (_disposed) return;
+        await _saveGate.WaitAsync();
+        try
+        {
+            await save();
+        }
+        catch (Exception ex)
+        {
+            RaiseState($"Outliner save failed: {ex.Message}");
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    private void StopEditTimers()
+    {
+        foreach (var timer in _editTimers) timer.Stop();
+        _editTimers.Clear();
     }
 
     private async Task CommitTitleAsync(ProjectNode node, string value)
@@ -334,7 +393,7 @@ internal sealed class OutlinerSpreadsheetFeature
     private async Task CommitKindAsync(ProjectNode node, NodeKind kind)
     {
         var project = CurrentProject();
-        if (project is null) return;
+        if (project is null || node.Kind == kind) return;
         node.ChangeKind(kind);
         await _repository.SaveNodeMetadataAsync(
             project, node, node.Synopsis, node.Notes, node.Status, node.Label, node.Keywords, node.TargetWords);
@@ -349,6 +408,10 @@ internal sealed class OutlinerSpreadsheetFeature
         var nextStatus = status ?? node.Status;
         var nextLabel = label ?? node.Label;
         var nextTarget = target ?? node.TargetWords;
+        if (string.Equals(nextStatus, node.Status, StringComparison.Ordinal) &&
+            string.Equals(nextLabel, node.Label, StringComparison.Ordinal) &&
+            nextTarget == node.TargetWords)
+            return;
 
         if (ReferenceEquals(_viewModel.SelectedRow?.Node, node))
         {
@@ -375,7 +438,7 @@ internal sealed class OutlinerSpreadsheetFeature
 
     private async Task CommitCustomAsync(ProjectNode node, string key, string value)
     {
-        if (_features is null) return;
+        if (_features is null || string.Equals(node.CustomMetadata.GetValueOrDefault(key), value, StringComparison.Ordinal)) return;
         await _features.SetCustomValueAsync(node, key, value);
         RaiseState("Custom metadata saved");
         FinishEdit();
@@ -383,8 +446,12 @@ internal sealed class OutlinerSpreadsheetFeature
 
     private void FinishEdit()
     {
-        if (_refreshPending || _outlinerTab?.IsKeyboardFocusWithin != true)
-            Dispatcher.UIThread.Post(RefreshRows, DispatcherPriority.Background);
+        if (_outlinerTab?.IsKeyboardFocusWithin == true)
+        {
+            _refreshPending = true;
+            return;
+        }
+        Dispatcher.UIThread.Post(RefreshRows, DispatcherPriority.Background);
     }
 
     private void RaiseState(string status)
@@ -487,6 +554,7 @@ internal sealed class OutlinerSpreadsheetFeature
     private void OnClosed(object? sender, EventArgs e)
     {
         _disposed = true;
+        StopEditTimers();
         _viewModel.StateChanged -= OnStateChanged;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
