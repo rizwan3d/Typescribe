@@ -38,8 +38,7 @@ internal sealed class StudioNavigationPolish
         CorkboardOutlinerUiRepairFeature.Apply(window, viewModel);
         CenterPdfPreviewFeature.Apply(window, viewModel);
         WorkspaceInteractionCompletenessFeature.Apply(window, viewModel);
-        ProjectExplorerLabelFeature.Apply(window, viewModel);
-        UnifiedLabelEditingFeature.Apply(window, viewModel);
+        EventDrivenLabelEditingFeature.Apply(window, viewModel);
 
         var polish = new StudioNavigationPolish(window);
         polish.Attach();
