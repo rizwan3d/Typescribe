@@ -22,6 +22,7 @@ internal sealed class InspectorEditingFeature
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly Dictionary<Avalonia.Controls.TextBox, string> _drafts = [];
     private readonly Dictionary<Avalonia.Controls.TextBox, Func<string>> _modelValues = [];
+    private AuthoringFeatureCoordinator? _features;
     private Avalonia.Controls.TextBox? _synopsis;
     private Avalonia.Controls.TextBox? _notes;
     private Avalonia.Controls.TextBox? _status;
@@ -51,22 +52,31 @@ internal sealed class InspectorEditingFeature
         feature.TryInstall();
     }
 
-    private void OnOpened(object? sender, EventArgs e) => TryInstall();
+    private void OnOpened(object? sender, EventArgs e)
+    {
+        TryInstall();
+        WireCustomMetadataEditors();
+    }
+
     private void OnLayoutUpdated(object? sender, EventArgs e)
     {
         if (!_installed) TryInstall();
+        if (_installed) WireCustomMetadataEditors();
     }
 
     private void TryInstall()
     {
         if (_installed || _disposed) return;
+        _features = typeof(StudioWorkspaceWindow)
+            .GetField("_features", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.GetValue(_window) as AuthoringFeatureCoordinator;
         _synopsis = Field("_synopsisBox");
         _notes = Field("_notesBox");
         _status = Field("_statusBox");
         _label = Field("_labelBox");
         _keywords = Field("_keywordsBox");
         _target = Field("_targetBox");
-        if (new[] { _synopsis, _notes, _status, _label, _keywords, _target }.Any(static box => box is null)) return;
+        if (_features is null || new[] { _synopsis, _notes, _status, _label, _keywords, _target }.Any(static box => box is null)) return;
 
         Register(_synopsis!, () => _viewModel.SelectedSynopsis);
         Register(_notes!, () => _viewModel.SelectedNotes);
@@ -80,7 +90,7 @@ internal sealed class InspectorEditingFeature
         UpdateEnabledState();
         UpdateTargetValidation();
         _installed = true;
-        _window.LayoutUpdated -= OnLayoutUpdated;
+        WireCustomMetadataEditors();
     }
 
     private Avalonia.Controls.TextBox? Field(string name)
@@ -269,6 +279,108 @@ internal sealed class InspectorEditingFeature
         if (clearPending) _pendingDraft = null;
     }
 
+    private void WireCustomMetadataEditors()
+    {
+        if (_disposed || !_installed || _features is null) return;
+        var panel = typeof(StudioWorkspaceWindow)
+            .GetField("_customFieldsPanel", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.GetValue(_window) as StackPanel;
+        var node = _viewModel.SelectedRow?.Node;
+        if (panel is null || node is null) return;
+
+        foreach (var row in panel.Children.OfType<Grid>().ToArray())
+        {
+            var old = row.Children.OfType<Avalonia.Controls.TextBox>().FirstOrDefault();
+            if (old is null || old.Classes.Contains("durable-custom-metadata")) continue;
+
+            var fieldName = row.Children.OfType<Avalonia.Controls.TextBlock>()
+                .FirstOrDefault()?.Text?.Trim();
+            var field = _features.CustomFields.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, fieldName, StringComparison.OrdinalIgnoreCase));
+            if (field is null) continue;
+
+            // Replace the legacy LostFocus-only editor. Its anonymous handler resolves the
+            // selected node at blur time, which can save an old field value into a newly
+            // selected document. The replacement captures the node it was created for.
+            var input = new Avalonia.Controls.TextBox
+            {
+                Text = old.Text,
+                Watermark = old.Watermark,
+                MinHeight = Math.Max(32, old.MinHeight),
+                MinWidth = old.MinWidth,
+                MaxWidth = old.MaxWidth,
+                Margin = old.Margin,
+                Padding = new Thickness(8, 4),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                IsEnabled = old.IsEnabled,
+                IsReadOnly = false
+            };
+            input.Classes.Add("durable-custom-metadata");
+            ToolTip.SetTip(input, $"Custom metadata: {field.Name}");
+
+            var column = Grid.GetColumn(old);
+            row.Children.Remove(old);
+            Grid.SetColumn(input, column);
+            row.Children.Add(input);
+            WireCustomMetadataInput(input, node, field.Key);
+        }
+    }
+
+    private void WireCustomMetadataInput(Avalonia.Controls.TextBox input, ProjectNode node, string key)
+    {
+        CancellationTokenSource? cts = null;
+        input.TextChanged += (_, _) =>
+        {
+            if (!input.IsKeyboardFocusWithin) return;
+            cts?.Cancel();
+            cts?.Dispose();
+            cts = new CancellationTokenSource();
+            var value = input.Text ?? string.Empty;
+            _ = SaveCustomAfterDelayAsync(node, key, value, cts.Token);
+        };
+        input.LostFocus += async (_, _) =>
+        {
+            cts?.Cancel();
+            cts?.Dispose();
+            cts = null;
+            await SaveCustomSafelyAsync(node, key, input.Text ?? string.Empty, CancellationToken.None);
+        };
+    }
+
+    private async Task SaveCustomAfterDelayAsync(ProjectNode node, string key, string value, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(280, cancellationToken);
+            await SaveCustomSafelyAsync(node, key, value, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch { }
+    }
+
+    private async Task SaveCustomSafelyAsync(ProjectNode node, string key, string value, CancellationToken cancellationToken)
+    {
+        if (_features is null || string.Equals(node.CustomMetadata.GetValueOrDefault(key), value, StringComparison.Ordinal)) return;
+        await _saveGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (string.Equals(node.CustomMetadata.GetValueOrDefault(key), value, StringComparison.Ordinal)) return;
+            await _features.SetCustomValueAsync(node, key, value, cancellationToken);
+            RaiseState("Custom metadata saved");
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    private void RaiseState(string status)
+    {
+        typeof(WorkspaceViewModel)
+            .GetMethod("SetStatus", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.Invoke(_viewModel, [status]);
+    }
+
     private void UpdateTargetValidation()
     {
         if (_target is null) return;
@@ -302,6 +414,7 @@ internal sealed class InspectorEditingFeature
 
             UpdateEnabledState();
             UpdateTargetValidation();
+            WireCustomMetadataEditors();
             foreach (var pair in _drafts.ToArray())
             {
                 if (pair.Key.IsKeyboardFocusWithin)
