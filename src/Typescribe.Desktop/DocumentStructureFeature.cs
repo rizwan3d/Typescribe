@@ -604,7 +604,7 @@ internal sealed class DocumentStructureFeature
         Flush();
 
         if (result.Count == 0)
-            result.Add(new ImportSegment(NodeKind.Chapter, fallbackTitle, BuildDocument(fallbackTitle, markup)));
+            result.Add(new ImportSegment(NodeKind.Chapter, fallbackTitle, BuildDocument(fallbackTitle, markup ?? string.Empty)));
         return result;
     }
 
