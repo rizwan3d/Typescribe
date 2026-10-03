@@ -62,6 +62,7 @@ internal sealed class LongFormEditorFeature
     private Grid? _host;
     private Control? _toolbar;
     private Control? _findPanel;
+    private Control? _statusBar;
     private ToggleButton? _focusToggle;
     private ToggleButton? _typewriterToggle;
     private ToggleButton? _markdownToggle;
@@ -172,7 +173,7 @@ internal sealed class LongFormEditorFeature
         _toolbar = BuildToolbar();
         _findPanel = BuildFindPanel();
         _findPanel.IsVisible = false;
-        var status = BuildStatusBar();
+        _statusBar = BuildStatusBar();
 
         Grid.SetRow(_toolbar, 0);
         _host.Children.Add(_toolbar);
@@ -185,8 +186,8 @@ internal sealed class LongFormEditorFeature
         Grid.SetColumnSpan(editor, 1);
         _host.Children.Add(editor);
 
-        Grid.SetRow(status, 3);
-        _host.Children.Add(status);
+        Grid.SetRow(_statusBar, 3);
+        _host.Children.Add(_statusBar);
 
         parent.Children.Insert(index, _host);
         Grid.SetRow(_host, row);
@@ -486,7 +487,12 @@ internal sealed class LongFormEditorFeature
     private void UpdateEnabledState()
     {
         var enabled = _viewModel.HasDocument;
-        if (_toolbar is not null) _toolbar.IsEnabled = enabled;
+        if (_toolbar is not null)
+        {
+            _toolbar.IsEnabled = enabled;
+            _toolbar.IsVisible = enabled;
+        }
+        if (_statusBar is not null) _statusBar.IsVisible = enabled;
         if (_findPanel is not null && !enabled) _findPanel.IsVisible = false;
     }
 

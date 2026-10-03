@@ -250,7 +250,7 @@ internal sealed class StudioUxPolish
 
         var title = new TextBlock
         {
-            Text = "Your manuscript workspace",
+            Text = "Open a manuscript workspace",
             FontSize = 22,
             FontWeight = FontWeight.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center
@@ -259,7 +259,7 @@ internal sealed class StudioUxPolish
 
         var body = new TextBlock
         {
-            Text = "Select a chapter in Project Explorer, or create one to start writing.\nUse Corkboard and Outliner when you want to plan before drafting.",
+            Text = "Open or create a Typescribe project, then select a chapter in Project Explorer to start writing.\nUse Corkboard and Outliner when you want to plan before drafting.",
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Center,
             MaxWidth = 520,

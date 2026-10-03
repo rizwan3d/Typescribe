@@ -402,17 +402,23 @@ internal sealed class ReferenceTopChrome
     private void StyleTabControl(TabControl tabs)
     {
         tabs.Margin = new Thickness(0);
+        var isCenterTabs = IsCenterWorkspaceTabs(tabs);
 
         if (_styledTabs.Add(tabs))
             tabs.SelectionChanged += (_, _) => UpdateTabSelection(tabs);
 
         foreach (var item in TabItems(tabs))
         {
-            item.MinHeight = 30;
-            item.Padding = new Thickness(9, 5);
+            item.Height = isCenterTabs ? 36 : double.NaN;
+            item.MinHeight = isCenterTabs ? 36 : 30;
+            item.Width = isCenterTabs ? 112 : double.NaN;
+            item.MinWidth = isCenterTabs ? 112 : 0;
+            item.Padding = isCenterTabs ? new Thickness(0) : new Thickness(9, 5);
             item.Margin = new Thickness(0);
-            item.FontSize = 11;
+            item.FontSize = isCenterTabs ? 12 : 11;
+            item.FontWeight = FontWeight.Normal;
             item.HorizontalContentAlignment = HorizontalAlignment.Center;
+            item.VerticalContentAlignment = VerticalAlignment.Center;
         }
 
         UpdateTabSelection(tabs);
@@ -425,10 +431,23 @@ internal sealed class ReferenceTopChrome
             var selected = ReferenceEquals(item, tabs.SelectedItem);
             item.Background = selected ? EditorBrush : Brushes.Transparent;
             item.Foreground = selected ? TextBrush : MutedTextBrush;
-            item.BorderBrush = selected ? AccentBrush : Brushes.Transparent;
-            item.BorderThickness = selected ? new Thickness(0, 0, 0, 2) : new Thickness(0);
-            item.FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal;
+            item.BorderBrush = Brushes.Transparent;
+            item.BorderThickness = new Thickness(0);
+            item.FontWeight = FontWeight.Normal;
         }
+    }
+
+    private static bool IsCenterWorkspaceTabs(TabControl tabs)
+    {
+        var headers = TabItems(tabs).Select(HeaderText).ToArray();
+        return headers.Any(static header => string.Equals(header, "Editor", StringComparison.OrdinalIgnoreCase)) &&
+               headers.Any(static header => string.Equals(header, "Corkboard", StringComparison.OrdinalIgnoreCase)) &&
+               headers.Any(static header => string.Equals(header, "Outliner", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string HeaderText(TabItem item)
+    {
+        return item.Header?.ToString()?.Replace("_", string.Empty, StringComparison.Ordinal).Trim() ?? string.Empty;
     }
 
     private static IEnumerable<TabItem> TabItems(TabControl tabs)

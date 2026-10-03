@@ -29,6 +29,8 @@ internal sealed class StudioScriveningsFeatures
         "#94A3B8", "#2563EB", "#7C3AED", "#DB2777", "#EA580C", "#059669"
     ];
 
+    private static readonly SolidColorBrush NeutralBorderBrush = new(Color.Parse("#3F3F46"));
+
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
     private readonly TrackingProjectRepository _repository;
@@ -970,7 +972,7 @@ internal sealed class StudioScriveningsFeatures
         var highest = HighestRevision(state.Row.Node.PersistentId);
         state.Revision.Text = RevisionSummary(state.Row.Node.PersistentId);
         state.Accent.Background = highest > 0 ? RevisionBrush(highest) : LabelBrush(state.Row.Node);
-        state.Container.BorderBrush = LabelBrush(state.Row.Node);
+        state.Container.BorderBrush = NeutralBorderBrush;
         state.Container.Background = SurfaceTint(state.Row.Node);
     }
 

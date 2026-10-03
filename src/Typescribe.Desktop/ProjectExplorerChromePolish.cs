@@ -46,7 +46,7 @@ internal sealed class ProjectExplorerChromePolish
     private readonly Avalonia.Controls.TextBox _searchBox = new()
     {
         Name = "ProjectExplorerSearchBox",
-        Watermark = "Search Project Explorer",
+        Watermark = "Search items",
         Height = 28,
         MinHeight = 28,
         HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -60,7 +60,7 @@ internal sealed class ProjectExplorerChromePolish
         Name = "ProjectExplorerFilterBox",
         ItemsSource = FilterChoices,
         SelectedIndex = 0,
-        Width = 104,
+        Width = 96,
         Height = 28,
         MinHeight = 28,
         Margin = new Thickness(0, 3, 3, 5),
@@ -499,11 +499,11 @@ internal sealed class ProjectExplorerChromePolish
         var filter = ActiveFilter;
         _searchBox.Watermark = filter switch
         {
-            ExplorerFilter.Manuscript => "Search manuscript items",
-            ExplorerFilter.ResearchAndNotes => "Search research and notes",
-            ExplorerFilter.Included => "Search included documents",
-            ExplorerFilter.Excluded => "Search excluded documents",
-            _ => "Search Project Explorer"
+            ExplorerFilter.Manuscript => "Search manuscript",
+            ExplorerFilter.ResearchAndNotes => "Search research",
+            ExplorerFilter.Included => "Search included",
+            ExplorerFilter.Excluded => "Search excluded",
+            _ => "Search items"
         };
     }
 

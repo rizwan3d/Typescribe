@@ -71,6 +71,7 @@ internal sealed class ProfessionalEditorSuite
 
     private ManuscriptEditor? _editor;
     private Grid? _host;
+    private Control? _reviewBar;
     private ComboBox? _revisionPicker;
     private ToggleButton? _trackToggle;
     private ToggleButton? _analysisToggle;
@@ -156,6 +157,7 @@ internal sealed class ProfessionalEditorSuite
         if (_disposed) return;
         Dispatcher.UIThread.Post(() =>
         {
+            UpdateEnabledState();
             SynchronizeDocumentState();
             ScheduleAnalysis();
             ScheduleUiRefresh();
@@ -188,9 +190,9 @@ internal sealed class ProfessionalEditorSuite
             if (row >= 1) Grid.SetRow(child, row + 1);
         }
 
-        var reviewBar = BuildReviewBar();
-        Grid.SetRow(reviewBar, 1);
-        host.Children.Add(reviewBar);
+        _reviewBar = BuildReviewBar();
+        Grid.SetRow(_reviewBar, 1);
+        host.Children.Add(_reviewBar);
         host.Classes.Add("professional-editor-host");
 
         _semanticColorizer = new SemanticMarkupColorizer(this);
@@ -209,9 +211,18 @@ internal sealed class ProfessionalEditorSuite
 
         _installed = true;
         ApplyWysiwymMode();
+        UpdateEnabledState();
         SynchronizeDocumentState();
         ScheduleAnalysis();
         RefreshStatus();
+    }
+
+    private void UpdateEnabledState()
+    {
+        var enabled = _viewModel.HasDocument;
+        if (_reviewBar is null) return;
+        _reviewBar.IsEnabled = enabled;
+        _reviewBar.IsVisible = enabled;
     }
 
     private Control BuildReviewBar()

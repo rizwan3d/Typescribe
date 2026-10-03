@@ -206,31 +206,6 @@ internal sealed class StudioAuthoringEnhancements
     private void InjectScratchpadTab()
     {
         if (_scratchpadInjected || _inspectorTabs is null) return;
-        var items = GetTabItems(_inspectorTabs);
-        if (items.Any(static item => string.Equals(item.Header?.ToString(), "Scratchpad", StringComparison.Ordinal)))
-        {
-            _scratchpadInjected = true;
-            return;
-        }
-
-        var save = new Button { Content = "Save Notes", HorizontalAlignment = HorizontalAlignment.Right };
-        save.Click += (_, _) => SaveScratchpad();
-        var content = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(10) };
-        content.Children.Add(new TextBlock
-        {
-            Text = "Project Scratchpad",
-            FontSize = 16,
-            FontWeight = Avalonia.Media.FontWeight.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        });
-        Grid.SetRow(_scratchpad, 1);
-        content.Children.Add(_scratchpad);
-        Grid.SetRow(save, 2);
-        save.Margin = new Thickness(0, 8, 0, 0);
-        content.Children.Add(save);
-
-        items.Add(new TabItem { Header = "Scratchpad", Content = content });
-        _inspectorTabs.ItemsSource = items.ToArray();
         _scratchpadInjected = true;
     }
 

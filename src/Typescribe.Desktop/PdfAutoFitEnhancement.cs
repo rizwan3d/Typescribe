@@ -67,7 +67,7 @@ internal sealed class PdfAutoFitEnhancement
         if (_inspectorTabs is null) return;
 
         _pdfTab = TabItems(_inspectorTabs)
-            .FirstOrDefault(static item => string.Equals(item.Header?.ToString(), "PDF", StringComparison.Ordinal));
+            .FirstOrDefault(IsPreviewTab);
         if (_pdfTab?.Content is not Control content) return;
 
         _scroll = FindControl<ScrollViewer>(content);
@@ -154,7 +154,19 @@ internal sealed class PdfAutoFitEnhancement
         => Math.Abs(left.Width - right.Width) < 0.5 && Math.Abs(left.Height - right.Height) < 0.5;
 
     private static bool HasPdfTab(TabControl tabs)
-        => TabItems(tabs).Any(static item => string.Equals(item.Header?.ToString(), "PDF", StringComparison.Ordinal));
+    {
+        var items = TabItems(tabs).ToArray();
+        return items.Any(IsPreviewTab) &&
+               items.Any(static item => string.Equals(item.Header?.ToString(), "Comments", StringComparison.Ordinal)) &&
+               items.Any(static item => string.Equals(item.Header?.ToString(), "Snapshots", StringComparison.Ordinal));
+    }
+
+    private static bool IsPreviewTab(TabItem item)
+    {
+        var header = item.Header?.ToString();
+        return string.Equals(header, "PDF", StringComparison.Ordinal) ||
+               string.Equals(header, "Preview", StringComparison.Ordinal);
+    }
 
     private static IEnumerable<TabItem> TabItems(TabControl tabs)
     {

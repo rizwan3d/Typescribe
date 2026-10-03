@@ -237,8 +237,22 @@
   </Style>
 
   <Style Selector="Window.typescribe-studio TabControl.center-tabs TabItem">
-    <Setter Property="Padding" Value="12,7" />
-    <Setter Property="FontSize" Value="13.5" />
+    <Setter Property="Width" Value="112" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="MinWidth" Value="112" />
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio TabControl.center-tabs TabItem:selected">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+    <Setter Property="FontWeight" Value="Normal" />
   </Style>
 
   <Style Selector="Window.typescribe-studio ProgressBar">

@@ -65,6 +65,7 @@ internal sealed class WorkspaceDockingFeature
     {
         foreach (var tabs in _window.GetVisualDescendants().OfType<TabControl>().ToArray())
         {
+            if (!IsCenterWorkspaceTabs(tabs)) continue;
             foreach (var tab in TabItems(tabs).ToArray())
                 InstallTab(tabs, tab);
         }
@@ -318,6 +319,14 @@ internal sealed class WorkspaceDockingFeature
         if (tabs.ItemsSource is IEnumerable source)
             return source.Cast<object?>().OfType<TabItem>();
         return tabs.Items.OfType<TabItem>();
+    }
+
+    private static bool IsCenterWorkspaceTabs(TabControl tabs)
+    {
+        var headers = TabItems(tabs).Select(HeaderText).ToArray();
+        return headers.Any(static header => string.Equals(header, "Editor", StringComparison.OrdinalIgnoreCase)) &&
+               headers.Any(static header => string.Equals(header, "Corkboard", StringComparison.OrdinalIgnoreCase)) &&
+               headers.Any(static header => string.Equals(header, "Outliner", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string HeaderText(TabItem tab)

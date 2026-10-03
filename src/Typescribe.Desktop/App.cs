@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml.Styling;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 using AvaloniaApplication = Avalonia.Application;
@@ -46,6 +47,8 @@ public sealed class App : AvaloniaApplication
             var searchService = new ProjectSearchService(repository);
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
             var window = new StudioWorkspaceWindow(viewModel);
+            var startupProjectPath = ResolveStartupProjectPath(Environment.GetCommandLineArgs().Skip(1));
+            window.WindowState = WindowState.Maximized;
 
             if (window.Content is Grid root && root.RowDefinitions.Count >= 4)
             {
@@ -83,10 +86,73 @@ public sealed class App : AvaloniaApplication
             // Install this last so later workspace enhancements cannot replace or hide the search row.
             InstallProjectSearch(window, viewModel);
             ReferenceTopChrome.Apply(window);
+            if (startupProjectPath is not null)
+            {
+                window.Opened += async (_, _) =>
+                {
+                    try { await window.OpenProjectPathAsync(startupProjectPath); }
+                    catch (Exception ex) { await ShowStartupOpenErrorAsync(window, startupProjectPath, ex); }
+                };
+            }
             desktop.MainWindow = window;
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static string? ResolveStartupProjectPath(IEnumerable<string> args)
+    {
+        var pendingProjectSwitch = false;
+        foreach (var rawArg in args)
+        {
+            var arg = rawArg.Trim().Trim('"');
+            if (arg.Length == 0) continue;
+
+            if (pendingProjectSwitch)
+                return Directory.Exists(arg) ? Path.GetFullPath(arg) : null;
+
+            if (string.Equals(arg, "--project", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(arg, "-p", StringComparison.OrdinalIgnoreCase))
+            {
+                pendingProjectSwitch = true;
+                continue;
+            }
+
+            if (Directory.Exists(arg))
+                return Path.GetFullPath(arg);
+        }
+
+        return null;
+    }
+
+    private static async Task ShowStartupOpenErrorAsync(Window owner, string path, Exception exception)
+    {
+        var close = new Button { Content = "Close", HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 88 };
+        var dialog = new Window
+        {
+            Title = "Could not open project",
+            Width = 620,
+            Height = 260,
+            MinWidth = 520,
+            MinHeight = 220,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(18),
+                Spacing = 14,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Typescribe could not open the startup project:\n{path}\n\n{exception.Message}",
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    close
+                }
+            }
+        };
+        close.Click += (_, _) => dialog.Close();
+        await dialog.ShowDialog(owner);
     }
 
     private static void InstallProjectSearch(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)

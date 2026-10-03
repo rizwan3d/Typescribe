@@ -726,7 +726,7 @@ public sealed class StudioWorkspaceWindow : Window
         await OpenProjectPathAsync(folder.Path.LocalPath);
     }
 
-    private async Task OpenProjectPathAsync(string path)
+    public async Task OpenProjectPathAsync(string path)
     {
         _projectRoot = path;
         await _viewModel.OpenProjectAsync(path);
@@ -1683,7 +1683,22 @@ public sealed class StudioWorkspaceWindow : Window
             _status.Text = _viewModel.Status;
             _wordCount.Text = _viewModel.SelectedTargetWords > 0 ? _viewModel.SelectedTargetText : $"{_viewModel.WordCount:N0} words";
             _engine.Text = _viewModel.CanPublishPdf ? $"PDF: {_viewModel.PublishingEngineName}" : "PDF: LuaLaTeX not installed";
-            _previewScope.Text = _viewModel.PreviewScopeLabel;
+            var previewScopeLabel = _viewModel.PreviewScopeLabel;
+            if (!_viewModel.HasProject ||
+                string.Equals(previewScopeLabel, "Whole Book", StringComparison.OrdinalIgnoreCase))
+            {
+                previewScopeLabel = string.Empty;
+            }
+            _previewScope.Text = previewScopeLabel;
+            _previewScope.IsVisible = !string.IsNullOrWhiteSpace(previewScopeLabel);
+            _previewStatus.IsVisible = _viewModel.HasProject;
+            _pageLabel.IsVisible = _viewModel.HasProject;
+            _previousPageButton.IsVisible = _viewModel.HasProject;
+            _nextPageButton.IsVisible = _viewModel.HasProject;
+            _zoomOutButton.IsVisible = _viewModel.HasProject;
+            _zoomInButton.IsVisible = _viewModel.HasProject;
+            _wholeBookPreview.IsVisible = _viewModel.HasProject;
+            _wholeBookPreview.IsEnabled = _viewModel.HasProject;
             _wholeBookPreview.IsChecked = _viewModel.PreviewWholeBook;
             if (_wholeBookPreviewMenuItem is not null) _wholeBookPreviewMenuItem.IsChecked = _viewModel.PreviewWholeBook;
             _previewStatus.Text = _viewModel.IsLivePreviewBuilding ? "Compiling…" : _viewModel.LivePreviewError is not null ? "Preview error" : _viewModel.LivePreviewPdfPath is not null ? "Live" : string.Empty;
