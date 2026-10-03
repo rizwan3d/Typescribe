@@ -80,6 +80,7 @@ public sealed class App : AvaloniaApplication
             EditorAnalysisDetailsFeature.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
             RichEditorInsertFeature.Apply(window, viewModel, parser);
+            RichTableMenuFeature.Apply(window, viewModel, parser);
             BookDesignFeature.Apply(window, viewModel);
             ExactPdfCursorSyncFeature.Apply(window, viewModel, repository, parser);
             DirectEditorNavigationFeature.Apply(window, viewModel);
