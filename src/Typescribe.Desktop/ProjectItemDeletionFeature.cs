@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -16,6 +15,10 @@ namespace Typescribe.Desktop;
 /// heading, note, research, section, folder, part, and scene deletions use the project Trash.
 /// Parsed outline headings are editor ranges rather than ProjectNode instances, so they are
 /// snapshot-protected and removed from the owning document directly.
+///
+/// Delete target resolution intentionally uses WorkspaceViewModel state rather than reflection
+/// against ProjectExplorerFeature's private ExplorerNode type. Typescribe ships as Native AOT,
+/// where reflection metadata for that private implementation type can be trimmed.
 /// </summary>
 internal sealed class ProjectItemDeletionFeature
 {
@@ -121,7 +124,7 @@ internal sealed class ProjectItemDeletionFeature
 
     private async void TreeKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Delete || _tree?.SelectedItem is not { } node || !CanDelete(node)) return;
+        if (e.Key != Key.Delete || !HasDeletableSelection()) return;
 
         e.Handled = true;
         await DeleteSelectedSafelyAsync();
@@ -129,18 +132,27 @@ internal sealed class ProjectItemDeletionFeature
 
     private async Task DeleteSelectedSafelyAsync()
     {
-        if (_disposed || _tree?.SelectedItem is not { } node || !CanDelete(node)) return;
+        if (_disposed || !HasDeletableSelection()) return;
 
         try
         {
-            if (NodeRow(node) is { } row)
-                await DeleteProjectNodeAsync(row);
-            else if (IsHeadingNode(node))
-                await DeleteOutlineHeadingAsync(node);
+            // ProjectExplorerFeature synchronizes TreeView selection into WorkspaceViewModel.
+            // Use that strongly typed state so Native AOT trimming cannot break delete target lookup.
+            var selectedRow = _viewModel.SelectedRow;
+            var selectedOutline = _viewModel.SelectedOutline;
+
+            if (selectedOutline is not null && selectedRow?.Node.IsDocument == true)
+                await DeleteOutlineHeadingAsync(selectedRow, selectedOutline);
+            else if (selectedRow is not null && selectedRow.Node.Kind != NodeKind.Book)
+                await DeleteProjectNodeAsync(selectedRow);
         }
         catch (Exception ex)
         {
-            SetStatus($"Delete failed: {ex.Message}");
+            _ = await DesktopDialogService.ConfirmAsync(
+                _window,
+                "Delete failed",
+                ex.Message,
+                "Close");
         }
     }
 
@@ -159,41 +171,47 @@ internal sealed class ProjectItemDeletionFeature
             "Delete");
         if (!confirmed) return;
 
-        await _viewModel.SelectAsync(row);
+        if (!string.Equals(
+                _viewModel.SelectedRow?.Node.PersistentId,
+                row.Node.PersistentId,
+                StringComparison.Ordinal))
+            await _viewModel.SelectAsync(row);
+
         await _viewModel.DeleteSelectedAsync();
     }
 
-    private async Task DeleteOutlineHeadingAsync(object explorerNode)
+    private async Task DeleteOutlineHeadingAsync(
+        BinderRowViewModel selectedOwnerRow,
+        OutlineItemViewModel selectedHeading)
     {
-        var heading = NodeHeading(explorerNode);
-        var ownerDocumentId = OwnerDocumentId(explorerNode);
-        if (heading is null || string.IsNullOrWhiteSpace(ownerDocumentId)) return;
+        var ownerRow = _viewModel.BinderRows.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.Node.PersistentId,
+                selectedOwnerRow.Node.PersistentId,
+                StringComparison.Ordinal));
+        if (ownerRow is null || !ownerRow.Node.IsDocument) return;
 
         var confirmed = await DesktopDialogService.ConfirmAsync(
             _window,
             "Delete Heading Section",
-            $"Delete heading '{heading.Title}' and all content in its section? A snapshot of the document will be created first.",
+            $"Delete heading '{selectedHeading.Title}' and all content in its section? A snapshot of the document will be created first.",
             "Delete");
         if (!confirmed) return;
 
-        var ownerRow = _viewModel.BinderRows.FirstOrDefault(candidate =>
-            string.Equals(candidate.Node.PersistentId, ownerDocumentId, StringComparison.Ordinal));
-        if (ownerRow is null || !ownerRow.Node.IsDocument) return;
-
-        await _viewModel.SelectAsync(ownerRow);
+        if (!string.Equals(
+                _viewModel.SelectedRow?.Node.PersistentId,
+                ownerRow.Node.PersistentId,
+                StringComparison.Ordinal))
+            await _viewModel.SelectAsync(ownerRow);
 
         var liveHeading = _viewModel.OutlineItems.FirstOrDefault(candidate =>
-            candidate.Level == heading.Level &&
-            candidate.SourceLine == heading.SourceLine &&
-            string.Equals(candidate.Title, heading.Title, StringComparison.Ordinal))
+            candidate.Level == selectedHeading.Level &&
+            candidate.SourceLine == selectedHeading.SourceLine &&
+            string.Equals(candidate.Title, selectedHeading.Title, StringComparison.Ordinal))
             ?? _viewModel.OutlineItems.FirstOrDefault(candidate =>
-                candidate.Level == heading.Level &&
-                string.Equals(candidate.Title, heading.Title, StringComparison.Ordinal));
-        if (liveHeading is null)
-        {
-            SetStatus("The selected heading no longer exists.");
-            return;
-        }
+                candidate.Level == selectedHeading.Level &&
+                string.Equals(candidate.Title, selectedHeading.Title, StringComparison.Ordinal));
+        if (liveHeading is null) return;
 
         await _viewModel.CreateSnapshotAsync($"Before deleting heading: {liveHeading.Title}");
 
@@ -205,7 +223,25 @@ internal sealed class ProjectItemDeletionFeature
 
         _viewModel.UpdateEditorText(updated);
         await _viewModel.SaveNowAsync();
-        SetStatus($"Deleted heading section: {liveHeading.Title}");
+    }
+
+    private bool HasDeletableSelection()
+    {
+        if (_tree?.SelectedItem is null || IsProjectRootSelected()) return false;
+
+        if (_viewModel.SelectedOutline is not null && _viewModel.SelectedRow?.Node.IsDocument == true)
+            return true;
+
+        return _viewModel.SelectedRow is { } row && row.Node.Kind != NodeKind.Book;
+    }
+
+    private bool IsProjectRootSelected()
+    {
+        if (_tree?.SelectedItem is not { } selected || _tree.ItemsSource is not IEnumerable source)
+            return false;
+
+        var root = source.Cast<object?>().FirstOrDefault(static item => item is not null);
+        return ReferenceEquals(selected, root);
     }
 
     private static string RemoveLineRange(string text, int startLine, int endLine)
@@ -238,12 +274,6 @@ internal sealed class ProjectItemDeletionFeature
         return -1;
     }
 
-    private static bool CanDelete(object node)
-    {
-        if (NodeRow(node) is { } row) return row.Node.Kind != NodeKind.Book;
-        return IsHeadingNode(node) && NodeHeading(node) is not null;
-    }
-
     private static List<object> MenuItems(object? source)
     {
         if (source is not IEnumerable enumerable) return [];
@@ -255,32 +285,6 @@ internal sealed class ProjectItemDeletionFeature
             (item.Header?.ToString() ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).TrimEnd('…'),
             text,
             StringComparison.OrdinalIgnoreCase);
-
-    private static BinderRowViewModel? NodeRow(object node)
-        => node.GetType().GetProperty("Row", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?.GetValue(node) as BinderRowViewModel;
-
-    private static OutlineItemViewModel? NodeHeading(object node)
-        => node.GetType().GetProperty("Heading", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?.GetValue(node) as OutlineItemViewModel;
-
-    private static string? OwnerDocumentId(object node)
-        => node.GetType().GetProperty("OwnerDocumentId", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?.GetValue(node)?.ToString();
-
-    private static bool IsHeadingNode(object node)
-        => string.Equals(
-            node.GetType().GetProperty("Kind", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                ?.GetValue(node)?.ToString(),
-            "Heading",
-            StringComparison.Ordinal);
-
-    private void SetStatus(string status)
-    {
-        typeof(WorkspaceViewModel)
-            .GetMethod("SetStatus", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?.Invoke(_viewModel, [status]);
-    }
 
     private void WindowClosed(object? sender, EventArgs e)
     {
