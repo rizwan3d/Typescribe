@@ -297,7 +297,7 @@ internal sealed class StructuredPublishingFeature
         return new Compilation(source.ToString(), segments);
     }
 
-    private CompilerProblem MapSourceProblem(IReadOnlyList<SourceSegment> segments, PublishingDiagnosticException exception)
+    private static CompilerProblem MapSourceProblem(IReadOnlyList<SourceSegment> segments, PublishingDiagnosticException exception)
     {
         if (exception.SourceLine is not int sourceLine)
             return new CompilerProblem(PreflightSeverity.Error, exception.Message, null, null, null, exception.GeneratedLine);
@@ -387,7 +387,10 @@ internal sealed class StructuredPublishingFeature
         return tabs.Items.Cast<object>().OfType<TabItem>().ToList();
     }
 
-    private static bool HeaderEquals(HeaderedContentControl item, string expected)
+    private static bool HeaderEquals(MenuItem item, string expected)
+        => string.Equals(Normalize(item.Header?.ToString()), expected, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HeaderEquals(TabItem item, string expected)
         => string.Equals(Normalize(item.Header?.ToString()), expected, StringComparison.OrdinalIgnoreCase);
 
     private static string Normalize(string? value) => (value ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).Trim();
