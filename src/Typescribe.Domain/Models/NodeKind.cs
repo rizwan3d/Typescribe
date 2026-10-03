@@ -9,5 +9,6 @@ public enum NodeKind
     Scene,
     Note,
     Research,
-    Folder
+    Folder,
+    Heading
 }

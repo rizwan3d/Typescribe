@@ -36,6 +36,7 @@ internal sealed class PdfAutoFitEnhancement
     public static void Apply(StudioWorkspaceWindow window)
     {
         ArgumentNullException.ThrowIfNull(window);
+        DocumentStructureFeature.Apply(window);
         var feature = new PdfAutoFitEnhancement(window);
         window.Opened += feature.OnOpened;
         window.LayoutUpdated += feature.OnLayoutUpdated;

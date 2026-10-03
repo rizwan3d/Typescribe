@@ -23,6 +23,7 @@ public sealed class BinderRowViewModel(ProjectNode node, int depth)
         NodeKind.Book => "▣",
         NodeKind.Part => "◆",
         NodeKind.Folder => "▸",
+        NodeKind.Heading => "#",
         NodeKind.Chapter => "◫",
         NodeKind.Section => "§",
         NodeKind.Scene => "▪",
