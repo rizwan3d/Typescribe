@@ -11,39 +11,60 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop.Editing;
 
 /// <summary>
-/// Makes the editor document title directly editable and adds H2/H3 creation
-/// commands to the native Project Explorer without reflecting over its private node type.
+/// Makes the editor document title directly editable, adds H2/H3 creation commands,
+/// and provides AOT-safe inline naming for Project Explorer items. Parsed document
+/// headings remain intentionally read-only.
 /// </summary>
 internal sealed class EditorTitleAndExplorerHeadingFeature
 {
     private const string HeadingMenuClass = "project-heading-create";
     private const string HeadingButtonClass = "project-heading-create-button";
+    private const string NameMenuClass = "project-name-edit";
+    private const string NameButtonClass = "project-name-edit-button";
 
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
+    private readonly TrackingProjectRepository _repository;
 
     private TextBox? _titleEditor;
     private TreeView? _tree;
+    private Button? _renameButton;
     private Button? _h2Button;
     private Button? _h3Button;
+
+    private TextBox? _explorerNameEditor;
+    private TextBlock? _explorerNameLabel;
+    private Grid? _explorerNameHost;
+    private string? _editingPersistentId;
+    private string _editingOriginalName = string.Empty;
+    private bool _editingBookRoot;
+
     private bool _scanQueued;
     private bool _syncingTitle;
+    private bool _committingExplorerName;
+    private bool _treeHandlersInstalled;
     private bool _disposed;
 
     private EditorTitleAndExplorerHeadingFeature(
         StudioWorkspaceWindow window,
-        WorkspaceViewModel viewModel)
+        WorkspaceViewModel viewModel,
+        TrackingProjectRepository repository)
     {
         _window = window;
         _viewModel = viewModel;
+        _repository = repository;
     }
 
-    public static void Apply(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
+    public static void Apply(
+        StudioWorkspaceWindow window,
+        WorkspaceViewModel viewModel,
+        TrackingProjectRepository repository)
     {
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(repository);
 
-        var feature = new EditorTitleAndExplorerHeadingFeature(window, viewModel);
+        var feature = new EditorTitleAndExplorerHeadingFeature(window, viewModel, repository);
         window.Opened += feature.WindowOpened;
         window.LayoutUpdated += feature.WindowLayoutUpdated;
         window.Closed += feature.WindowClosed;
@@ -64,7 +85,7 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
         Dispatcher.UIThread.Post(() =>
         {
             SyncTitleFromSelection();
-            UpdateHeadingActionState();
+            UpdateExplorerActionState();
             QueueScan();
         }, DispatcherPriority.Background);
     }
@@ -78,9 +99,9 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
             _scanQueued = false;
             if (_disposed) return;
             InstallEditableTitle();
-            InstallExplorerHeadingActions();
+            InstallExplorerActions();
             SyncTitleFromSelection();
-            UpdateHeadingActionState();
+            UpdateExplorerActionState();
         }, DispatcherPriority.Background);
     }
 
@@ -206,7 +227,7 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
             ?.Focus();
     }
 
-    private void InstallExplorerHeadingActions()
+    private void InstallExplorerActions()
     {
         var tree = _window.GetVisualDescendants()
             .OfType<TreeView>()
@@ -214,6 +235,13 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
         if (tree is null) return;
 
         _tree = tree;
+        if (!_treeHandlersInstalled)
+        {
+            tree.SelectionChanged += ExplorerSelectionChanged;
+            tree.DoubleTapped += ExplorerDoubleTapped;
+            _treeHandlersInstalled = true;
+        }
+
         InstallExplorerToolbarButtons(tree);
         InstallExplorerContextMenu(tree);
     }
@@ -230,31 +258,57 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
             .FirstOrDefault(static grid => grid.Classes.Contains("project-explorer-toolbar"));
         if (header is null) return;
 
-        var existing = header.Children
+        _renameButton ??= header.Children.OfType<Button>()
+            .FirstOrDefault(static button => button.Classes.Contains(NameButtonClass));
+        var existingHeadingButtons = header.Children
             .OfType<Button>()
             .Where(static button => button.Classes.Contains(HeadingButtonClass))
             .ToArray();
-        if (existing.Length >= 2)
-        {
-            _h2Button = existing.FirstOrDefault(button => string.Equals(button.Content?.ToString(), "H2", StringComparison.Ordinal));
-            _h3Button = existing.FirstOrDefault(button => string.Equals(button.Content?.ToString(), "H3", StringComparison.Ordinal));
-            return;
-        }
+        _h2Button ??= existingHeadingButtons.FirstOrDefault(button => string.Equals(button.Content?.ToString(), "H2", StringComparison.Ordinal));
+        _h3Button ??= existingHeadingButtons.FirstOrDefault(button => string.Equals(button.Content?.ToString(), "H3", StringComparison.Ordinal));
+
+        if (_renameButton is not null && _h2Button is not null && _h3Button is not null) return;
+        if (_renameButton is not null || _h2Button is not null || _h3Button is not null) return;
 
         foreach (var child in header.Children.OfType<Control>().ToArray())
         {
             var column = Grid.GetColumn(child);
-            if (column >= 1) Grid.SetColumn(child, column + 2);
+            if (column >= 1) Grid.SetColumn(child, column + 3);
         }
         header.ColumnDefinitions.Insert(1, new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Insert(2, new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Insert(3, new ColumnDefinition { Width = GridLength.Auto });
 
+        _renameButton = NameButton();
         _h2Button = HeadingButton("H2", "Add a level-2 heading to the active document", 2);
         _h3Button = HeadingButton("H3", "Add a level-3 heading to the active document", 3);
-        Grid.SetColumn(_h2Button, 1);
-        Grid.SetColumn(_h3Button, 2);
+        Grid.SetColumn(_renameButton, 1);
+        Grid.SetColumn(_h2Button, 2);
+        Grid.SetColumn(_h3Button, 3);
+        header.Children.Add(_renameButton);
         header.Children.Add(_h2Button);
         header.Children.Add(_h3Button);
+    }
+
+    private Button NameButton()
+    {
+        var button = new Button
+        {
+            Content = "✎",
+            Width = 28,
+            Height = 24,
+            MinWidth = 28,
+            MinHeight = 24,
+            Padding = new Thickness(2, 0),
+            Margin = new Thickness(2, 0),
+            FontSize = 11,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        button.Classes.Add(NameButtonClass);
+        ToolTip.SetTip(button, "Edit selected book or project item name. Outline headings are read-only.");
+        button.Click += async (_, _) => await BeginInlineRenameSelectedAsync();
+        return button;
     }
 
     private Button HeadingButton(string text, string toolTip, int level)
@@ -283,14 +337,24 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
         if (tree.ContextMenu is not { } menu || menu.ItemsSource is not IEnumerable source) return;
 
         var items = source.Cast<object?>().Where(static item => item is not null).Cast<object>().ToList();
-        if (items.OfType<MenuItem>().Any(static item => item.Classes.Contains(HeadingMenuClass))) return;
-
-        var h2 = HeadingMenuItem("Add H2…", 2);
-        var h3 = HeadingMenuItem("Add H3…", 3);
         var firstSeparator = items.FindIndex(static item => item is Separator);
         var insertAt = firstSeparator >= 0 ? firstSeparator : items.Count;
-        items.Insert(insertAt, h2);
-        items.Insert(insertAt + 1, h3);
+
+        if (!items.OfType<MenuItem>().Any(static item => item.Classes.Contains(HeadingMenuClass)))
+        {
+            items.Insert(insertAt, HeadingMenuItem("Add H2…", 2));
+            items.Insert(insertAt + 1, HeadingMenuItem("Add H3…", 3));
+            insertAt += 2;
+        }
+
+        if (!items.OfType<MenuItem>().Any(static item => item.Classes.Contains(NameMenuClass)))
+        {
+            var editName = new MenuItem { Header = "Edit Name Inline" };
+            editName.Classes.Add(NameMenuClass);
+            editName.Click += async (_, _) => await BeginInlineRenameSelectedAsync();
+            items.Insert(insertAt, editName);
+        }
+
         menu.ItemsSource = items.ToArray();
     }
 
@@ -301,6 +365,241 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
         item.Click += async (_, _) => await AddHeadingAsync(level);
         return item;
     }
+
+    private async void ExplorerSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_explorerNameEditor is not null && !_committingExplorerName)
+            await CommitExplorerNameAsync(cancel: false);
+        UpdateExplorerActionState();
+    }
+
+    private async void ExplorerDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (e.Source is TextBox || _tree is null) return;
+        var item = FindTreeViewItem(e.Source);
+        if (item is null || IsHeadingItem(item)) return;
+        e.Handled = true;
+        await BeginInlineRenameAsync(item);
+    }
+
+    private async Task BeginInlineRenameSelectedAsync()
+    {
+        var item = SelectedTreeItem();
+        if (item is null || IsHeadingItem(item)) return;
+        await BeginInlineRenameAsync(item);
+    }
+
+    private async Task BeginInlineRenameAsync(TreeViewItem item)
+    {
+        if (_tree is null || IsHeadingItem(item)) return;
+        if (_explorerNameEditor is not null)
+            await CommitExplorerNameAsync(cancel: false);
+
+        if (!item.IsSelected && item.DataContext is not null)
+            _tree.SelectedItem = item.DataContext;
+
+        var host = FindExplorerHeader(item);
+        var label = host?.Children.OfType<TextBlock>()
+            .FirstOrDefault(static block => Grid.GetColumn(block) == 2);
+        if (host is null || label is null) return;
+
+        var isBookRoot = IsBookRootItem(item);
+        string? persistentId = null;
+        if (!isBookRoot)
+        {
+            await WaitForProjectSelectionAsync(label.Text ?? string.Empty);
+            persistentId = _viewModel.SelectedRow?.Node.PersistentId;
+            if (string.IsNullOrWhiteSpace(persistentId) || _viewModel.SelectedOutline is not null) return;
+        }
+
+        var editor = new TextBox
+        {
+            Text = label.Text,
+            FontSize = label.FontSize,
+            FontWeight = label.FontWeight,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(3, 0),
+            MinHeight = 23,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(editor, isBookRoot
+            ? "Edit book name. Enter saves; Escape cancels."
+            : "Edit project item name. Enter saves; Escape cancels.");
+        Grid.SetColumn(editor, 2);
+
+        _editingBookRoot = isBookRoot;
+        _editingPersistentId = persistentId;
+        _editingOriginalName = label.Text ?? string.Empty;
+        _explorerNameEditor = editor;
+        _explorerNameLabel = label;
+        _explorerNameHost = host;
+
+        label.IsVisible = false;
+        host.Children.Add(editor);
+        editor.KeyDown += ExplorerNameKeyDown;
+        editor.LostFocus += ExplorerNameLostFocus;
+        editor.Focus();
+        editor.SelectAll();
+    }
+
+    private async Task WaitForProjectSelectionAsync(string expectedTitle)
+    {
+        if (_viewModel.SelectedOutline is null &&
+            string.Equals(_viewModel.SelectedRow?.Node.Title, expectedTitle, StringComparison.Ordinal))
+            return;
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Changed(object? sender, EventArgs e)
+        {
+            if (_viewModel.SelectedOutline is null &&
+                string.Equals(_viewModel.SelectedRow?.Node.Title, expectedTitle, StringComparison.Ordinal))
+                completion.TrySetResult();
+        }
+
+        _viewModel.StateChanged += Changed;
+        try
+        {
+            await Task.WhenAny(completion.Task, Task.Delay(800));
+        }
+        finally
+        {
+            _viewModel.StateChanged -= Changed;
+        }
+    }
+
+    private async void ExplorerNameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            await CommitExplorerNameAsync(cancel: false);
+            _tree?.Focus();
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            await CommitExplorerNameAsync(cancel: true);
+            _tree?.Focus();
+        }
+    }
+
+    private async void ExplorerNameLostFocus(object? sender, RoutedEventArgs e)
+        => await CommitExplorerNameAsync(cancel: false);
+
+    private async Task CommitExplorerNameAsync(bool cancel)
+    {
+        if (_explorerNameEditor is null || _committingExplorerName) return;
+        _committingExplorerName = true;
+
+        var editor = _explorerNameEditor;
+        var proposed = editor.Text?.Trim() ?? string.Empty;
+        try
+        {
+            if (!cancel && proposed.Length > 0 &&
+                !string.Equals(proposed, _editingOriginalName, StringComparison.Ordinal))
+            {
+                if (_editingBookRoot)
+                {
+                    await RenameBookAsync(proposed);
+                }
+                else if (!string.IsNullOrWhiteSpace(_editingPersistentId))
+                {
+                    var row = _viewModel.BinderRows.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Node.PersistentId, _editingPersistentId, StringComparison.Ordinal));
+                    if (row is not null)
+                    {
+                        if (!string.Equals(_viewModel.SelectedRow?.Node.PersistentId, row.Node.PersistentId, StringComparison.Ordinal))
+                            await _viewModel.SelectAsync(row);
+                        await _viewModel.RenameSelectedAsync(proposed);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ToolTip.SetTip(_tree, $"Could not rename item: {ex.Message}");
+        }
+        finally
+        {
+            CleanupExplorerNameEditor();
+            _committingExplorerName = false;
+            UpdateExplorerActionState();
+        }
+    }
+
+    private void CleanupExplorerNameEditor()
+    {
+        var editor = _explorerNameEditor;
+        if (editor is not null)
+        {
+            editor.KeyDown -= ExplorerNameKeyDown;
+            editor.LostFocus -= ExplorerNameLostFocus;
+            if (_explorerNameHost?.Children.Contains(editor) == true)
+                _explorerNameHost.Children.Remove(editor);
+        }
+
+        if (_explorerNameLabel is not null)
+            _explorerNameLabel.IsVisible = true;
+
+        _explorerNameEditor = null;
+        _explorerNameLabel = null;
+        _explorerNameHost = null;
+        _editingPersistentId = null;
+        _editingOriginalName = string.Empty;
+        _editingBookRoot = false;
+    }
+
+    private async Task RenameBookAsync(string newTitle)
+    {
+        var project = _repository.CurrentProject;
+        if (project is null) return;
+
+        var manifestPath = Path.Combine(project.RootPath, "typescribe.yaml");
+        if (!File.Exists(manifestPath))
+            throw new FileNotFoundException("The project manifest could not be found.", manifestPath);
+
+        var lines = (await File.ReadAllLinesAsync(manifestPath)).ToList();
+        var projectIndex = lines.FindIndex(static line => string.Equals(line.Trim(), "project:", StringComparison.Ordinal));
+        if (projectIndex < 0)
+            throw new InvalidDataException("The project manifest does not contain a project section.");
+
+        var titleLine = -1;
+        for (var index = projectIndex + 1; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            if (line.Length > 0 && !char.IsWhiteSpace(line[0])) break;
+            if (line.TrimStart().StartsWith("title:", StringComparison.Ordinal))
+            {
+                titleLine = index;
+                break;
+            }
+        }
+
+        var encoded = $"  title: {QuoteYaml(newTitle)}";
+        if (titleLine >= 0) lines[titleLine] = encoded;
+        else lines.Insert(projectIndex + 1, encoded);
+
+        var tempPath = manifestPath + ".rename-" + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await File.WriteAllLinesAsync(tempPath, lines);
+            File.Move(tempPath, manifestPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+
+        // Reopen through the normal repository path so the immutable project identity,
+        // book root, title bar, explorer root, preview, and publishing metadata all agree.
+        await _viewModel.OpenProjectAsync(project.RootPath);
+    }
+
+    private static string QuoteYaml(string value)
+        => "\"" + value.Trim().Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
     private async Task AddHeadingAsync(int level)
     {
@@ -370,12 +669,49 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
         return text.Length;
     }
 
-    private void UpdateHeadingActionState()
+    private void UpdateExplorerActionState()
     {
         var enabled = _viewModel.HasDocument;
         if (_h2Button is not null) _h2Button.IsEnabled = enabled;
         if (_h3Button is not null) _h3Button.IsEnabled = enabled;
+
+        if (_renameButton is not null)
+        {
+            var item = SelectedTreeItem();
+            _renameButton.IsEnabled = item is not null && !IsHeadingItem(item);
+        }
     }
+
+    private TreeViewItem? SelectedTreeItem()
+        => _tree?.GetVisualDescendants().OfType<TreeViewItem>().FirstOrDefault(static item => item.IsSelected);
+
+    private static TreeViewItem? FindTreeViewItem(object? source)
+    {
+        if (source is TreeViewItem item) return item;
+        if (source is not Control control) return null;
+        return control.GetVisualAncestors().OfType<TreeViewItem>().FirstOrDefault();
+    }
+
+    private static Grid? FindExplorerHeader(TreeViewItem item)
+        => item.GetVisualDescendants()
+            .OfType<Grid>()
+            .FirstOrDefault(static grid =>
+                grid.Children.OfType<TextBlock>().Any(block => Grid.GetColumn(block) == 1) &&
+                grid.Children.OfType<TextBlock>().Any(block => Grid.GetColumn(block) == 2));
+
+    private static bool IsHeadingItem(TreeViewItem item)
+    {
+        var header = FindExplorerHeader(item);
+        var icon = header?.Children.OfType<TextBlock>()
+            .FirstOrDefault(static block => Grid.GetColumn(block) == 1)?.Text;
+        return icon is { Length: >= 2 } &&
+               icon[0] == 'H' &&
+               int.TryParse(icon[1..], out var level) &&
+               level is >= 1 and <= 6;
+    }
+
+    private static bool IsBookRootItem(TreeViewItem item)
+        => !item.GetVisualAncestors().OfType<TreeViewItem>().Any();
 
     private static IEnumerable<TabItem> TabItems(TabControl tabs)
         => tabs.ItemsSource is IEnumerable source
@@ -394,5 +730,11 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
         _viewModel.StateChanged -= ViewModelStateChanged;
         if (_titleEditor is not null)
             _titleEditor.KeyDown -= TitleEditorKeyDown;
+        if (_treeHandlersInstalled && _tree is not null)
+        {
+            _tree.SelectionChanged -= ExplorerSelectionChanged;
+            _tree.DoubleTapped -= ExplorerDoubleTapped;
+        }
+        CleanupExplorerNameEditor();
     }
 }
