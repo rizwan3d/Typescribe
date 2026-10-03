@@ -104,7 +104,7 @@ internal sealed class RichEditorInsertFeature
         var line = editor.Document.GetLineByOffset(Math.Max(0, caret - 1));
         var prefix = editor.Document.GetText(line.Offset, caret - line.Offset);
         if (!string.Equals(prefix.TrimStart(), "/", StringComparison.Ordinal)) return false;
-        var relative = prefix.LastIndexOf('/', StringComparison.Ordinal);
+        var relative = prefix.LastIndexOf('/');
         if (relative < 0) return false;
         slashOffset = line.Offset + relative;
         return true;
