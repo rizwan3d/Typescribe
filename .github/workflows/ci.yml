@@ -24,3 +24,21 @@ jobs:
         run: dotnet restore Typescribe.slnx
       - name: Build
         run: dotnet build Typescribe.slnx -c Release --no-restore
+      - name: Set up Java for EPUBCheck
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Generate EPUB smoke book
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet run --project tools/Typescribe.EpubSmoke/Typescribe.EpubSmoke.csproj -c Release -- /tmp/typescribe-smoke.epub
+      - name: Validate EPUB with EPUBCheck 5.4.0
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error \
+            --output /tmp/epubcheck.zip \
+            https://github.com/w3c/epubcheck/releases/download/v5.4.0/epubcheck-5.4.0.zip
+          unzip -q /tmp/epubcheck.zip -d /tmp/epubcheck
+          java -jar /tmp/epubcheck/epubcheck-5.4.0/epubcheck.jar /tmp/typescribe-smoke.epub
