@@ -41,8 +41,8 @@ public sealed class App : AvaloniaApplication
             var repository = new TrackingProjectRepository(
                 new TransactionalProjectRepository(new FileSystemProjectRepository(), mutationService));
             var parser = new AdvancedDocumentParser();
-            var renderer = new LuaLatexSafeDocumentRenderer();
-            var publishingEngine = new LuaLatexPublishingEngine();
+            var renderer = new SourceMappedDocumentRenderer();
+            var publishingEngine = new DiagnosticPdfPublishingEngine(new LuaLatexPublishingEngine());
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
             var searchService = new ProjectSearchService(repository);
             var viewModel = new WorkspaceViewModel(repository, parser, renderer, new WordCountService(), searchService, exportService);
@@ -82,6 +82,7 @@ public sealed class App : AvaloniaApplication
             BookDesignFeature.Apply(window, viewModel);
             ExactPdfCursorSyncFeature.Apply(window, viewModel, repository, parser);
             DirectEditorNavigationFeature.Apply(window, viewModel);
+            StructuredPublishingFeature.Apply(window, viewModel, repository, parser, renderer, publishingEngine);
 
             // Install this last so later workspace enhancements cannot replace or hide the search row.
             InstallProjectSearch(window, viewModel);

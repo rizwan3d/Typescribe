@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Typescribe.Application.Abstractions;
 using Typescribe.Domain.Models;
 
@@ -10,6 +11,8 @@ namespace Typescribe.Application.Services;
 public sealed class AdvancedDocumentParser : IDocumentParser
 {
     private const string PlaceholderPrefix = "TYPESCRIBEADVANCEDBLOCK";
+    private const string TableMetadataPrefix = "<!-- typescribe:table ";
+    private const string BibliographyPrefix = "<!-- typescribe:bib64:";
     private readonly DocumentParser _inner = new();
 
     public DocumentAst Parse(string source)
@@ -25,6 +28,12 @@ public sealed class AdvancedDocumentParser : IDocumentParser
             var line = lines[index];
             var sourceLine = index + 1;
 
+            if (TryParseBibliographyDirective(line, sourceLine, out var bibliography))
+            {
+                ReplaceWithPlaceholder(lines, index, index, bibliography, advancedBlocks, ref tokenNumber);
+                continue;
+            }
+
             if (TryParseFootnoteDefinition(line, sourceLine, out var footnote))
             {
                 ReplaceWithPlaceholder(lines, index, index, footnote, advancedBlocks, ref tokenNumber);
@@ -34,6 +43,32 @@ public sealed class AdvancedDocumentParser : IDocumentParser
             if (TryParseFigure(line, sourceLine, out var figure))
             {
                 ReplaceWithPlaceholder(lines, index, index, figure, advancedBlocks, ref tokenNumber);
+                continue;
+            }
+
+            if (TryParseLabeledMath(line, sourceLine, out var equation))
+            {
+                ReplaceWithPlaceholder(lines, index, index, equation, advancedBlocks, ref tokenNumber);
+                continue;
+            }
+
+            if (TryParseTableMetadata(line, out var metadata) &&
+                index + 2 < lines.Length &&
+                LooksLikeTableRow(lines[index + 1]) &&
+                IsTableSeparator(lines[index + 2]))
+            {
+                var headerIndex = index + 1;
+                var end = index + 2;
+                while (end + 1 < lines.Length && LooksLikeTableRow(lines[end + 1]) && !string.IsNullOrWhiteSpace(lines[end + 1]))
+                    end++;
+
+                var table = ParseTable(lines, headerIndex, end, headerIndex + 1) with
+                {
+                    Caption = metadata.Caption,
+                    Identifier = metadata.Identifier
+                };
+                ReplaceWithPlaceholder(lines, index, end, table, advancedBlocks, ref tokenNumber);
+                index = end;
                 continue;
             }
 
@@ -63,6 +98,18 @@ public sealed class AdvancedDocumentParser : IDocumentParser
         }
 
         return new DocumentAst(blocks);
+    }
+
+    public static string CreateTableMetadata(string? identifier, string? caption)
+    {
+        static string Encode(string? value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value ?? string.Empty));
+        return $"{TableMetadataPrefix}id64:{Encode(identifier)} caption64:{Encode(caption)} -->";
+    }
+
+    public static string CreateBibliographyDirective(BibliographyEntry entry)
+    {
+        var json = JsonSerializer.Serialize(entry.Normalize());
+        return BibliographyPrefix + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json)) + " -->";
     }
 
     private static void ReplaceWithPlaceholder(
@@ -106,12 +153,24 @@ public sealed class AdvancedDocumentParser : IDocumentParser
     private AstBlock RewriteBlock(AstBlock block)
         => block switch
         {
-            HeadingBlock heading => heading with { Inlines = RewriteInlines(heading.Inlines) },
+            HeadingBlock heading => RewriteHeading(heading),
             ParagraphBlock paragraph => paragraph with { Inlines = RewriteInlines(paragraph.Inlines) },
             QuoteBlock quote => quote with { Inlines = RewriteInlines(quote.Inlines) },
             ListItemBlock item => item with { Inlines = RewriteInlines(item.Inlines) },
             _ => block
         };
+
+    private HeadingBlock RewriteHeading(HeadingBlock heading)
+    {
+        var rewritten = RewriteInlines(heading.Inlines);
+        var text = rewritten.ToPlainText();
+        if (!TryExtractTrailingIdentifier(text, out var clean, out var identifier))
+            return heading with { Inlines = rewritten };
+
+        // Identifier suffixes are structural, not visible heading content. Rebuilding the heading
+        // text is intentionally conservative and keeps canonical storage simple and deterministic.
+        return heading with { Inlines = [new TextInline(clean)], Identifier = identifier };
+    }
 
     private TableCell RewriteCell(TableCell cell) => cell with { Inlines = RewriteInlines(cell.Inlines) };
 
@@ -175,6 +234,17 @@ public sealed class AdvancedDocumentParser : IDocumentParser
 
             if (marker == '@' && body.Length > 0)
             {
+                if (body.StartsWith("ref:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var identifier = body[4..].Trim();
+                    if (identifier.Length > 0)
+                    {
+                        result.Add(new CrossReferenceInline(identifier));
+                        cursor = close + 1;
+                        continue;
+                    }
+                }
+
                 var comma = body.IndexOf(',');
                 var key = comma >= 0 ? body[..comma].Trim() : body;
                 var locator = comma >= 0 ? body[(comma + 1)..].Trim() : null;
@@ -252,9 +322,26 @@ public sealed class AdvancedDocumentParser : IDocumentParser
         return true;
     }
 
+    private static bool TryParseLabeledMath(string line, int sourceLine, out DisplayMathBlock block)
+    {
+        block = null!;
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith("$$", StringComparison.Ordinal) || !trimmed.EndsWith('}')) return false;
+        var labelStart = trimmed.LastIndexOf(" {#", StringComparison.Ordinal);
+        if (labelStart <= 4) return false;
+        var mathPart = trimmed[..labelStart].TrimEnd();
+        if (!mathPart.EndsWith("$$", StringComparison.Ordinal)) return false;
+        var identifier = trimmed[(labelStart + 3)..^1].Trim();
+        if (identifier.Length == 0) return false;
+        var text = mathPart[2..^2].Trim();
+        block = new DisplayMathBlock(sourceLine, text, identifier);
+        return true;
+    }
+
     private TableBlock ParseTable(string[] lines, int start, int end, int sourceLine)
     {
         var header = ParseTableCells(lines[start]).Select(cell => new TableCell(ParseCellInlines(cell))).ToArray();
+        var alignments = ParseTableAlignments(lines[start + 1]);
         var rows = new List<IReadOnlyList<TableCell>>();
 
         for (var index = start + 2; index <= end; index++)
@@ -270,7 +357,7 @@ public sealed class AdvancedDocumentParser : IDocumentParser
             rows.Add(row);
         }
 
-        return new TableBlock(sourceLine, header, rows);
+        return new TableBlock(sourceLine, header, rows, alignments);
     }
 
     private IReadOnlyList<AstInline> ParseCellInlines(string text)
@@ -308,6 +395,18 @@ public sealed class AdvancedDocumentParser : IDocumentParser
         return true;
     }
 
+    private static IReadOnlyList<TableAlignment> ParseTableAlignments(string line)
+        => ParseTableCells(line).Select(static cell =>
+        {
+            var value = cell.Trim();
+            var left = value.StartsWith(':');
+            var right = value.EndsWith(':');
+            return left && right ? TableAlignment.Center
+                : right ? TableAlignment.Right
+                : left ? TableAlignment.Left
+                : TableAlignment.Default;
+        }).ToArray();
+
     private static IReadOnlyList<string> ParseTableCells(string line)
     {
         var text = line.Trim();
@@ -342,4 +441,65 @@ public sealed class AdvancedDocumentParser : IDocumentParser
         cells.Add(current.ToString().Trim());
         return cells;
     }
+
+    private static bool TryExtractTrailingIdentifier(string text, out string clean, out string identifier)
+    {
+        clean = text;
+        identifier = string.Empty;
+        var trimmed = text.TrimEnd();
+        if (!trimmed.EndsWith('}')) return false;
+        var start = trimmed.LastIndexOf(" {#", StringComparison.Ordinal);
+        if (start < 0) return false;
+        identifier = trimmed[(start + 3)..^1].Trim();
+        if (identifier.Length == 0) return false;
+        clean = trimmed[..start].TrimEnd();
+        return true;
+    }
+
+    private static bool TryParseTableMetadata(string line, out TableMetadata metadata)
+    {
+        metadata = new TableMetadata(null, null);
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith(TableMetadataPrefix, StringComparison.Ordinal) || !trimmed.EndsWith("-->", StringComparison.Ordinal))
+            return false;
+        var body = trimmed[TableMetadataPrefix.Length..^3].Trim();
+        string? identifier = null;
+        string? caption = null;
+        foreach (var token in body.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (token.StartsWith("id64:", StringComparison.Ordinal)) identifier = Decode(token[5..]);
+            else if (token.StartsWith("caption64:", StringComparison.Ordinal)) caption = Decode(token[10..]);
+        }
+        metadata = new TableMetadata(string.IsNullOrWhiteSpace(identifier) ? null : identifier, string.IsNullOrWhiteSpace(caption) ? null : caption);
+        return true;
+    }
+
+    private static bool TryParseBibliographyDirective(string line, int sourceLine, out BibliographyEntryBlock block)
+    {
+        block = null!;
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith(BibliographyPrefix, StringComparison.Ordinal) || !trimmed.EndsWith("-->", StringComparison.Ordinal))
+            return false;
+        var encoded = trimmed[BibliographyPrefix.Length..^3].Trim();
+        try
+        {
+            var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            var entry = JsonSerializer.Deserialize<BibliographyEntry>(json);
+            if (entry is null || string.IsNullOrWhiteSpace(entry.CitationKey)) return false;
+            block = new BibliographyEntryBlock(sourceLine, entry.Normalize());
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string Decode(string encoded)
+    {
+        try { return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded)); }
+        catch (FormatException) { return string.Empty; }
+    }
+
+    private sealed record TableMetadata(string? Identifier, string? Caption);
 }
