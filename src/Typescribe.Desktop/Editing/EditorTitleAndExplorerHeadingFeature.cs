@@ -2,6 +2,7 @@ using System.Collections;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -450,12 +451,12 @@ internal sealed class EditorTitleAndExplorerHeadingFeature
             string.Equals(_viewModel.SelectedRow?.Node.Title, expectedTitle, StringComparison.Ordinal))
             return;
 
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Changed(object? sender, EventArgs e)
         {
             if (_viewModel.SelectedOutline is null &&
                 string.Equals(_viewModel.SelectedRow?.Node.Title, expectedTitle, StringComparison.Ordinal))
-                completion.TrySetResult();
+                completion.TrySetResult(true);
         }
 
         _viewModel.StateChanged += Changed;
