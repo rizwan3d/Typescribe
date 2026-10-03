@@ -44,7 +44,8 @@ public sealed class SourceMappedDocumentRenderer : IDocumentRenderer
                 MarkerPrefix + insertion.SourceLine.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine);
         }
 
-        return RichPdfPostProcessor.Apply(latex, document);
+        latex = RichPdfPostProcessor.Apply(latex, document);
+        return MergedTableLatexPostProcessor.Apply(latex, document);
     }
 
     private string RenderBlockNeedle(AstBlock block, BookStyle style)
