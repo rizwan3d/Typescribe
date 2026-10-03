@@ -34,6 +34,9 @@ internal sealed class BinderMetadataStore
                 ? Math.Max(0, parsedTarget)
                 : 0;
             var persistentId = fields.Length >= 11 ? Unescape(fields[10]) : string.Empty;
+            int? cachedWordCount = fields.Length >= 12 && int.TryParse(fields[11], out var parsedWordCount)
+                ? Math.Max(0, parsedWordCount)
+                : null;
             result[Normalize(relativePath)] = new BinderMetadata(
                 kind,
                 included,
@@ -45,7 +48,8 @@ internal sealed class BinderMetadataStore
                 label,
                 keywords,
                 targetWords,
-                persistentId);
+                persistentId,
+                cachedWordCount);
         }
         return result;
     }
@@ -53,7 +57,7 @@ internal sealed class BinderMetadataStore
     public Task SaveAsync(BookProject project, CancellationToken cancellationToken = default)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("# kind\tincluded\trelative-path\ttitle\tsynopsis\tnotes\tstatus\tlabel\tkeywords\ttarget-words\tpersistent-id");
+        builder.AppendLine("# kind\tincluded\trelative-path\ttitle\tsynopsis\tnotes\tstatus\tlabel\tkeywords\ttarget-words\tpersistent-id\tcached-word-count");
         foreach (var node in Flatten(project.Root))
         {
             if (node.RelativePath is null) continue;
@@ -67,7 +71,8 @@ internal sealed class BinderMetadataStore
                 .Append(Escape(node.Label)).Append('\t')
                 .Append(Escape(node.Keywords)).Append('\t')
                 .Append(node.TargetWords).Append('\t')
-                .Append(Escape(node.PersistentId)).AppendLine();
+                .Append(Escape(node.PersistentId)).Append('\t')
+                .Append(node.CachedWordCount?.ToString() ?? string.Empty).AppendLine();
         }
         return AtomicFileWriter.WriteTextAsync(GetPath(project.RootPath), builder.ToString(), cancellationToken);
     }
@@ -132,4 +137,5 @@ internal sealed record BinderMetadata(
     string Label,
     string Keywords,
     int TargetWords,
-    string PersistentId);
+    string PersistentId,
+    int? CachedWordCount);

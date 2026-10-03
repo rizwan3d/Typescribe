@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Typescribe.Domain/Typescribe.Domain.csproj" />
+    <ProjectReference Include="../../src/Typescribe.Application/Typescribe.Application.csproj" />
+    <ProjectReference Include="../../src/Typescribe.Infrastructure/Typescribe.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Typescribe.Desktop/Typescribe.Desktop.csproj" />
+  </ItemGroup>
+</Project>

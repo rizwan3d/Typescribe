@@ -12,7 +12,6 @@ internal sealed class AuthoringFeatureCoordinator
     private readonly IProjectRepository _repository = new FileSystemProjectRepository();
     private readonly IAuthoringProjectService _authoring = new AuthoringProjectService();
     private readonly SnapshotDiffService _diff = new();
-    private readonly WordCountService _wordCount = new();
     private readonly Dictionary<string, int> _diskWords = new(StringComparer.Ordinal);
     private BookProject? _project;
     private int _sessionBaseline;
@@ -33,7 +32,7 @@ internal sealed class AuthoringFeatureCoordinator
         _project = await _repository.OpenAsync(projectRoot, cancellationToken);
         await _authoring.LoadAsync(_project, cancellationToken);
         ApplyStateToLiveNodes(liveRows);
-        await RefreshWordIndexAsync(cancellationToken);
+        RefreshWordIndexFromMetadata();
         _sessionBaseline = ProjectWords;
 
         var today = DateOnly.FromDateTime(DateTime.Today);
@@ -53,12 +52,18 @@ internal sealed class AuthoringFeatureCoordinator
         _project = await _repository.OpenAsync(root, cancellationToken);
         await _authoring.LoadAsync(_project, cancellationToken);
         ApplyStateToLiveNodes(liveRows);
-        await RefreshWordIndexAsync(cancellationToken);
+        RefreshWordIndexFromMetadata();
         _sessionBaseline = Math.Min(sessionBaseline, ProjectWords);
     }
 
-    public Task RefreshStatisticsAsync(CancellationToken cancellationToken = default)
-        => RefreshWordIndexAsync(cancellationToken);
+    public async Task RefreshStatisticsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_project is null) return;
+        var root = _project.RootPath;
+        _project = await _repository.OpenAsync(root, cancellationToken);
+        await _authoring.LoadAsync(_project, cancellationToken);
+        RefreshWordIndexFromMetadata();
+    }
 
     public int GetIndexedWords(ProjectNode node, string? selectedPersistentId = null, int selectedCurrentWords = 0)
     {
@@ -70,8 +75,10 @@ internal sealed class AuthoringFeatureCoordinator
     public void UpdateSelectedWords(string? persistentId, int currentWords)
     {
         if (string.IsNullOrWhiteSpace(persistentId)) return;
-        var baseline = _diskWords.GetValueOrDefault(persistentId);
-        ProjectWords = Math.Max(0, _diskWords.Values.Sum() - baseline + Math.Max(0, currentWords));
+        var normalized = Math.Max(0, currentWords);
+        _diskWords[persistentId] = normalized;
+        FindNode(persistentId)?.SetCachedWordCount(normalized);
+        ProjectWords = _diskWords.Values.Sum();
     }
 
     public async Task SaveTargetsAsync(int projectTarget, int dailyTarget, int sessionTarget, CancellationToken cancellationToken = default)
@@ -216,7 +223,7 @@ internal sealed class AuthoringFeatureCoordinator
         return liveRows.Select(static row => row.Node).Where(node => wanted.Contains(node.PersistentId)).ToArray();
     }
 
-    private async Task RefreshWordIndexAsync(CancellationToken cancellationToken)
+    private void RefreshWordIndexFromMetadata()
     {
         _diskWords.Clear();
         if (_project is null)
@@ -226,11 +233,7 @@ internal sealed class AuthoringFeatureCoordinator
         }
 
         foreach (var node in Flatten(_project.Root).Where(static node => node.IsDocument))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var content = await _repository.ReadDocumentAsync(_project, node, cancellationToken);
-            _diskWords[node.PersistentId] = _wordCount.Count(content);
-        }
+            _diskWords[node.PersistentId] = node.CachedWordCount ?? 0;
         ProjectWords = _diskWords.Values.Sum();
     }
 
@@ -243,6 +246,7 @@ internal sealed class AuthoringFeatureCoordinator
             if (!nodes.TryGetValue(row.Node.PersistentId, out var source)) continue;
             row.Node.ReplaceCustomMetadata(source.CustomMetadata);
             row.Node.ReplaceComments(source.Comments);
+            row.Node.SetCachedWordCount(source.CachedWordCount);
         }
     }
 

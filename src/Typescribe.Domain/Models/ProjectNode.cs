@@ -34,6 +34,7 @@ public sealed class ProjectNode
     public string Label { get; private set; } = string.Empty;
     public string Keywords { get; private set; } = string.Empty;
     public int TargetWords { get; private set; }
+    public int? CachedWordCount { get; private set; }
     public IReadOnlyDictionary<string, string> CustomMetadata => _customMetadata;
     public IReadOnlyList<DocumentComment> Comments => _comments;
     public IReadOnlyList<ProjectNode> Children => _children;
@@ -70,6 +71,9 @@ public sealed class ProjectNode
         Keywords = (keywords ?? string.Empty).Trim();
         TargetWords = Math.Max(0, targetWords);
     }
+
+    public void SetCachedWordCount(int? wordCount)
+        => CachedWordCount = wordCount is int value ? Math.Max(0, value) : null;
 
     public void SetCustomMetadata(string key, string? value)
     {

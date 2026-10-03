@@ -117,6 +117,8 @@ public sealed class WorkspaceViewModel(
                 _isDirty = false;
                 _editVersion = 0;
                 RecomputeDocumentState();
+                if (_selectedNode.CachedWordCount != WordCount)
+                    await repository.SaveDocumentStatisticsAsync(_project, _selectedNode, WordCount, cancellationToken);
                 RequestEditorNavigation(1);
                 await RefreshSnapshotsAsync(cancellationToken);
                 SetStatus($"Editing {_selectedNode.Title}");
@@ -543,14 +545,14 @@ public sealed class WorkspaceViewModel(
         foreach (var snapshot in snapshots) Snapshots.Add(snapshot);
     }
 
-    private async Task RefreshCorkboardAsync(CancellationToken cancellationToken)
+    private Task RefreshCorkboardAsync(CancellationToken cancellationToken)
     {
         CorkboardCards.Clear();
         if (_project is null)
         {
             CorkboardTitle = "Corkboard";
             _corkboardVersion++;
-            return;
+            return Task.CompletedTask;
         }
 
         ProjectNode container;
@@ -571,26 +573,20 @@ public sealed class WorkspaceViewModel(
         foreach (var child in container.Children)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var words = await CountNodeWordsAsync(child, cancellationToken);
-            CorkboardCards.Add(new CorkboardCardViewModel(child, words));
+            CorkboardCards.Add(new CorkboardCardViewModel(child, CountNodeWordsFromMetadata(child)));
         }
         _corkboardVersion++;
+        return Task.CompletedTask;
     }
 
-    private async Task<int> CountNodeWordsAsync(ProjectNode node, CancellationToken cancellationToken)
+    private int CountNodeWordsFromMetadata(ProjectNode node)
     {
-        if (_project is null) return 0;
         if (node.IsDocument)
-        {
-            var content = ReferenceEquals(node, _selectedNode)
-                ? _editorText
-                : await repository.ReadDocumentAsync(_project, node, cancellationToken);
-            return wordCountService.Count(content);
-        }
+            return ReferenceEquals(node, _selectedNode) ? WordCount : node.CachedWordCount ?? 0;
 
         var total = 0;
         foreach (var child in node.Children)
-            total += await CountNodeWordsAsync(child, cancellationToken);
+            total += CountNodeWordsFromMetadata(child);
         return total;
     }
 
@@ -722,6 +718,9 @@ public sealed class WorkspaceViewModel(
         try
         {
             await repository.SaveDocumentAsync(project, node, content, cancellationToken);
+            var currentWords = wordCountService.Count(content);
+            if (node.CachedWordCount != currentWords)
+                await repository.SaveDocumentStatisticsAsync(project, node, currentWords, cancellationToken);
             if (ReferenceEquals(project, _project) && ReferenceEquals(node, _selectedNode) && version == _editVersion)
                 _isDirty = false;
             SetStatus($"Saved {DateTime.Now:t}");
