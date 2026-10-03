@@ -6,6 +6,7 @@ namespace Typescribe.Application.Services;
 /// <summary>
 /// Expands a compact, deterministic set of Markdown-style emoji shortcodes in text inlines.
 /// Canonical manuscript source remains unchanged; expansion happens only in the semantic AST.
+/// This outer semantic layer also reapplies Typescribe table merge geometry stored in table metadata.
 /// </summary>
 public sealed class EmojiDocumentParser : IDocumentParser
 {
@@ -18,8 +19,38 @@ public sealed class EmojiDocumentParser : IDocumentParser
 
     public DocumentAst Parse(string source)
     {
+        source ??= string.Empty;
         var parsed = _inner.Parse(source);
-        return new DocumentAst(parsed.Blocks.Select(RewriteBlock).ToArray());
+        var spansByHeaderLine = ReadSpanMetadata(source);
+        var blocks = new AstBlock[parsed.Blocks.Count];
+        for (var index = 0; index < parsed.Blocks.Count; index++)
+        {
+            var rewritten = RewriteBlock(parsed.Blocks[index]);
+            if (rewritten is TableBlock table &&
+                spansByHeaderLine.TryGetValue(table.SourceLine, out var spans) &&
+                spans.Count > 0)
+            {
+                rewritten = TableMarkupCodec.ApplySpans(table, spans);
+            }
+            blocks[index] = rewritten;
+        }
+        return new DocumentAst(blocks);
+    }
+
+    private static Dictionary<int, IReadOnlyList<TableMergeSpan>> ReadSpanMetadata(string source)
+    {
+        var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        var result = new Dictionary<int, IReadOnlyList<TableMergeSpan>>();
+        for (var index = 0; index < lines.Length - 1; index++)
+        {
+            if (!TableMarkupCodec.TryReadSpans(lines[index], out var spans) || spans.Count == 0) continue;
+            var next = index + 1;
+            while (next < lines.Length && string.IsNullOrWhiteSpace(lines[next])) next++;
+            if (next >= lines.Length || !lines[next].Contains('|')) continue;
+            result[next + 1] = spans;
+        }
+        return result;
     }
 
     private static AstBlock RewriteBlock(AstBlock block)
