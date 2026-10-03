@@ -8,6 +8,28 @@ public interface IProjectRepository
     Task<BookProject> OpenAsync(string rootPath, CancellationToken cancellationToken = default);
     Task<string> ReadDocumentAsync(BookProject project, ProjectNode node, CancellationToken cancellationToken = default);
     Task SaveDocumentAsync(BookProject project, ProjectNode node, string content, CancellationToken cancellationToken = default);
+
+    async Task SaveDocumentStatisticsAsync(
+        BookProject project,
+        ProjectNode node,
+        int wordCount,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(node);
+        node.SetCachedWordCount(wordCount);
+        await SaveNodeMetadataAsync(
+            project,
+            node,
+            node.Synopsis,
+            node.Notes,
+            node.Status,
+            node.Label,
+            node.Keywords,
+            node.TargetWords,
+            cancellationToken);
+    }
+
     Task<ProjectNode> AddChapterAsync(BookProject project, string title, CancellationToken cancellationToken = default);
     Task<ProjectNode> AddNodeAsync(BookProject project, ProjectNode? parent, NodeKind kind, string title, CancellationToken cancellationToken = default);
     Task RenameNodeAsync(BookProject project, ProjectNode node, string newTitle, CancellationToken cancellationToken = default);

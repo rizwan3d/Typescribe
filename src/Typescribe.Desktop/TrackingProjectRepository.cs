@@ -29,6 +29,9 @@ internal sealed class TrackingProjectRepository(IProjectRepository inner) : IPro
     public Task SaveDocumentAsync(BookProject project, ProjectNode node, string content, CancellationToken cancellationToken = default)
         => inner.SaveDocumentAsync(project, node, content, cancellationToken);
 
+    public Task SaveDocumentStatisticsAsync(BookProject project, ProjectNode node, int wordCount, CancellationToken cancellationToken = default)
+        => inner.SaveDocumentStatisticsAsync(project, node, wordCount, cancellationToken);
+
     public Task<ProjectNode> AddChapterAsync(BookProject project, string title, CancellationToken cancellationToken = default)
         => inner.AddChapterAsync(project, title, cancellationToken);
 

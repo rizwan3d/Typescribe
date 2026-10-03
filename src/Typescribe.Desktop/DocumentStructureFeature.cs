@@ -619,7 +619,7 @@ internal sealed class DocumentStructureFeature
         return title.Length > 0;
     }
 
-    private static string BuildDocument(string title, string body)
+    private static string BuildDocument(string title, string? body)
     {
         var normalizedBody = (body ?? string.Empty).Trim();
         return normalizedBody.Length == 0

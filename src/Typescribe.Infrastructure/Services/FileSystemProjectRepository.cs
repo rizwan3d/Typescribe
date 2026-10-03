@@ -431,7 +431,7 @@ public sealed class FileSystemProjectRepository : IProjectRepository
                 : NodeKind.Chapter;
             var title = !string.IsNullOrWhiteSpace(entry?.Title)
                 ? entry.Title
-                : ReadTitle(file) ?? ToTitle(Path.GetFileNameWithoutExtension(file));
+                : ToTitle(Path.GetFileNameWithoutExtension(file));
             var node = new ProjectNode(relative, title, kind, relative, entry?.PersistentId)
             {
                 IncludeInCompilation = entry?.Included ?? true
@@ -460,18 +460,7 @@ public sealed class FileSystemProjectRepository : IProjectRepository
             entry.Label,
             entry.Keywords,
             entry.TargetWords);
-    }
-
-    private static string? ReadTitle(string file)
-    {
-        using var reader = new StreamReader(file, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        for (var i = 0; i < 10; i++)
-        {
-            var line = reader.ReadLine();
-            if (line is null) break;
-            if (line.StartsWith("# ", StringComparison.Ordinal)) return line[2..].Trim();
-        }
-        return null;
+        node.SetCachedWordCount(entry.CachedWordCount);
     }
 
     private static async Task RewritePrimaryHeadingAsync(string file, string title, CancellationToken cancellationToken)
