@@ -210,14 +210,14 @@ internal sealed class EditorToolbarPolishFeature
     {
         switch (control)
         {
+            case ToggleButton toggle:
+                toggle.Content = text;
+                break;
             case Button { Content: TextBlock label }:
                 label.Text = text;
                 break;
             case Button button:
                 button.Content = text;
-                break;
-            case ToggleButton toggle:
-                toggle.Content = text;
                 break;
         }
     }
