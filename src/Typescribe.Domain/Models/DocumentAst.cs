@@ -28,8 +28,15 @@ public sealed record CodeBlock(int SourceLine, string Language, string Text) : A
 public sealed record DisplayMathBlock(int SourceLine, string Text, string? Identifier = null) : AstBlock(SourceLine);
 public sealed record ThematicBreakBlock(int SourceLine) : AstBlock(SourceLine);
 
-/// <summary>A single semantic table cell. Cell content uses the normal inline model.</summary>
-public sealed record TableCell(IReadOnlyList<AstInline> Inlines);
+/// <summary>
+/// A single semantic table grid cell. Merged regions are represented by one anchor cell
+/// carrying RowSpan/ColumnSpan and continuation cells marked IsSpanContinuation.
+/// </summary>
+public sealed record TableCell(
+    IReadOnlyList<AstInline> Inlines,
+    int RowSpan = 1,
+    int ColumnSpan = 1,
+    bool IsSpanContinuation = false);
 
 public enum TableAlignment
 {
