@@ -32,6 +32,10 @@ internal sealed class EditorToolbarPolishFeature
         window.LayoutUpdated += feature.WindowLayoutUpdated;
         window.Closed += feature.WindowClosed;
         feature.QueueApply();
+
+        // The inline table editor shares the same long-form editor host and is installed
+        // here so it follows the editor chrome lifecycle without adding another App hook.
+        InlineTableEditingFeature.Apply(window);
     }
 
     private void WindowOpened(object? sender, EventArgs e) => QueueApply();
