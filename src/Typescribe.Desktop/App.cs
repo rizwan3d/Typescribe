@@ -40,7 +40,7 @@ public sealed class App : AvaloniaApplication
             var mutationService = new FileSystemProjectMutationService();
             var repository = new TrackingProjectRepository(
                 new TransactionalProjectRepository(new FileSystemProjectRepository(), mutationService));
-            var parser = new AdvancedDocumentParser();
+            var parser = new EmojiDocumentParser(new AdvancedDocumentParser());
             var renderer = new SourceMappedDocumentRenderer();
             var publishingEngine = new DiagnosticPdfPublishingEngine(new LuaLatexPublishingEngine());
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
