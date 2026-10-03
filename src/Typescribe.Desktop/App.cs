@@ -83,6 +83,7 @@ public sealed class App : AvaloniaApplication
             ExactPdfCursorSyncFeature.Apply(window, viewModel, repository, parser);
             DirectEditorNavigationFeature.Apply(window, viewModel);
             StructuredPublishingFeature.Apply(window, viewModel, repository, parser, renderer, publishingEngine);
+            EpubPublishingFeature.Apply(window, viewModel, repository, parser);
 
             // Install this last so later workspace enhancements cannot replace or hide the search row.
             InstallProjectSearch(window, viewModel);
