@@ -10,7 +10,8 @@ namespace Typescribe.Desktop.Editing;
 
 /// <summary>
 /// Reframes the long-form editor toolbar as a compact, grouped command bar without
-/// changing any of the editing commands owned by LongFormEditorFeature.
+/// changing any of the editing commands owned by LongFormEditorFeature. Commands wrap
+/// into additional rows as space narrows; the editor toolbar never needs horizontal scrolling.
 /// </summary>
 internal sealed class EditorToolbarPolishFeature
 {
@@ -75,52 +76,33 @@ internal sealed class EditorToolbarPolishFeature
 
         SetText(controls[5], "❝");
         SetText(controls[8], "Find");
-        SetText(controls[11], "Center");
-        SetText(controls[14], "Lines");
+        SetText(controls[11], "Type");
+        SetText(controls[14], "Ln");
 
         var format = CommandGroup("Format", controls[0], controls[1], controls[2]);
         var structure = CommandGroup("Structure", controls[3], controls[4], controls[5], controls[6]);
         var find = CommandGroup("Find", controls[8]);
         var view = CommandGroup("View", controls[10], controls[11], controls[12], controls[13], controls[14], controls[15]);
         var zoom = CommandGroup("Zoom", controls[17], controls[18], controls[19], controls[20]);
-        zoom.Margin = new Thickness(6, 5, 8, 5);
 
-        var commands = new StackPanel
+        var commands = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Spacing = 0,
-            Margin = new Thickness(8, 5, 0, 5)
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(5, 3, 5, 2)
         };
         commands.Children.Add(format);
         commands.Children.Add(structure);
         commands.Children.Add(find);
         commands.Children.Add(view);
+        commands.Children.Add(zoom);
 
-        var commandScroll = new ScrollViewer
-        {
-            Content = commands,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch
-        };
-
-        var root = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            MinHeight = 58,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        root.Children.Add(commandScroll);
-        Grid.SetColumn(zoom, 1);
-        root.Children.Add(zoom);
-
-        toolbar.Child = root;
+        toolbar.Child = commands;
+        toolbar.MinHeight = 0;
         toolbar.BorderThickness = new Thickness(0, 0, 0, 1);
-        toolbar.BorderBrush = NeutralBrush(42);
-        toolbar.Background = NeutralBrush(12);
+        toolbar.BorderBrush = NeutralBrush(38);
+        toolbar.Background = NeutralBrush(9);
         if (!toolbar.Classes.Contains("editor-command-bar"))
             toolbar.Classes.Add("editor-command-bar");
 
@@ -133,8 +115,19 @@ internal sealed class EditorToolbarPolishFeature
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
-            Spacing = 2
+            Spacing = 1
         };
+
+        var caption = new TextBlock
+        {
+            Text = label.ToUpperInvariant(),
+            FontSize = 8.5,
+            FontWeight = FontWeight.SemiBold,
+            Opacity = 0.48,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(1, 0, 4, 0)
+        };
+        row.Children.Add(caption);
 
         foreach (var control in controls)
         {
@@ -142,31 +135,15 @@ internal sealed class EditorToolbarPolishFeature
             row.Children.Add(control);
         }
 
-        var caption = new TextBlock
-        {
-            Text = label.ToUpperInvariant(),
-            FontSize = 9.5,
-            FontWeight = FontWeight.SemiBold,
-            Opacity = 0.56,
-            Margin = new Thickness(2, 0, 2, 1)
-        };
-
-        var content = new StackPanel
-        {
-            Spacing = 2,
-            Margin = new Thickness(6, 4)
-        };
-        content.Children.Add(caption);
-        content.Children.Add(row);
-
         return new Border
         {
-            Child = content,
-            CornerRadius = new CornerRadius(6),
+            Child = row,
+            CornerRadius = new CornerRadius(5),
             BorderThickness = new Thickness(1),
-            BorderBrush = NeutralBrush(35),
-            Background = NeutralBrush(10),
-            Margin = new Thickness(0, 0, 6, 0),
+            BorderBrush = NeutralBrush(28),
+            Background = NeutralBrush(7),
+            Margin = new Thickness(0, 0, 4, 3),
+            Padding = new Thickness(4, 2),
             VerticalAlignment = VerticalAlignment.Center
         };
     }
@@ -178,31 +155,31 @@ internal sealed class EditorToolbarPolishFeature
 
         if (control is ToggleButton toggle)
         {
-            toggle.MinWidth = 42;
-            toggle.Height = 30;
-            toggle.MinHeight = 30;
-            toggle.Padding = new Thickness(8, 2);
-            toggle.FontSize = 11.5;
+            toggle.MinWidth = 34;
+            toggle.Height = 25;
+            toggle.MinHeight = 25;
+            toggle.Padding = new Thickness(6, 1);
+            toggle.FontSize = 10.5;
             return;
         }
 
         if (control is Button button)
         {
             var text = ButtonText(button);
-            button.MinWidth = text.Length > 2 ? 44 : 32;
-            button.Height = 30;
-            button.MinHeight = 30;
-            button.Padding = new Thickness(8, 2);
-            button.FontSize = 12;
+            button.MinWidth = text.Length > 2 ? 38 : 27;
+            button.Height = 25;
+            button.MinHeight = 25;
+            button.Padding = new Thickness(6, 1);
+            button.FontSize = 11;
             return;
         }
 
         if (control is TextBlock textBlock)
         {
-            textBlock.MinWidth = 44;
+            textBlock.MinWidth = 38;
             textBlock.TextAlignment = TextAlignment.Center;
             textBlock.VerticalAlignment = VerticalAlignment.Center;
-            textBlock.FontSize = 11.5;
+            textBlock.FontSize = 10.5;
         }
     }
 
