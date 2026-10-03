@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -13,9 +14,8 @@ namespace Typescribe.Desktop;
 /// never copied over canonical manuscripts unless the user explicitly chooses a
 /// restore action after a later launch.
 /// </summary>
-internal sealed class RecoveryJournalFeature
+internal sealed partial class RecoveryJournalFeature
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
     private readonly TrackingProjectRepository _repository;
@@ -366,7 +366,9 @@ internal sealed class RecoveryJournalFeature
         if (!File.Exists(path)) return null;
         try
         {
-            return JsonSerializer.Deserialize<RecoverySession>(await File.ReadAllTextAsync(path), JsonOptions);
+            return JsonSerializer.Deserialize(
+                await File.ReadAllTextAsync(path),
+                RecoveryJournalJsonContext.Default.RecoverySession);
         }
         catch
         {
@@ -377,7 +379,9 @@ internal sealed class RecoveryJournalFeature
     private static Task SaveSessionAsync(string projectRoot, RecoverySession session)
     {
         Directory.CreateDirectory(RecoveryRoot(projectRoot));
-        return AtomicWriteTextAsync(SessionPath(projectRoot), JsonSerializer.Serialize(session, JsonOptions));
+        return AtomicWriteTextAsync(
+            SessionPath(projectRoot),
+            JsonSerializer.Serialize(session, RecoveryJournalJsonContext.Default.RecoverySession));
     }
 
     private static async Task AtomicWriteTextAsync(string path, string content)
@@ -446,5 +450,11 @@ internal sealed class RecoveryJournalFeature
         public string Title { get; set; } = string.Empty;
         public string RelativePath { get; set; } = string.Empty;
         public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    [JsonSourceGenerationOptions(WriteIndented = true)]
+    [JsonSerializable(typeof(RecoverySession))]
+    private sealed partial class RecoveryJournalJsonContext : JsonSerializerContext
+    {
     }
 }
