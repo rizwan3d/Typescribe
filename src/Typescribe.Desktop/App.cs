@@ -69,6 +69,7 @@ public sealed class App : AvaloniaApplication
             // Native hierarchical Project Explorer. It replaces the legacy flat Binder visual.
             ProjectExplorerFeature.Apply(window, viewModel, repository, parser);
             ProjectExplorerChromePolish.Apply(window, viewModel);
+            ProjectItemDeletionFeature.Apply(window, viewModel);
             PdfAutoFitEnhancement.Apply(window);
 
             ManuscriptEditorUpgrade.Apply(window, viewModel);
