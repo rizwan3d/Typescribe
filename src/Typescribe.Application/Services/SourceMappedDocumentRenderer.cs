@@ -44,7 +44,7 @@ public sealed class SourceMappedDocumentRenderer : IDocumentRenderer
                 MarkerPrefix + insertion.SourceLine.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine);
         }
 
-        return latex;
+        return RichPdfPostProcessor.Apply(latex, document);
     }
 
     private string RenderBlockNeedle(AstBlock block, BookStyle style)
