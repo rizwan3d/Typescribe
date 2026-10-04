@@ -16,6 +16,7 @@ internal sealed class EpubPublishingFeature
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
     private readonly TrackingProjectRepository _repository;
+    private readonly IDocumentParser _parser;
     private readonly Epub3ExportService _exporter;
     private bool _installed;
     private bool _disposed;
@@ -29,6 +30,7 @@ internal sealed class EpubPublishingFeature
         _window = window;
         _viewModel = viewModel;
         _repository = repository;
+        _parser = parser;
         _exporter = new Epub3ExportService(parser);
     }
 
@@ -103,6 +105,10 @@ internal sealed class EpubPublishingFeature
                 documents.Add(new EpubDocumentSource(node, content));
 
             await _exporter.ExportAsync(project, documents, destination);
+            await MergedTableExportPostProcessor.ApplyEpubAsync(
+                destination,
+                documents.Select(static document => document.Content),
+                _parser);
             await ShowMessageAsync("EPUB export complete", $"EPUB 3 book written to:\n{destination}\n\nCover convention: place cover.png, cover.jpg, cover.jpeg, cover.gif, cover.svg, or cover.webp in the project assets folder.");
         }
         catch (Exception ex)
