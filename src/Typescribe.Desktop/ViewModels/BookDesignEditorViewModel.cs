@@ -10,6 +10,8 @@ namespace Typescribe.Desktop.ViewModels;
 /// </summary>
 public sealed class BookDesignEditorViewModel
 {
+    private BookStyle _sourceStyle = BookStyle.Default;
+
     public string Name { get; set; } = string.Empty;
     public string DocumentClass { get; set; } = string.Empty;
     public string DocumentClassOptions { get; set; } = string.Empty;
@@ -82,6 +84,7 @@ public sealed class BookDesignEditorViewModel
         ArgumentNullException.ThrowIfNull(style);
         return new BookDesignEditorViewModel
         {
+            _sourceStyle = style,
             Name = style.Name,
             DocumentClass = style.DocumentClass,
             DocumentClassOptions = style.DocumentClassOptions,
@@ -151,7 +154,7 @@ public sealed class BookDesignEditorViewModel
     }
 
     public BookStyle ToStyle()
-        => (new BookStyle
+        => (_sourceStyle with
         {
             Name = Required(Name, "Style name"),
             DocumentClass = Required(DocumentClass, "Document class"),
