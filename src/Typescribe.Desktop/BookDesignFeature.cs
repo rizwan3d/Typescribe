@@ -7,7 +7,7 @@ using Typescribe.Desktop.ViewModels;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Owns the project-level Book Design command and the complete live-PDF workspace.
+/// Owns the project-level Book Design commands and the complete live-PDF workspace.
 /// It supersedes the older partial style dialogs while leaving equation and code-block tools
 /// in AdvancedTypesettingFeatures unchanged.
 /// </summary>
@@ -62,7 +62,9 @@ internal sealed class BookDesignFeature
             ? projectSource.Cast<object?>().Where(static item => item is not null).Cast<object>().ToList()
             : [];
 
-        if (items.OfType<MenuItem>().Any(static item => item.Classes.Contains("book-design-v2")))
+        var hasDesign = items.OfType<MenuItem>().Any(static item => item.Classes.Contains("book-design-v2"));
+        var hasStructure = items.OfType<MenuItem>().Any(static item => item.Classes.Contains("book-structure-v1"));
+        if (hasDesign && hasStructure)
         {
             _installed = true;
             _window.LayoutUpdated -= OnLayoutUpdated;
@@ -73,19 +75,37 @@ internal sealed class BookDesignFeature
                      HeaderEquals(item, "Book Style…") || HeaderEquals(item, "Book Design & LaTeX…")))
             old.IsVisible = false;
 
-        var command = new MenuItem { Header = "Book _Design && LaTeX…" };
-        command.Classes.Add("book-design-v2");
-        command.Click += async (_, _) =>
+        if (!hasDesign)
         {
-            if (!_viewModel.HasProject) return;
-            var dialog = new BookDesignDialog(_viewModel);
-            BookDesignInputWiring.Apply(dialog);
-            await dialog.ShowDialog<bool?>(_window);
-        };
+            var designCommand = new MenuItem { Header = "Book _Design && LaTeX…" };
+            designCommand.Classes.Add("book-design-v2");
+            designCommand.Click += async (_, _) =>
+            {
+                if (!_viewModel.HasProject) return;
+                var dialog = new BookDesignDialog(_viewModel);
+                BookDesignInputWiring.Apply(dialog);
+                await dialog.ShowDialog<bool?>(_window);
+            };
+            items.Insert(0, designCommand);
+        }
 
-        items.Insert(0, command);
-        if (items.Count > 1 && items[1] is not Separator)
-            items.Insert(1, new Separator());
+        if (!hasStructure)
+        {
+            var structureCommand = new MenuItem { Header = "Book _Structure…" };
+            structureCommand.Classes.Add("book-structure-v1");
+            structureCommand.Click += async (_, _) =>
+            {
+                if (!_viewModel.HasProject) return;
+                var dialog = new BookStructureDialog(_viewModel);
+                await dialog.ShowDialog<bool?>(_window);
+            };
+            var designIndex = items.FindIndex(item => item is MenuItem menuItem && menuItem.Classes.Contains("book-design-v2"));
+            items.Insert(designIndex >= 0 ? designIndex + 1 : 0, structureCommand);
+        }
+
+        var structureIndex = items.FindIndex(item => item is MenuItem menuItem && menuItem.Classes.Contains("book-structure-v1"));
+        if (structureIndex >= 0 && structureIndex + 1 < items.Count && items[structureIndex + 1] is not Separator)
+            items.Insert(structureIndex + 1, new Separator());
         project.ItemsSource = items.ToArray();
 
         _installed = true;
