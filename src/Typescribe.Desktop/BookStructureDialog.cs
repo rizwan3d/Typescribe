@@ -24,7 +24,6 @@ internal sealed class BookStructureDialog : Window
 
     private readonly WorkspaceViewModel _viewModel;
 
-    // Identity / publishing metadata.
     private readonly TextBox _bookName = SingleLine("Workspace/project name");
     private readonly TextBox _publishedTitle = SingleLine("Printed title; leave blank to use Book Name");
     private readonly TextBox _subtitle = SingleLine("Optional subtitle");
@@ -35,60 +34,57 @@ internal sealed class BookStructureDialog : Window
     private readonly TextBox _publisher = SingleLine("Publisher / imprint");
     private readonly TextBox _isbn = SingleLine("ISBN or other edition identifier");
 
-    // Front matter.
-    private readonly CheckBox _frontCover = new() { Content = "Front Cover" };
-    private readonly TextBox _frontCoverText = MultiLine("Optional front-cover text; leave blank to use Published Title.");
-    private readonly CheckBox _spine = new() { Content = "Spine" };
-    private readonly TextBox _spineText = MultiLine("Optional spine text; leave blank to use Published Title.");
+    private readonly CheckBox _frontCover = Toggle("Front Cover");
+    private readonly TextBox _frontCoverText = MultiLine("Optional front-cover text; blank uses Published Title.");
+    private readonly CheckBox _spine = Toggle("Spine");
+    private readonly TextBox _spineText = MultiLine("Optional spine text; blank uses Published Title.");
     private readonly TextBox _frontBlankPages = NumberBox();
-    private readonly CheckBox _titlePage = new() { Content = "Title Page" };
-    private readonly CheckBox _copyrightPage = new() { Content = "Copyright Page" };
+    private readonly CheckBox _titlePage = Toggle("Title Page");
+    private readonly CheckBox _copyrightPage = Toggle("Copyright Page");
     private readonly TextBox _copyrightText = MultiLine("Copyright notice, edition, ISBN, publisher, rights statement…");
-    private readonly CheckBox _dedication = new() { Content = "Dedication" };
+    private readonly CheckBox _dedication = Toggle("Dedication");
     private readonly TextBox _dedicationText = MultiLine("Dedication text");
-    private readonly CheckBox _toc = new() { Content = "Table of Contents" };
-    private readonly CheckBox _preface = new() { Content = "Preface" };
-    private readonly TextBox _prefaceText = MultiLine("Preface text");
-    private readonly CheckBox _foreword = new() { Content = "Foreword" };
+    private readonly CheckBox _toc = Toggle("Table of Contents");
+    private readonly CheckBox _foreword = Toggle("Foreword");
     private readonly TextBox _forewordText = MultiLine("Foreword text");
-    private readonly CheckBox _introduction = new() { Content = "Introduction" };
+    private readonly CheckBox _preface = Toggle("Preface");
+    private readonly TextBox _prefaceText = MultiLine("Preface text");
+    private readonly CheckBox _introduction = Toggle("Introduction");
     private readonly TextBox _introductionText = MultiLine("Introduction text");
 
-    // Running elements and pagination.
-    private readonly CheckBox _pageNumbers = new() { Content = "Page Numbers" };
-    private readonly CheckBox _headersFooters = new() { Content = "Headers / Footers" };
-    private readonly CheckBox _romanFrontMatter = new() { Content = "Use Roman numerals for front matter (i, ii, iii…)" };
-    private readonly CheckBox _resetBodyPageNumbers = new() { Content = "Restart body page numbering at 1" };
-    private readonly CheckBox _generatedMatterInToc = new() { Content = "List generated sections in the Table of Contents" };
-    private readonly CheckBox _generatedMatterOpenRight = new() { Content = "Start generated sections on a right-hand page" };
+    private readonly CheckBox _pageNumbers = Toggle("Page Numbers");
+    private readonly CheckBox _headersFooters = Toggle("Headers / Footers");
+    private readonly CheckBox _romanFrontMatter = Toggle("Use Roman numerals for front matter (i, ii, iii…)");
+    private readonly CheckBox _resetBodyPageNumbers = Toggle("Restart body page numbering at 1");
+    private readonly CheckBox _generatedMatterInToc = Toggle("List generated sections in the Table of Contents");
+    private readonly CheckBox _generatedMatterOpenRight = Toggle("Start generated sections on a right-hand page");
 
-    // Back matter.
-    private readonly CheckBox _conclusion = new() { Content = "Conclusion" };
+    private readonly CheckBox _conclusion = Toggle("Conclusion");
     private readonly TextBox _conclusionText = MultiLine("Conclusion text");
-    private readonly CheckBox _epilogue = new() { Content = "Epilogue" };
+    private readonly CheckBox _epilogue = Toggle("Epilogue");
     private readonly TextBox _epilogueText = MultiLine("Epilogue text");
-    private readonly CheckBox _acknowledgments = new() { Content = "Acknowledgments" };
+    private readonly CheckBox _acknowledgments = Toggle("Acknowledgments");
     private readonly TextBox _acknowledgmentsText = MultiLine("Acknowledgments text");
-    private readonly CheckBox _appendix = new() { Content = "Appendix" };
+    private readonly CheckBox _appendix = Toggle("Appendix");
     private readonly TextBox _appendixText = MultiLine("Appendix text");
-    private readonly CheckBox _glossary = new() { Content = "Glossary" };
+    private readonly CheckBox _glossary = Toggle("Glossary");
     private readonly TextBox _glossaryText = MultiLine("Glossary text");
-    private readonly CheckBox _references = new() { Content = "References / Bibliography" };
-    private readonly CheckBox _index = new() { Content = "Index" };
+    private readonly CheckBox _references = Toggle("References / Bibliography");
+    private readonly CheckBox _index = Toggle("Index");
     private readonly TextBox _indexText = MultiLine("Manual index text");
-    private readonly CheckBox _aboutAuthor = new() { Content = "About the Author" };
+    private readonly CheckBox _aboutAuthor = Toggle("About the Author");
     private readonly TextBox _aboutAuthorText = MultiLine("About-the-author text");
     private readonly TextBox _endBlankPages = NumberBox();
-    private readonly CheckBox _backCover = new() { Content = "Back Cover" };
-    private readonly TextBox _backCoverText = MultiLine("Optional back-cover text; leave blank to use Published Title.");
+    private readonly CheckBox _backCover = Toggle("Back Cover");
+    private readonly TextBox _backCoverText = MultiLine("Optional back-cover text; blank uses Published Title.");
 
-    // Flexible order and labels.
     private readonly ListBox _frontOrderList = new() { MinHeight = 250 };
     private readonly ListBox _backOrderList = new() { MinHeight = 250 };
     private readonly List<string> _frontOrder = [];
     private readonly List<string> _backOrder = [];
-    private readonly TextBox _prefaceHeading = SingleLine("Preface");
+
     private readonly TextBox _forewordHeading = SingleLine("Foreword");
+    private readonly TextBox _prefaceHeading = SingleLine("Preface");
     private readonly TextBox _introductionHeading = SingleLine("Introduction");
     private readonly TextBox _conclusionHeading = SingleLine("Conclusion");
     private readonly TextBox _epilogueHeading = SingleLine("Epilogue");
@@ -99,7 +95,11 @@ internal sealed class BookStructureDialog : Window
     private readonly TextBox _indexHeading = SingleLine("Index");
     private readonly TextBox _aboutAuthorHeading = SingleLine("About the Author");
 
-    private readonly TextBlock _error = new() { Foreground = Brushes.IndianRed, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _error = new()
+    {
+        Foreground = Brushes.IndianRed,
+        TextWrapping = TextWrapping.Wrap
+    };
 
     public BookStructureDialog(WorkspaceViewModel viewModel)
     {
@@ -125,10 +125,10 @@ internal sealed class BookStructureDialog : Window
                 new TabItem { Header = "Front Matter", Content = BuildFrontMatter() },
                 new TabItem { Header = "Page Elements", Content = BuildPageElements() },
                 new TabItem { Header = "Back Matter", Content = BuildBackMatter() },
-                new TabItem { Header = "Order & Labels", Content = BuildAdvancedStructure() }
-            }
+                new TabItem { Header = "Order & Labels", Content = BuildOrderAndLabels() }
+            },
+            SelectedIndex = 0
         };
-        tabs.SelectedIndex = 0;
 
         var save = new Button { Content = "Save & Close", MinWidth = 110 };
         var cancel = new Button { Content = "Cancel", MinWidth = 90, Margin = new Thickness(8, 0, 0, 0) };
@@ -138,30 +138,26 @@ internal sealed class BookStructureDialog : Window
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { save, cancel }
+            HorizontalAlignment = HorizontalAlignment.Right
         };
+        buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
+
+        var heading = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 12) };
+        heading.Children.Add(new TextBlock { Text = "Book Structure", FontSize = 22, FontWeight = FontWeight.SemiBold });
+        heading.Children.Add(new TextBlock
+        {
+            Text = "Use a separate workspace Book Name and reader-facing Published Title, choose optional matter, reorder it, customize labels, and control publishing pagination. Cover and spine remain proof pages; printer-specific wrap-cover geometry is a production step.",
+            Opacity = 0.72,
+            TextWrapping = TextWrapping.Wrap
+        });
 
         var root = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"),
             Margin = new Thickness(18)
         };
-        root.Children.Add(new StackPanel
-        {
-            Spacing = 4,
-            Margin = new Thickness(0, 0, 0, 12),
-            Children =
-            {
-                new TextBlock { Text = "Book Structure", FontSize = 22, FontWeight = FontWeight.SemiBold },
-                new TextBlock
-                {
-                    Text = "Separate the workspace name from the reader-facing title, choose optional matter, reorder it freely, customize labels, and control publishing pagination. Cover and spine choices remain proof pages; printer-specific wrap-cover geometry is a production step.",
-                    Opacity = 0.72,
-                    TextWrapping = TextWrapping.Wrap
-                }
-            }
-        });
+        root.Children.Add(heading);
         Grid.SetRow(tabs, 1);
         root.Children.Add(tabs);
         Grid.SetRow(_error, 2);
@@ -175,16 +171,10 @@ internal sealed class BookStructureDialog : Window
 
     private Control BuildIdentity()
     {
-        var panel = new StackPanel { Margin = new Thickness(12), Spacing = 12 };
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Best practice: use Book Name for the project/workspace identity and Published Title for the exact title readers see. They may be different.",
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.76,
-            Margin = new Thickness(0, 0, 0, 6)
-        });
-        panel.Children.Add(Field("Book Name", _bookName, "Renames the project in typescribe.yaml and the workspace. It does not rename the project folder."));
-        panel.Children.Add(Field("Published Title", _publishedTitle, "Leave blank to use Book Name. Used by the title page, cover fallback and PDF metadata."));
+        var panel = SectionPanel();
+        panel.Children.Add(Help("Best practice: use Book Name for the project/workspace identity and Published Title for the exact title readers see. They may be different."));
+        panel.Children.Add(Field("Book Name", _bookName, "Updates typescribe.yaml and the workspace. It does not rename the project folder."));
+        panel.Children.Add(Field("Published Title", _publishedTitle, "Blank uses Book Name. Used on the title page, cover fallback, and PDF metadata."));
         panel.Children.Add(Field("Subtitle", _subtitle));
         panel.Children.Add(Field("Display Author", _displayAuthor));
         panel.Children.Add(Field("Series", _seriesTitle));
@@ -197,14 +187,14 @@ internal sealed class BookStructureDialog : Window
 
     private Control BuildFrontMatter()
     {
-        var panel = new StackPanel { Margin = new Thickness(12), Spacing = 12 };
+        var panel = SectionPanel();
         panel.Children.Add(Option(_frontCover, _frontCoverText));
         panel.Children.Add(Option(_spine, _spineText));
         panel.Children.Add(NumberRow("Blank Pages before title/front matter", _frontBlankPages));
-        panel.Children.Add(SimpleOption(_titlePage));
+        panel.Children.Add(_titlePage);
         panel.Children.Add(Option(_copyrightPage, _copyrightText));
         panel.Children.Add(Option(_dedication, _dedicationText));
-        panel.Children.Add(SimpleOption(_toc));
+        panel.Children.Add(_toc);
         panel.Children.Add(Option(_foreword, _forewordText));
         panel.Children.Add(Option(_preface, _prefaceText));
         panel.Children.Add(Option(_introduction, _introductionText));
@@ -213,48 +203,42 @@ internal sealed class BookStructureDialog : Window
 
     private Control BuildPageElements()
     {
-        var panel = new StackPanel { Margin = new Thickness(12), Spacing = 12 };
-        panel.Children.Add(new TextBlock { Text = "Running elements", FontWeight = FontWeight.SemiBold, FontSize = 16 });
-        panel.Children.Add(SimpleOption(_pageNumbers));
-        panel.Children.Add(SimpleOption(_headersFooters));
-        panel.Children.Add(new TextBlock
+        var panel = SectionPanel();
+        panel.Children.Add(Subheading("Running elements"));
+        panel.Children.Add(_pageNumbers);
+        panel.Children.Add(_headersFooters);
+        panel.Children.Add(Help("Header/footer text, alignment, and typography remain editable under Project → Book Design & LaTeX → Headers & Footer."));
+        panel.Children.Add(Subheading("Publishing pagination"));
+        panel.Children.Add(_romanFrontMatter);
+        panel.Children.Add(_resetBodyPageNumbers);
+        panel.Children.Add(_generatedMatterInToc);
+        panel.Children.Add(_generatedMatterOpenRight);
+
+        var recommended = new Button { Content = "Use recommended publishing defaults", MinWidth = 220 };
+        recommended.Click += (_, _) =>
         {
-            Text = "Header/footer text, alignment and typography remain editable under Project → Book Design & LaTeX → Headers & Footer.",
-            Opacity = 0.72,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(4, 2, 4, 8)
-        });
-        panel.Children.Add(new TextBlock { Text = "Publishing pagination", FontWeight = FontWeight.SemiBold, FontSize = 16 });
-        panel.Children.Add(SimpleOption(_romanFrontMatter));
-        panel.Children.Add(SimpleOption(_resetBodyPageNumbers));
-        panel.Children.Add(SimpleOption(_generatedMatterInToc));
-        panel.Children.Add(SimpleOption(_generatedMatterOpenRight));
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Recommended for print books: Roman-numbered front matter, body restarted at page 1, generated sections listed in the TOC, and major sections opened on right-hand pages.",
-            Opacity = 0.72,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(4, 4, 4, 0)
-        });
+            _romanFrontMatter.IsChecked = true;
+            _resetBodyPageNumbers.IsChecked = true;
+            _generatedMatterInToc.IsChecked = true;
+            _generatedMatterOpenRight.IsChecked = true;
+            ResetOrder(_frontOrderList, _frontOrder, RecommendedFrontOrder);
+            ResetOrder(_backOrderList, _backOrder, RecommendedBackOrder);
+        };
+        panel.Children.Add(recommended);
+        panel.Children.Add(Help("Recommended print defaults: Roman-numbered front matter, body restarted at page 1, generated sections listed in the TOC, and major sections opened on right-hand pages."));
         return Scroll(panel);
     }
 
     private Control BuildBackMatter()
     {
-        var panel = new StackPanel { Margin = new Thickness(12), Spacing = 12 };
+        var panel = SectionPanel();
         panel.Children.Add(Option(_conclusion, _conclusionText));
         panel.Children.Add(Option(_epilogue, _epilogueText));
         panel.Children.Add(Option(_acknowledgments, _acknowledgmentsText));
         panel.Children.Add(Option(_appendix, _appendixText));
         panel.Children.Add(Option(_glossary, _glossaryText));
-        panel.Children.Add(SimpleOption(_references));
-        panel.Children.Add(new TextBlock
-        {
-            Text = "References / Bibliography uses the project's structured citation entries. Its position is configurable under Order & Labels.",
-            Opacity = 0.72,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(24, -6, 4, 0)
-        });
+        panel.Children.Add(_references);
+        panel.Children.Add(Help("References / Bibliography uses the project's structured citations. Its position is configurable under Order & Labels."));
         panel.Children.Add(Option(_index, _indexText));
         panel.Children.Add(Option(_aboutAuthor, _aboutAuthorText));
         panel.Children.Add(NumberRow("End Pages / Blank Pages", _endBlankPages));
@@ -262,42 +246,31 @@ internal sealed class BookStructureDialog : Window
         return Scroll(panel);
     }
 
-    private Control BuildAdvancedStructure()
+    private Control BuildOrderAndLabels()
     {
-        var root = new StackPanel { Margin = new Thickness(12), Spacing = 16 };
-        root.Children.Add(new TextBlock
-        {
-            Text = "Enabled items can be placed in any order. Up/Down changes only position; the Front/Back Matter checkboxes still decide whether an item is included. Reset restores a conventional publishing order.",
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.76
-        });
+        var panel = SectionPanel();
+        panel.Children.Add(Help("Enabled items can be placed in any order. Up/Down changes position only; the Front/Back Matter checkboxes still decide whether an item is included. Recommended restores a conventional publishing order."));
 
         var orders = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 18 };
         orders.Children.Add(OrderEditor("Front matter order", _frontOrderList, _frontOrder, RecommendedFrontOrder));
         var back = OrderEditor("Back matter order", _backOrderList, _backOrder, RecommendedBackOrder);
         Grid.SetColumn(back, 1);
         orders.Children.Add(back);
-        root.Children.Add(orders);
+        panel.Children.Add(orders);
 
-        root.Children.Add(new TextBlock
-        {
-            Text = "Custom section labels",
-            FontWeight = FontWeight.SemiBold,
-            FontSize = 16,
-            Margin = new Thickness(0, 8, 0, 0)
-        });
-        root.Children.Add(Field("Foreword", _forewordHeading));
-        root.Children.Add(Field("Preface", _prefaceHeading));
-        root.Children.Add(Field("Introduction", _introductionHeading));
-        root.Children.Add(Field("Conclusion", _conclusionHeading));
-        root.Children.Add(Field("Epilogue", _epilogueHeading));
-        root.Children.Add(Field("Acknowledgments", _acknowledgmentsHeading));
-        root.Children.Add(Field("Appendix", _appendixHeading));
-        root.Children.Add(Field("Glossary", _glossaryHeading));
-        root.Children.Add(Field("References / Bibliography", _referencesHeading));
-        root.Children.Add(Field("Index", _indexHeading));
-        root.Children.Add(Field("About the Author", _aboutAuthorHeading));
-        return Scroll(root);
+        panel.Children.Add(Subheading("Custom section labels"));
+        panel.Children.Add(Field("Foreword", _forewordHeading));
+        panel.Children.Add(Field("Preface", _prefaceHeading));
+        panel.Children.Add(Field("Introduction", _introductionHeading));
+        panel.Children.Add(Field("Conclusion", _conclusionHeading));
+        panel.Children.Add(Field("Epilogue", _epilogueHeading));
+        panel.Children.Add(Field("Acknowledgments", _acknowledgmentsHeading));
+        panel.Children.Add(Field("Appendix", _appendixHeading));
+        panel.Children.Add(Field("Glossary", _glossaryHeading));
+        panel.Children.Add(Field("References / Bibliography", _referencesHeading));
+        panel.Children.Add(Field("Index", _indexHeading));
+        panel.Children.Add(Field("About the Author", _aboutAuthorHeading));
+        return Scroll(panel);
     }
 
     private Control OrderEditor(string title, ListBox list, List<string> order, IReadOnlyList<string> recommended)
@@ -307,93 +280,19 @@ internal sealed class BookStructureDialog : Window
         var reset = new Button { Content = "Recommended", MinWidth = 110, Margin = new Thickness(6, 0, 0, 0) };
         up.Click += (_, _) => MoveOrder(list, order, -1);
         down.Click += (_, _) => MoveOrder(list, order, 1);
-        reset.Click += (_, _) =>
-        {
-            order.Clear();
-            order.AddRange(recommended);
-            RefreshOrderList(list, order, 0);
-        };
+        reset.Click += (_, _) => ResetOrder(list, order, recommended);
 
-        return new StackPanel
-        {
-            Spacing = 7,
-            Children =
-            {
-                new TextBlock { Text = title, FontWeight = FontWeight.SemiBold },
-                list,
-                new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Children = { up, down, reset }
-                }
-            }
-        };
-    }
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        buttons.Children.Add(up);
+        buttons.Children.Add(down);
+        buttons.Children.Add(reset);
 
-    private static Control Option(CheckBox toggle, TextBox text)
-    {
-        var panel = new StackPanel { Spacing = 6 };
-        panel.Children.Add(toggle);
-        text.Margin = new Thickness(24, 0, 0, 0);
-        panel.Children.Add(text);
+        var panel = new StackPanel { Spacing = 7 };
+        panel.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.SemiBold });
+        panel.Children.Add(list);
+        panel.Children.Add(buttons);
         return panel;
     }
-
-    private static Control SimpleOption(CheckBox toggle)
-    {
-        toggle.Margin = new Thickness(0, 2);
-        return toggle;
-    }
-
-    private static Control Field(string label, Control input, string? help = null)
-    {
-        var panel = new StackPanel { Spacing = 5 };
-        panel.Children.Add(new TextBlock { Text = label, FontWeight = FontWeight.SemiBold });
-        panel.Children.Add(input);
-        if (!string.IsNullOrWhiteSpace(help))
-        {
-            panel.Children.Add(new TextBlock
-            {
-                Text = help,
-                Opacity = 0.68,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(2, -1, 2, 0)
-            });
-        }
-        return panel;
-    }
-
-    private static Control NumberRow(string label, TextBox box)
-    {
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("300,100,*") };
-        row.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-        Grid.SetColumn(box, 1);
-        row.Children.Add(box);
-        return row;
-    }
-
-    private static TextBox SingleLine(string watermark)
-        => new() { Watermark = watermark, HorizontalAlignment = HorizontalAlignment.Stretch };
-
-    private static TextBox MultiLine(string watermark)
-        => new()
-        {
-            Watermark = watermark,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            MinHeight = 62
-        };
-
-    private static TextBox NumberBox()
-        => new() { Text = "0", HorizontalAlignment = HorizontalAlignment.Stretch };
-
-    private static ScrollViewer Scroll(Control content)
-        => new()
-        {
-            Content = content,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
-        };
 
     private void Load(BookStyle style)
     {
@@ -411,17 +310,17 @@ internal sealed class BookStructureDialog : Window
         _frontCoverText.Text = style.FrontCoverText;
         _spine.IsChecked = style.IncludeSpine;
         _spineText.Text = style.SpineText;
-        _frontBlankPages.Text = style.FrontBlankPages.ToString();
+        _frontBlankPages.Text = style.FrontBlankPages.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _titlePage.IsChecked = style.IncludeTitlePage;
         _copyrightPage.IsChecked = style.IncludeCopyrightPage;
         _copyrightText.Text = style.CopyrightText;
         _dedication.IsChecked = style.IncludeDedication;
         _dedicationText.Text = style.DedicationText;
         _toc.IsChecked = style.IncludeTableOfContents;
-        _preface.IsChecked = style.IncludePreface;
-        _prefaceText.Text = style.PrefaceText;
         _foreword.IsChecked = style.IncludeForeword;
         _forewordText.Text = style.ForewordText;
+        _preface.IsChecked = style.IncludePreface;
+        _prefaceText.Text = style.PrefaceText;
         _introduction.IsChecked = style.IncludeIntroduction;
         _introductionText.Text = style.IntroductionText;
 
@@ -447,7 +346,7 @@ internal sealed class BookStructureDialog : Window
         _indexText.Text = style.IndexText;
         _aboutAuthor.IsChecked = style.IncludeAboutAuthor;
         _aboutAuthorText.Text = style.AboutAuthorText;
-        _endBlankPages.Text = style.EndBlankPages.ToString();
+        _endBlankPages.Text = style.EndBlankPages.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _backCover.IsChecked = style.IncludeBackCover;
         _backCoverText.Text = style.BackCoverText;
 
@@ -458,8 +357,8 @@ internal sealed class BookStructureDialog : Window
         RefreshOrderList(_frontOrderList, _frontOrder, 0);
         RefreshOrderList(_backOrderList, _backOrder, 0);
 
-        _prefaceHeading.Text = style.PrefaceHeading;
         _forewordHeading.Text = style.ForewordHeading;
+        _prefaceHeading.Text = style.PrefaceHeading;
         _introductionHeading.Text = style.IntroductionHeading;
         _conclusionHeading.Text = style.ConclusionHeading;
         _epilogueHeading.Text = style.EpilogueHeading;
@@ -477,15 +376,11 @@ internal sealed class BookStructureDialog : Window
         {
             _error.Text = string.Empty;
             var newBookName = Text(_bookName);
-            if (string.IsNullOrWhiteSpace(newBookName))
-                throw new InvalidOperationException("Book Name is required.");
-            if (newBookName.Length > 500)
-                throw new InvalidOperationException("Book Name must be 500 characters or fewer.");
+            if (newBookName.Length == 0) throw new InvalidOperationException("Book Name is required.");
+            if (newBookName.Length > 500) throw new InvalidOperationException("Book Name must be 500 characters or fewer.");
 
-            var frontBlanks = ParsePageCount(_frontBlankPages.Text, "Front blank pages");
-            var endBlanks = ParsePageCount(_endBlankPages.Text, "End blank pages");
             var current = _viewModel.CurrentStyle;
-            var updated = current with
+            var updated = (current with
             {
                 PublishedTitle = Text(_publishedTitle),
                 Subtitle = Text(_subtitle),
@@ -495,14 +390,15 @@ internal sealed class BookStructureDialog : Window
                 Edition = Text(_edition),
                 Publisher = Text(_publisher),
                 Isbn = Text(_isbn),
+
                 FrontMatterOrder = string.Join(',', _frontOrder),
                 BackMatterOrder = string.Join(',', _backOrder),
                 UseRomanFrontMatterPageNumbers = _romanFrontMatter.IsChecked == true,
                 ResetBodyPageNumbers = _resetBodyPageNumbers.IsChecked == true,
                 GeneratedMatterInTableOfContents = _generatedMatterInToc.IsChecked == true,
                 StartGeneratedMatterOnRight = _generatedMatterOpenRight.IsChecked == true,
-                PrefaceHeading = Heading(_prefaceHeading, "Preface"),
                 ForewordHeading = Heading(_forewordHeading, "Foreword"),
+                PrefaceHeading = Heading(_prefaceHeading, "Preface"),
                 IntroductionHeading = Heading(_introductionHeading, "Introduction"),
                 ConclusionHeading = Heading(_conclusionHeading, "Conclusion"),
                 EpilogueHeading = Heading(_epilogueHeading, "Epilogue"),
@@ -512,25 +408,28 @@ internal sealed class BookStructureDialog : Window
                 ReferencesHeading = Heading(_referencesHeading, "Bibliography"),
                 IndexHeading = Heading(_indexHeading, "Index"),
                 AboutAuthorHeading = Heading(_aboutAuthorHeading, "About the Author"),
+
                 IncludeFrontCover = _frontCover.IsChecked == true,
                 FrontCoverText = Text(_frontCoverText),
                 IncludeSpine = _spine.IsChecked == true,
                 SpineText = Text(_spineText),
-                FrontBlankPages = frontBlanks,
+                FrontBlankPages = ParsePageCount(_frontBlankPages.Text, "Front blank pages"),
                 IncludeTitlePage = _titlePage.IsChecked == true,
                 IncludeCopyrightPage = _copyrightPage.IsChecked == true,
                 CopyrightText = Text(_copyrightText),
                 IncludeDedication = _dedication.IsChecked == true,
                 DedicationText = Text(_dedicationText),
                 IncludeTableOfContents = _toc.IsChecked == true,
-                IncludePreface = _preface.IsChecked == true,
-                PrefaceText = Text(_prefaceText),
                 IncludeForeword = _foreword.IsChecked == true,
                 ForewordText = Text(_forewordText),
+                IncludePreface = _preface.IsChecked == true,
+                PrefaceText = Text(_prefaceText),
                 IncludeIntroduction = _introduction.IsChecked == true,
                 IntroductionText = Text(_introductionText),
+
                 ShowPageNumbers = _pageNumbers.IsChecked == true,
                 ShowHeadersAndFooters = _headersFooters.IsChecked == true,
+
                 IncludeConclusion = _conclusion.IsChecked == true,
                 ConclusionText = Text(_conclusionText),
                 IncludeEpilogue = _epilogue.IsChecked == true,
@@ -546,10 +445,10 @@ internal sealed class BookStructureDialog : Window
                 IndexText = Text(_indexText),
                 IncludeAboutAuthor = _aboutAuthor.IsChecked == true,
                 AboutAuthorText = Text(_aboutAuthorText),
-                EndBlankPages = endBlanks,
+                EndBlankPages = ParsePageCount(_endBlankPages.Text, "End blank pages"),
                 IncludeBackCover = _backCover.IsChecked == true,
                 BackCoverText = Text(_backCoverText)
-            }.Validate();
+            }).Validate();
 
             await RenameBookAsync(newBookName);
             await _viewModel.UpdateStyleAsync(updated);
@@ -563,18 +462,21 @@ internal sealed class BookStructureDialog : Window
 
     private async Task RenameBookAsync(string newName)
     {
-        var project = TrackingProjectRepository.ActiveInstance?.CurrentProject
-            ?? throw new InvalidOperationException("The active project is not available.");
-        if (string.Equals(project.Title, newName, StringComparison.Ordinal)) return;
+        var activeProject = TrackingProjectRepository.ActiveInstance?.CurrentProject;
+        if (activeProject is null)
+        {
+            if (string.Equals(_viewModel.ProjectTitle, newName, StringComparison.Ordinal)) return;
+            throw new InvalidOperationException("The active project is not available for renaming.");
+        }
+        if (string.Equals(activeProject.Title, newName, StringComparison.Ordinal)) return;
 
-        var manifestPath = Path.Combine(project.RootPath, "typescribe.yaml");
+        var manifestPath = Path.Combine(activeProject.RootPath, "typescribe.yaml");
         if (!File.Exists(manifestPath))
             throw new FileNotFoundException("The project manifest could not be found.", manifestPath);
 
         var lines = (await File.ReadAllLinesAsync(manifestPath)).ToList();
         var projectIndex = lines.FindIndex(static line => string.Equals(line.Trim(), "project:", StringComparison.OrdinalIgnoreCase));
-        if (projectIndex < 0)
-            throw new InvalidOperationException("The project manifest has no project section.");
+        if (projectIndex < 0) throw new InvalidOperationException("The project manifest has no project section.");
 
         var replaced = false;
         for (var index = projectIndex + 1; index < lines.Count; index++)
@@ -591,8 +493,7 @@ internal sealed class BookStructureDialog : Window
             break;
         }
 
-        if (!replaced)
-            lines.Insert(projectIndex + 1, "  title: " + QuoteYaml(newName));
+        if (!replaced) lines.Insert(projectIndex + 1, "  title: " + QuoteYaml(newName));
 
         var text = string.Join(Environment.NewLine, lines) + Environment.NewLine;
         var temporary = manifestPath + ".rename-" + Guid.NewGuid().ToString("N") + ".tmp";
@@ -606,9 +507,83 @@ internal sealed class BookStructureDialog : Window
             if (File.Exists(temporary)) File.Delete(temporary);
         }
 
-        project.Title = newName;
-        project.Root.Rename(newName);
+        activeProject.Title = newName;
+        activeProject.Root.Rename(newName);
     }
+
+    private static StackPanel SectionPanel() => new() { Margin = new Thickness(12), Spacing = 12 };
+
+    private static TextBlock Subheading(string text) => new()
+    {
+        Text = text,
+        FontWeight = FontWeight.SemiBold,
+        FontSize = 16,
+        Margin = new Thickness(0, 5, 0, 0)
+    };
+
+    private static TextBlock Help(string text) => new()
+    {
+        Text = text,
+        Opacity = 0.72,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(2, 0, 2, 2)
+    };
+
+    private static Control Option(CheckBox toggle, TextBox text)
+    {
+        var panel = new StackPanel { Spacing = 6 };
+        panel.Children.Add(toggle);
+        text.Margin = new Thickness(24, 0, 0, 0);
+        panel.Children.Add(text);
+        return panel;
+    }
+
+    private static Control Field(string label, Control input, string? help = null)
+    {
+        var panel = new StackPanel { Spacing = 5 };
+        panel.Children.Add(new TextBlock { Text = label, FontWeight = FontWeight.SemiBold });
+        panel.Children.Add(input);
+        if (!string.IsNullOrWhiteSpace(help)) panel.Children.Add(Help(help));
+        return panel;
+    }
+
+    private static Control NumberRow(string label, TextBox box)
+    {
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("300,100,*") };
+        row.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        Grid.SetColumn(box, 1);
+        row.Children.Add(box);
+        return row;
+    }
+
+    private static CheckBox Toggle(string text) => new() { Content = text, Margin = new Thickness(0, 2) };
+
+    private static TextBox SingleLine(string watermark) => new()
+    {
+        Watermark = watermark,
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
+
+    private static TextBox MultiLine(string watermark) => new()
+    {
+        Watermark = watermark,
+        AcceptsReturn = true,
+        TextWrapping = TextWrapping.Wrap,
+        MinHeight = 62
+    };
+
+    private static TextBox NumberBox() => new()
+    {
+        Text = "0",
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
+
+    private static ScrollViewer Scroll(Control content) => new()
+    {
+        Content = content,
+        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
+    };
 
     private static void MoveOrder(ListBox list, List<string> order, int offset)
     {
@@ -617,6 +592,13 @@ internal sealed class BookStructureDialog : Window
         if (index < 0 || target < 0 || target >= order.Count) return;
         (order[index], order[target]) = (order[target], order[index]);
         RefreshOrderList(list, order, target);
+    }
+
+    private static void ResetOrder(ListBox list, List<string> order, IReadOnlyList<string> recommended)
+    {
+        order.Clear();
+        order.AddRange(recommended);
+        RefreshOrderList(list, order, 0);
     }
 
     private static void RefreshOrderList(ListBox list, IReadOnlyList<string> order, int selectedIndex)
@@ -632,8 +614,7 @@ internal sealed class BookStructureDialog : Window
         foreach (var raw in (configured ?? string.Empty).Split([',', ';', '|', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var token = raw.Trim().ToLowerInvariant().Replace('_', '-').Replace(' ', '-');
-            if (known.Contains(token, StringComparer.OrdinalIgnoreCase) && seen.Add(token))
-                output.Add(token);
+            if (known.Contains(token, StringComparer.OrdinalIgnoreCase) && seen.Add(token)) output.Add(token);
         }
         foreach (var token in known)
             if (seen.Add(token)) output.Add(token);
