@@ -28,6 +28,15 @@ internal sealed class BookStyleStore
         var style = d with
         {
             Name = Get(values, "name", d.Name),
+            PublishedTitle = GetDecoded(values, "published-title", d.PublishedTitle),
+            Subtitle = GetDecoded(values, "subtitle", d.Subtitle),
+            DisplayAuthor = GetDecoded(values, "display-author", d.DisplayAuthor),
+            SeriesTitle = GetDecoded(values, "series-title", d.SeriesTitle),
+            VolumeLabel = GetDecoded(values, "volume-label", d.VolumeLabel),
+            Edition = GetDecoded(values, "edition", d.Edition),
+            Publisher = GetDecoded(values, "publisher", d.Publisher),
+            Isbn = GetDecoded(values, "isbn", d.Isbn),
+
             DocumentClass = Get(values, "document-class", d.DocumentClass),
             DocumentClassOptions = Get(values, "document-class-options", d.DocumentClassOptions),
             PageWidthInches = GetDouble(values, "page-width-in", d.PageWidthInches),
@@ -40,6 +49,24 @@ internal sealed class BookStyleStore
             TableOfContentsDepth = GetInt(values, "toc-depth", d.TableOfContentsDepth),
             SectionNumberDepth = GetInt(values, "section-number-depth", d.SectionNumberDepth),
             OpenChaptersOnRight = GetBool(values, "open-chapters-right", d.OpenChaptersOnRight),
+
+            FrontMatterOrder = GetDecoded(values, "front-matter-order", d.FrontMatterOrder),
+            BackMatterOrder = GetDecoded(values, "back-matter-order", d.BackMatterOrder),
+            UseRomanFrontMatterPageNumbers = GetBool(values, "roman-front-matter-pages", d.UseRomanFrontMatterPageNumbers),
+            ResetBodyPageNumbers = GetBool(values, "reset-body-page-numbers", d.ResetBodyPageNumbers),
+            GeneratedMatterInTableOfContents = GetBool(values, "generated-matter-in-toc", d.GeneratedMatterInTableOfContents),
+            StartGeneratedMatterOnRight = GetBool(values, "generated-matter-open-right", d.StartGeneratedMatterOnRight),
+            PrefaceHeading = GetDecoded(values, "preface-heading", d.PrefaceHeading),
+            ForewordHeading = GetDecoded(values, "foreword-heading", d.ForewordHeading),
+            IntroductionHeading = GetDecoded(values, "introduction-heading", d.IntroductionHeading),
+            ConclusionHeading = GetDecoded(values, "conclusion-heading", d.ConclusionHeading),
+            EpilogueHeading = GetDecoded(values, "epilogue-heading", d.EpilogueHeading),
+            AcknowledgmentsHeading = GetDecoded(values, "acknowledgments-heading", d.AcknowledgmentsHeading),
+            AppendixHeading = GetDecoded(values, "appendix-heading", d.AppendixHeading),
+            GlossaryHeading = GetDecoded(values, "glossary-heading", d.GlossaryHeading),
+            ReferencesHeading = GetDecoded(values, "references-heading", d.ReferencesHeading),
+            IndexHeading = GetDecoded(values, "index-heading", d.IndexHeading),
+            AboutAuthorHeading = GetDecoded(values, "about-author-heading", d.AboutAuthorHeading),
 
             IncludeFrontCover = GetBool(values, "include-front-cover", d.IncludeFrontCover),
             FrontCoverText = GetDecoded(values, "front-cover-text", d.FrontCoverText),
@@ -138,8 +165,17 @@ internal sealed class BookStyleStore
     {
         style.Validate();
         var builder = new StringBuilder();
-        builder.AppendLine("# Typescribe advanced book style v3");
+        builder.AppendLine("# Typescribe advanced book style v4");
         Append(builder, "name", style.Name);
+        AppendEncoded(builder, "published-title", style.PublishedTitle);
+        AppendEncoded(builder, "subtitle", style.Subtitle);
+        AppendEncoded(builder, "display-author", style.DisplayAuthor);
+        AppendEncoded(builder, "series-title", style.SeriesTitle);
+        AppendEncoded(builder, "volume-label", style.VolumeLabel);
+        AppendEncoded(builder, "edition", style.Edition);
+        AppendEncoded(builder, "publisher", style.Publisher);
+        AppendEncoded(builder, "isbn", style.Isbn);
+
         Append(builder, "document-class", style.DocumentClass);
         Append(builder, "document-class-options", style.DocumentClassOptions);
         Append(builder, "page-width-in", style.PageWidthInches);
@@ -152,6 +188,24 @@ internal sealed class BookStyleStore
         Append(builder, "toc-depth", style.TableOfContentsDepth);
         Append(builder, "section-number-depth", style.SectionNumberDepth);
         Append(builder, "open-chapters-right", style.OpenChaptersOnRight);
+
+        AppendEncoded(builder, "front-matter-order", style.FrontMatterOrder);
+        AppendEncoded(builder, "back-matter-order", style.BackMatterOrder);
+        Append(builder, "roman-front-matter-pages", style.UseRomanFrontMatterPageNumbers);
+        Append(builder, "reset-body-page-numbers", style.ResetBodyPageNumbers);
+        Append(builder, "generated-matter-in-toc", style.GeneratedMatterInTableOfContents);
+        Append(builder, "generated-matter-open-right", style.StartGeneratedMatterOnRight);
+        AppendEncoded(builder, "preface-heading", style.PrefaceHeading);
+        AppendEncoded(builder, "foreword-heading", style.ForewordHeading);
+        AppendEncoded(builder, "introduction-heading", style.IntroductionHeading);
+        AppendEncoded(builder, "conclusion-heading", style.ConclusionHeading);
+        AppendEncoded(builder, "epilogue-heading", style.EpilogueHeading);
+        AppendEncoded(builder, "acknowledgments-heading", style.AcknowledgmentsHeading);
+        AppendEncoded(builder, "appendix-heading", style.AppendixHeading);
+        AppendEncoded(builder, "glossary-heading", style.GlossaryHeading);
+        AppendEncoded(builder, "references-heading", style.ReferencesHeading);
+        AppendEncoded(builder, "index-heading", style.IndexHeading);
+        AppendEncoded(builder, "about-author-heading", style.AboutAuthorHeading);
 
         Append(builder, "include-front-cover", style.IncludeFrontCover);
         AppendEncoded(builder, "front-cover-text", style.FrontCoverText);
