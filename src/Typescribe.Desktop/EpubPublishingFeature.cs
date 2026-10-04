@@ -123,15 +123,24 @@ internal sealed class EpubPublishingFeature
             var destination = file?.TryGetLocalPath();
             if (string.IsNullOrWhiteSpace(destination)) return;
 
-            var documents = new List<EpubDocumentSource>();
-            await foreach (var (node, content) in _repository.EnumerateDocumentsAsync(project))
-                documents.Add(new EpubDocumentSource(node, content));
+            await PublishingProgressDialog.RunAsync(_window, "Exporting EPUB 3", async progress =>
+            {
+                progress.Report(0.12, "Collecting manuscript documents…");
+                var documents = new List<EpubDocumentSource>();
+                await foreach (var (node, content) in _repository.EnumerateDocumentsAsync(project))
+                    documents.Add(new EpubDocumentSource(node, content));
 
-            await _exporter.ExportAsync(project, documents, destination);
-            await MergedTableExportPostProcessor.ApplyEpubAsync(
-                destination,
-                documents.Select(static document => document.Content),
-                _parser);
+                progress.Report(0.55, "Writing EPUB 3 package…");
+                await _exporter.ExportAsync(project, documents, destination);
+
+                progress.Report(0.86, "Finalizing merged tables…");
+                await MergedTableExportPostProcessor.ApplyEpubAsync(
+                    destination,
+                    documents.Select(static document => document.Content),
+                    _parser);
+                progress.Report(0.98, "Finishing EPUB 3 export…");
+            });
+
             await ShowMessageAsync("EPUB export complete", $"EPUB 3 book written to:\n{destination}\n\nCover convention: place cover.png, cover.jpg, cover.jpeg, cover.gif, cover.svg, or cover.webp in the project assets folder.");
         }
         catch (Exception ex)
@@ -157,15 +166,24 @@ internal sealed class EpubPublishingFeature
             var destination = file?.TryGetLocalPath();
             if (string.IsNullOrWhiteSpace(destination)) return;
 
-            var documents = new List<(ProjectNode Node, string Content)>();
-            await foreach (var item in _repository.EnumerateDocumentsAsync(project))
-                documents.Add(item);
+            await PublishingProgressDialog.RunAsync(_window, "Exporting DOCX", async progress =>
+            {
+                progress.Report(0.12, "Collecting manuscript documents…");
+                var documents = new List<(ProjectNode Node, string Content)>();
+                await foreach (var item in _repository.EnumerateDocumentsAsync(project))
+                    documents.Add(item);
 
-            await _docx.ExportAsync(project, documents, destination);
-            await MergedTableExportPostProcessor.ApplyDocxAsync(
-                destination,
-                documents.Select(static document => document.Content),
-                _parser);
+                progress.Report(0.58, "Writing Word document…");
+                await _docx.ExportAsync(project, documents, destination);
+
+                progress.Report(0.86, "Finalizing merged tables…");
+                await MergedTableExportPostProcessor.ApplyDocxAsync(
+                    destination,
+                    documents.Select(static document => document.Content),
+                    _parser);
+                progress.Report(0.98, "Finishing DOCX export…");
+            });
+
             await ShowMessageAsync("DOCX export complete", $"Word document written to:\n{destination}");
         }
         catch (Exception ex)
