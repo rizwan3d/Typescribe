@@ -8,6 +8,7 @@ using Typescribe.Desktop.Editing;
 using Typescribe.Desktop.ViewModels;
 using Typescribe.Domain.Models;
 using Typescribe.Infrastructure.Services;
+using ToolTip = Avalonia.Controls.ToolTip;
 
 namespace Typescribe.Desktop;
 
