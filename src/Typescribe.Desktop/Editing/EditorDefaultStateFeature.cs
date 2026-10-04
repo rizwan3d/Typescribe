@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -7,10 +8,12 @@ namespace Typescribe.Desktop.Editing;
 /// <summary>
 /// Applies one-time editor defaults after the professional editor toolbar is created.
 /// Analysis starts disabled, but the user can turn it on normally afterward.
+/// Also keeps editor scrollbars consistent with the Wrap preference.
 /// </summary>
 internal sealed class EditorDefaultStateFeature
 {
     private readonly StudioWorkspaceWindow _window;
+    private ToggleButton? _wrapToggle;
     private bool _applied;
     private bool _disposed;
 
@@ -46,13 +49,16 @@ internal sealed class EditorDefaultStateFeature
     {
         if (_disposed || _applied) return;
 
-        var analysisToggle = _window.GetVisualDescendants()
-            .OfType<ToggleButton>()
-            .FirstOrDefault(button => string.Equals(
-                button.Content?.ToString(),
-                "Analysis",
-                StringComparison.OrdinalIgnoreCase));
-        if (analysisToggle is null) return;
+        var toggles = _window.GetVisualDescendants().OfType<ToggleButton>().ToArray();
+        var analysisToggle = toggles.FirstOrDefault(button => string.Equals(
+            button.Content?.ToString(),
+            "Analysis",
+            StringComparison.OrdinalIgnoreCase));
+        var wrapToggle = toggles.FirstOrDefault(button => string.Equals(
+            button.Content?.ToString(),
+            "Wrap",
+            StringComparison.OrdinalIgnoreCase));
+        if (analysisToggle is null || wrapToggle is null) return;
 
         // Setting IsChecked invokes ProfessionalEditorSuite's existing change handler,
         // which disables its analysis pass and clears analysis diagnostics.
@@ -64,13 +70,35 @@ internal sealed class EditorDefaultStateFeature
             editor.SetSpellingDiagnostics([]);
         }
 
+        _wrapToggle = wrapToggle;
+        _wrapToggle.IsCheckedChanged += OnWrapToggleChanged;
+        ApplyEditorScrollBars(_wrapToggle.IsChecked == true);
+
         _applied = true;
         _window.LayoutUpdated -= OnLayoutUpdated;
+    }
+
+    private void OnWrapToggleChanged(object? sender, EventArgs e)
+        => ApplyEditorScrollBars(_wrapToggle?.IsChecked == true);
+
+    private void ApplyEditorScrollBars(bool wordWrap)
+    {
+        foreach (var editor in _window.GetVisualDescendants().OfType<ManuscriptEditor>())
+        {
+            // Long documents must always remain vertically scrollable. Horizontal scrolling
+            // is useful only when soft wrapping is disabled; otherwise it adds dead chrome.
+            editor.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            editor.HorizontalScrollBarVisibility = wordWrap
+                ? ScrollBarVisibility.Disabled
+                : ScrollBarVisibility.Auto;
+        }
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _disposed = true;
+        if (_wrapToggle is not null)
+            _wrapToggle.IsCheckedChanged -= OnWrapToggleChanged;
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
