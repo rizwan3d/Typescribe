@@ -114,6 +114,8 @@ internal sealed class StructuredPublishingFeature
         if (file is not null)
         {
             var items = MenuItems(file.ItemsSource);
+            ReplaceCommand(items, "Export LaTeX…", ExportLatexAsync);
+            ReplaceCommand(items, "Publish PDF…", PublishPdfAsync);
             items.Add(new Separator());
             items.Add(Command("Import DOCX…", ImportDocxAsync));
             items.Add(Command("Export DOCX…", ExportDocxAsync));
@@ -133,6 +135,7 @@ internal sealed class StructuredPublishingFeature
         if (publish is not null)
         {
             var items = MenuItems(publish.ItemsSource);
+            ReplaceCommand(items, "Export LaTeX…", ExportLatexAsync);
             foreach (var existing in items.OfType<MenuItem>().Where(item => Normalize(item.Header?.ToString()).Contains("Publish PDF", StringComparison.OrdinalIgnoreCase)))
                 existing.IsVisible = false;
             items.Insert(0, Command("Preflight & Publish PDF…", PreflightAndPublishAsync));
@@ -218,10 +221,21 @@ internal sealed class StructuredPublishingFeature
         var compilation = await BuildCompilationAsync(project);
         try
         {
-            if (!_publishingEngine.IsAvailable) await _publishingEngine.EnsureAvailableAsync();
-            var latex = _renderer.RenderLatex(_parser.Parse(compilation.Source), project.Title, project.Style);
-            latex = AddProjectGraphicPath(latex, project.RootPath);
-            await _publishingEngine.PublishAsync(latex, destination, passes: 2);
+            await PublishingProgressDialog.RunAsync(_window, "Publishing PDF", async progress =>
+            {
+                progress.Report(0.18, "Rendering manuscript to LaTeX…");
+                var latex = _renderer.RenderLatex(_parser.Parse(compilation.Source), project.Title, project.Style);
+                latex = AddProjectGraphicPath(latex, project.RootPath);
+
+                progress.Report(0.42, _publishingEngine.IsAvailable
+                    ? "Preparing PDF engine…"
+                    : "Preparing LuaLaTeX…");
+                if (!_publishingEngine.IsAvailable) await _publishingEngine.EnsureAvailableAsync();
+
+                progress.Report(0.68, "Running LuaLaTeX (2 passes)…");
+                await _publishingEngine.PublishAsync(latex, destination, passes: 2);
+                progress.Report(0.98, "Finalizing PDF…");
+            });
         }
         catch (PublishingDiagnosticException ex)
         {
@@ -230,6 +244,52 @@ internal sealed class StructuredPublishingFeature
             SelectProblemsTab();
             await ShowMessageAsync("PDF build failed", mapped.Message + (mapped.DocumentTitle is null ? string.Empty : $"\n\n{mapped.DocumentTitle}:{mapped.SourceLine}"));
         }
+    }
+
+    private async Task PublishPdfAsync()
+    {
+        var project = CurrentProject();
+        if (project is null) return;
+        await _viewModel.SaveNowAsync();
+        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Publish Book PDF",
+            SuggestedFileName = SanitizeFileName(project.Title) + ".pdf",
+            FileTypeChoices = [new FilePickerFileType("PDF document") { Patterns = ["*.pdf"] }]
+        });
+        var destination = file?.TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(destination)) return;
+
+        await PublishingProgressDialog.RunAsync(_window, "Publishing PDF", async progress =>
+        {
+            progress.Report(0.18, "Preparing manuscript…");
+            progress.Report(0.42, "Rendering and compiling PDF…");
+            await _viewModel.ExportPdfAsync(destination);
+            progress.Report(0.98, "Finalizing PDF…");
+        });
+    }
+
+    private async Task ExportLatexAsync()
+    {
+        var project = CurrentProject();
+        if (project is null) return;
+        await _viewModel.SaveNowAsync();
+        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export Book LaTeX source",
+            SuggestedFileName = SanitizeFileName(project.Title) + ".tex",
+            FileTypeChoices = [new FilePickerFileType("LaTeX source") { Patterns = ["*.tex"] }]
+        });
+        var destination = file?.TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(destination)) return;
+
+        await PublishingProgressDialog.RunAsync(_window, "Exporting LaTeX", async progress =>
+        {
+            progress.Report(0.18, "Preparing manuscript…");
+            progress.Report(0.52, "Rendering LaTeX source…");
+            await _viewModel.ExportLatexAsync(destination);
+            progress.Report(0.98, "Finalizing LaTeX export…");
+        });
     }
 
     private async Task ExportDocxAsync()
@@ -245,9 +305,17 @@ internal sealed class StructuredPublishingFeature
         });
         var destination = file?.TryGetLocalPath();
         if (string.IsNullOrWhiteSpace(destination)) return;
-        var documents = new List<(ProjectNode Node, string Content)>();
-        await foreach (var item in _repository.EnumerateDocumentsAsync(project)) documents.Add(item);
-        await _docx.ExportAsync(project, documents, destination);
+
+        await PublishingProgressDialog.RunAsync(_window, "Exporting DOCX", async progress =>
+        {
+            progress.Report(0.14, "Collecting manuscript documents…");
+            var documents = new List<(ProjectNode Node, string Content)>();
+            await foreach (var item in _repository.EnumerateDocumentsAsync(project)) documents.Add(item);
+
+            progress.Report(0.58, "Writing Word document…");
+            await _docx.ExportAsync(project, documents, destination);
+            progress.Report(0.98, "Finalizing DOCX export…");
+        });
     }
 
     private async Task ImportDocxAsync()
@@ -369,6 +437,12 @@ internal sealed class StructuredPublishingFeature
         var marker = "\\begin{document}";
         var index = latex.IndexOf(marker, StringComparison.Ordinal);
         return index < 0 ? command + latex : latex.Insert(index, command);
+    }
+
+    private static void ReplaceCommand(List<object> items, string header, Func<Task> action)
+    {
+        var index = items.FindIndex(item => item is MenuItem menuItem && HeaderEquals(menuItem, header));
+        if (index >= 0) items[index] = Command(header, action);
     }
 
     private static MenuItem Command(string header, Func<Task> action)
