@@ -31,7 +31,13 @@ public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
 
     public string RenderLatex(DocumentAst document, string title, BookStyle style)
     {
-        var latex = NormalizeUnicodeMathPreamble(_inner.RenderLatex(document, title, style));
+        var sourceMappingProbe = string.Equals(title, "Typescribe source map", StringComparison.Ordinal) ||
+                                 string.Equals(title, "Typescribe exact source map", StringComparison.Ordinal);
+        var coreStyle = style with { IncludeTableOfContents = false };
+        var latex = _inner.RenderLatex(document, title, coreStyle);
+        if (!sourceMappingProbe)
+            latex = BookMatterLatexPostProcessor.Apply(latex, title, style);
+        latex = NormalizeUnicodeMathPreamble(latex);
         return NormalizeRunningHeadFontSize(latex, style.HeaderFooterFontSizePoints);
     }
 

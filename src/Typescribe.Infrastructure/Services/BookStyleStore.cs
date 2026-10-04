@@ -41,6 +41,42 @@ internal sealed class BookStyleStore
             SectionNumberDepth = GetInt(values, "section-number-depth", d.SectionNumberDepth),
             OpenChaptersOnRight = GetBool(values, "open-chapters-right", d.OpenChaptersOnRight),
 
+            IncludeFrontCover = GetBool(values, "include-front-cover", d.IncludeFrontCover),
+            FrontCoverText = GetDecoded(values, "front-cover-text", d.FrontCoverText),
+            IncludeSpine = GetBool(values, "include-spine", d.IncludeSpine),
+            SpineText = GetDecoded(values, "spine-text", d.SpineText),
+            FrontBlankPages = GetInt(values, "front-blank-pages", d.FrontBlankPages),
+            IncludeTitlePage = GetBool(values, "include-title-page", d.IncludeTitlePage),
+            IncludeCopyrightPage = GetBool(values, "include-copyright-page", d.IncludeCopyrightPage),
+            CopyrightText = GetDecoded(values, "copyright-text", d.CopyrightText),
+            IncludeDedication = GetBool(values, "include-dedication", d.IncludeDedication),
+            DedicationText = GetDecoded(values, "dedication-text", d.DedicationText),
+            IncludePreface = GetBool(values, "include-preface", d.IncludePreface),
+            PrefaceText = GetDecoded(values, "preface-text", d.PrefaceText),
+            IncludeForeword = GetBool(values, "include-foreword", d.IncludeForeword),
+            ForewordText = GetDecoded(values, "foreword-text", d.ForewordText),
+            IncludeIntroduction = GetBool(values, "include-introduction", d.IncludeIntroduction),
+            IntroductionText = GetDecoded(values, "introduction-text", d.IntroductionText),
+
+            IncludeConclusion = GetBool(values, "include-conclusion", d.IncludeConclusion),
+            ConclusionText = GetDecoded(values, "conclusion-text", d.ConclusionText),
+            IncludeEpilogue = GetBool(values, "include-epilogue", d.IncludeEpilogue),
+            EpilogueText = GetDecoded(values, "epilogue-text", d.EpilogueText),
+            IncludeAcknowledgments = GetBool(values, "include-acknowledgments", d.IncludeAcknowledgments),
+            AcknowledgmentsText = GetDecoded(values, "acknowledgments-text", d.AcknowledgmentsText),
+            IncludeAppendix = GetBool(values, "include-appendix", d.IncludeAppendix),
+            AppendixText = GetDecoded(values, "appendix-text", d.AppendixText),
+            IncludeGlossary = GetBool(values, "include-glossary", d.IncludeGlossary),
+            GlossaryText = GetDecoded(values, "glossary-text", d.GlossaryText),
+            IncludeReferencesBibliography = GetBool(values, "include-references-bibliography", d.IncludeReferencesBibliography),
+            IncludeIndex = GetBool(values, "include-index", d.IncludeIndex),
+            IndexText = GetDecoded(values, "index-text", d.IndexText),
+            IncludeAboutAuthor = GetBool(values, "include-about-author", d.IncludeAboutAuthor),
+            AboutAuthorText = GetDecoded(values, "about-author-text", d.AboutAuthorText),
+            EndBlankPages = GetInt(values, "end-blank-pages", d.EndBlankPages),
+            IncludeBackCover = GetBool(values, "include-back-cover", d.IncludeBackCover),
+            BackCoverText = GetDecoded(values, "back-cover-text", d.BackCoverText),
+
             BodyFontFamily = Get(values, "body-font", d.BodyFontFamily),
             HeadingFontFamily = Get(values, "heading-font", d.HeadingFontFamily),
             MonospaceFontFamily = Get(values, "monospace-font", d.MonospaceFontFamily),
@@ -81,6 +117,7 @@ internal sealed class BookStyleStore
             CodeLineNumbers = GetBool(values, "code-line-numbers", d.CodeLineNumbers),
 
             HeaderFooterFontSizePoints = GetDouble(values, "header-footer-font-size-pt", d.HeaderFooterFontSizePoints),
+            ShowHeadersAndFooters = GetBool(values, "show-headers-footers", d.ShowHeadersAndFooters),
             HeaderLeft = GetDecoded(values, "header-left", d.HeaderLeft),
             HeaderCenter = GetDecoded(values, "header-center", d.HeaderCenter),
             HeaderRight = GetDecoded(values, "header-right", d.HeaderRight),
@@ -101,7 +138,7 @@ internal sealed class BookStyleStore
     {
         style.Validate();
         var builder = new StringBuilder();
-        builder.AppendLine("# Typescribe advanced book style v2");
+        builder.AppendLine("# Typescribe advanced book style v3");
         Append(builder, "name", style.Name);
         Append(builder, "document-class", style.DocumentClass);
         Append(builder, "document-class-options", style.DocumentClassOptions);
@@ -115,6 +152,42 @@ internal sealed class BookStyleStore
         Append(builder, "toc-depth", style.TableOfContentsDepth);
         Append(builder, "section-number-depth", style.SectionNumberDepth);
         Append(builder, "open-chapters-right", style.OpenChaptersOnRight);
+
+        Append(builder, "include-front-cover", style.IncludeFrontCover);
+        AppendEncoded(builder, "front-cover-text", style.FrontCoverText);
+        Append(builder, "include-spine", style.IncludeSpine);
+        AppendEncoded(builder, "spine-text", style.SpineText);
+        Append(builder, "front-blank-pages", style.FrontBlankPages);
+        Append(builder, "include-title-page", style.IncludeTitlePage);
+        Append(builder, "include-copyright-page", style.IncludeCopyrightPage);
+        AppendEncoded(builder, "copyright-text", style.CopyrightText);
+        Append(builder, "include-dedication", style.IncludeDedication);
+        AppendEncoded(builder, "dedication-text", style.DedicationText);
+        Append(builder, "include-preface", style.IncludePreface);
+        AppendEncoded(builder, "preface-text", style.PrefaceText);
+        Append(builder, "include-foreword", style.IncludeForeword);
+        AppendEncoded(builder, "foreword-text", style.ForewordText);
+        Append(builder, "include-introduction", style.IncludeIntroduction);
+        AppendEncoded(builder, "introduction-text", style.IntroductionText);
+
+        Append(builder, "include-conclusion", style.IncludeConclusion);
+        AppendEncoded(builder, "conclusion-text", style.ConclusionText);
+        Append(builder, "include-epilogue", style.IncludeEpilogue);
+        AppendEncoded(builder, "epilogue-text", style.EpilogueText);
+        Append(builder, "include-acknowledgments", style.IncludeAcknowledgments);
+        AppendEncoded(builder, "acknowledgments-text", style.AcknowledgmentsText);
+        Append(builder, "include-appendix", style.IncludeAppendix);
+        AppendEncoded(builder, "appendix-text", style.AppendixText);
+        Append(builder, "include-glossary", style.IncludeGlossary);
+        AppendEncoded(builder, "glossary-text", style.GlossaryText);
+        Append(builder, "include-references-bibliography", style.IncludeReferencesBibliography);
+        Append(builder, "include-index", style.IncludeIndex);
+        AppendEncoded(builder, "index-text", style.IndexText);
+        Append(builder, "include-about-author", style.IncludeAboutAuthor);
+        AppendEncoded(builder, "about-author-text", style.AboutAuthorText);
+        Append(builder, "end-blank-pages", style.EndBlankPages);
+        Append(builder, "include-back-cover", style.IncludeBackCover);
+        AppendEncoded(builder, "back-cover-text", style.BackCoverText);
 
         Append(builder, "body-font", style.BodyFontFamily);
         Append(builder, "heading-font", style.HeadingFontFamily);
@@ -156,6 +229,7 @@ internal sealed class BookStyleStore
         Append(builder, "code-line-numbers", style.CodeLineNumbers);
 
         Append(builder, "header-footer-font-size-pt", style.HeaderFooterFontSizePoints);
+        Append(builder, "show-headers-footers", style.ShowHeadersAndFooters);
         AppendEncoded(builder, "header-left", style.HeaderLeft);
         AppendEncoded(builder, "header-center", style.HeaderCenter);
         AppendEncoded(builder, "header-right", style.HeaderRight);

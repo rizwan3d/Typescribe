@@ -20,6 +20,44 @@ public sealed record BookStyle
     public int SectionNumberDepth { get; init; } = 3;
     public bool OpenChaptersOnRight { get; init; }
 
+    // Generated front matter / cover proof pages.
+    public bool IncludeFrontCover { get; init; }
+    public string FrontCoverText { get; init; } = string.Empty;
+    public bool IncludeSpine { get; init; }
+    public string SpineText { get; init; } = string.Empty;
+    public int FrontBlankPages { get; init; }
+    public bool IncludeTitlePage { get; init; } = true;
+    public bool IncludeCopyrightPage { get; init; }
+    public string CopyrightText { get; init; } = string.Empty;
+    public bool IncludeDedication { get; init; }
+    public string DedicationText { get; init; } = string.Empty;
+    public bool IncludePreface { get; init; }
+    public string PrefaceText { get; init; } = string.Empty;
+    public bool IncludeForeword { get; init; }
+    public string ForewordText { get; init; } = string.Empty;
+    public bool IncludeIntroduction { get; init; }
+    public string IntroductionText { get; init; } = string.Empty;
+
+    // Generated back matter.
+    public bool IncludeConclusion { get; init; }
+    public string ConclusionText { get; init; } = string.Empty;
+    public bool IncludeEpilogue { get; init; }
+    public string EpilogueText { get; init; } = string.Empty;
+    public bool IncludeAcknowledgments { get; init; }
+    public string AcknowledgmentsText { get; init; } = string.Empty;
+    public bool IncludeAppendix { get; init; }
+    public string AppendixText { get; init; } = string.Empty;
+    public bool IncludeGlossary { get; init; }
+    public string GlossaryText { get; init; } = string.Empty;
+    public bool IncludeReferencesBibliography { get; init; } = true;
+    public bool IncludeIndex { get; init; }
+    public string IndexText { get; init; } = string.Empty;
+    public bool IncludeAboutAuthor { get; init; }
+    public string AboutAuthorText { get; init; } = string.Empty;
+    public int EndBlankPages { get; init; }
+    public bool IncludeBackCover { get; init; }
+    public string BackCoverText { get; init; } = string.Empty;
+
     // Core typography.
     public string BodyFontFamily { get; init; } = "Latin Modern Roman";
     public string HeadingFontFamily { get; init; } = "Latin Modern Roman";
@@ -65,6 +103,7 @@ public sealed record BookStyle
 
     // Running heads / feet.
     public double HeaderFooterFontSizePoints { get; init; } = 9.0;
+    public bool ShowHeadersAndFooters { get; init; } = true;
     public string HeaderLeft { get; init; } = string.Empty;
     public string HeaderCenter { get; init; } = string.Empty;
     public string HeaderRight { get; init; } = string.Empty;
@@ -85,6 +124,8 @@ public sealed record BookStyle
         if (PageHeightInches is < 3 or > 24) throw new InvalidOperationException("Page height must be between 3 and 24 inches.");
         if (MarginTopInches is < 0 or > 5 || MarginBottomInches is < 0 or > 5 || MarginInnerInches is < 0 or > 5 || MarginOuterInches is < 0 or > 5)
             throw new InvalidOperationException("Margins must be between 0 and 5 inches.");
+        if (FrontBlankPages is < 0 or > 20 || EndBlankPages is < 0 or > 20)
+            throw new InvalidOperationException("Blank page counts must be between 0 and 20.");
         if (BodyFontSizePoints is < 6 or > 36) throw new InvalidOperationException("Body font size must be between 6 and 36 points.");
         if (LineSpacing is < 0.8 or > 3) throw new InvalidOperationException("Line spacing must be between 0.8 and 3.0.");
         if (TableOfContentsDepth is < 0 or > 6 || SectionNumberDepth is < -1 or > 6)
