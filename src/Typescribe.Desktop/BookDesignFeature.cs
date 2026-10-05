@@ -30,6 +30,7 @@ internal sealed class BookDesignFeature
     {
         LivePdfControlsFeature.Apply(window, viewModel);
         ContinuousPdfPreviewFeature.Apply(window, viewModel);
+        EditorPreviewScopeFeature.Apply(window, viewModel);
 
         // Keep the publishing toolkit coupled to the book-design composition point so every
         // desktop host that gets Book Design also gets table/figure/citation/index/style tools.
