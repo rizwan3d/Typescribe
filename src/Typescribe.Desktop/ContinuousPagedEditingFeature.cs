@@ -104,7 +104,7 @@ internal sealed class ContinuousPagedEditingFeature
         _host = host;
         _editor = editor;
         _renderer = new ContinuousPageRenderer();
-        editor.TextArea.TextView.BackgroundRenderers.Insert(0, _renderer);
+        editor.TextArea.TextView.BackgroundRenderers.Add(_renderer);
         editor.Classes.Add("continuous-paged-editor");
         editor.IsVisible = true;
 
