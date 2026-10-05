@@ -102,6 +102,7 @@ public sealed class App : AvaloniaApplication
             InstallProjectSearch(window, viewModel);
             ReferenceTopChrome.Apply(window);
             UnifiedVisualWorkspaceFeature.Apply(window, viewModel);
+            DirectPagedCanvasFeature.Apply(window, viewModel, parser);
             if (startupProjectPath is not null)
             {
                 window.Opened += async (_, _) =>
