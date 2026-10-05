@@ -27,6 +27,9 @@ jobs:
       - name: Validate Unicode BiDi heuristics
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project tools/Typescribe.BidiSmoke/Typescribe.BidiSmoke.csproj -c Release
+      - name: Validate rich clipboard DOCX EPUB interchange
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet run --project tools/Typescribe.InterchangeSmoke/Typescribe.InterchangeSmoke.csproj -c Release -- /tmp/typescribe-rich-smoke.epub
       - name: Validate lazy project loading
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project tools/Typescribe.LazyLoadSmoke/Typescribe.LazyLoadSmoke.csproj -c Release
@@ -48,3 +51,4 @@ jobs:
             https://github.com/w3c/epubcheck/releases/download/v5.4.0/epubcheck-5.4.0.zip
           unzip -q /tmp/epubcheck.zip -d /tmp/epubcheck
           java -jar /tmp/epubcheck/epubcheck-5.4.0/epubcheck.jar /tmp/typescribe-smoke.epub
+          java -jar /tmp/epubcheck/epubcheck-5.4.0/epubcheck.jar /tmp/typescribe-rich-smoke.epub
