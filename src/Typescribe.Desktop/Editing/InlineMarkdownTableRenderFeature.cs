@@ -254,10 +254,14 @@ internal sealed class InlineMarkdownTableRenderFeature
             if (table is null) return null!;
 
             var line = CurrentContext.Document.GetLineByOffset(offset);
-            if (line.Length <= 0) return null!;
+            if (line.Length <= 0 || table.Length <= 0) return null!;
             var width = CurrentContext.TextView.Bounds.Width;
             var control = buildControl(table, width);
-            return new InlineObjectElement(line.Length, control);
+
+            // Consume the complete Markdown table, including all internal line breaks, as one
+            // visual element. Using only the first source line leaves the remaining hidden rows
+            // in the TextView where they still contribute line height and create a large blank gap.
+            return new InlineObjectElement(table.Length, control);
         }
     }
 
