@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -14,19 +15,24 @@ using Typescribe.Domain.Models;
 namespace Typescribe.Desktop.Editing;
 
 /// <summary>
-/// Replaces the active Markdown table's visual presentation with a compact Word-style editing
-/// surface while keeping the underlying document as canonical text. Direct cell edits and
-/// structural commands serialize back to the pipe table immediately when focus leaves a cell.
+/// Replaces the active Markdown table's source presentation with a Word-like editable grid while
+/// keeping canonical Markdown in the document. A contextual cell toolbar follows the active cell
+/// for row/column actions, merges, alignment and header controls.
 /// </summary>
 internal sealed class InlineTableEditingFeature
 {
     private readonly StudioWorkspaceWindow _window;
     private readonly IDocumentParser _parser = new EmojiDocumentParser(new AdvancedDocumentParser());
     private readonly DispatcherTimer _refreshTimer;
+    private readonly Dictionary<(int Row, int Column), TextBox> _cellEditors = [];
+
     private ManuscriptEditor? _editor;
     private Grid? _host;
     private Border? _surface;
     private InlineTableMaskTransformer? _mask;
+    private Popup? _cellToolbarPopup;
+    private TextBlock? _cellPositionText;
+    private TextBlock? _alignmentText;
     private TableSpan? _span;
     private TableEditResult? _edit;
     private int _activeRow;
@@ -87,18 +93,18 @@ internal sealed class InlineTableEditingFeature
         _surface = new Border
         {
             IsVisible = false,
-            Margin = new Thickness(8, 5, 8, 5),
-            Padding = new Thickness(8),
-            CornerRadius = new CornerRadius(7),
+            Margin = new Thickness(10, 7),
+            Padding = new Thickness(10),
+            CornerRadius = new CornerRadius(8),
             BorderThickness = new Thickness(1),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(64, 128, 128, 128)),
-            Background = new SolidColorBrush(Color.FromArgb(16, 128, 128, 128)),
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            MaxHeight = 420
+            MaxHeight = 520
         };
         _surface.Classes.Add("inline-table-editor");
         Grid.SetRow(_surface, 2);
         host.Children.Add(_surface);
+
+        BuildCellToolbarPopup();
 
         _mask = new InlineTableMaskTransformer();
         editor.TextArea.TextView.LineTransformers.Add(_mask);
@@ -106,6 +112,79 @@ internal sealed class InlineTableEditingFeature
         editor.TextChanged += EditorTextChanged;
         _installed = true;
         QueueRefresh();
+    }
+
+    private void BuildCellToolbarPopup()
+    {
+        if (_host is null) return;
+
+        _cellPositionText = new TextBlock
+        {
+            Text = "R1 · C1",
+            MinWidth = 62,
+            FontSize = 10.5,
+            FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        _alignmentText = new TextBlock
+        {
+            Text = "Default",
+            MinWidth = 48,
+            FontSize = 10,
+            Opacity = 0.68,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        row.Children.Add(_cellPositionText);
+        row.Children.Add(PopupButton("+ Row", "Insert a row below the active cell", AddRowBelow));
+        row.Children.Add(PopupButton("+ Col", "Insert a column to the right of the active cell", AddColumnRight));
+        row.Children.Add(PopupButton("− Row", "Delete the active row", DeleteActiveRow));
+        row.Children.Add(PopupButton("− Col", "Delete the active column", DeleteActiveColumn));
+        row.Children.Add(PopupButton("Merge →", "Merge with the cell on the right", () => MergeActive(1, 2)));
+        row.Children.Add(PopupButton("Merge ↓", "Merge with the cell below", () => MergeActive(2, 1)));
+        row.Children.Add(PopupButton("Unmerge", "Split the active merged region", UnmergeActive));
+        row.Children.Add(PopupButton("Header", "Toggle the first row as a header", ToggleHeaderRow));
+        row.Children.Add(PopupButton("Align", "Cycle column alignment", CycleActiveColumnAlignment));
+        row.Children.Add(_alignmentText);
+
+        var surface = new Border
+        {
+            Child = row,
+            Padding = new Thickness(6, 4),
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1)
+        };
+        surface.Classes.Add("table-cell-toolbar");
+
+        _cellToolbarPopup = new Popup
+        {
+            Child = surface,
+            Placement = PlacementMode.Bottom,
+            VerticalOffset = 5,
+            IsLightDismissEnabled = false,
+            IsOpen = false
+        };
+        _host.Children.Add(_cellToolbarPopup);
+    }
+
+    private static Button PopupButton(string text, string tip, Action action)
+    {
+        var button = new Button
+        {
+            Content = text,
+            MinHeight = 25,
+            Padding = new Thickness(6, 1)
+        };
+        button.Classes.Add("table-toolbar-button");
+        ToolTip.SetTip(button, tip);
+        button.Click += (_, _) => action();
+        return button;
     }
 
     private void CaretPositionChanged(object? sender, EventArgs e) => QueueRefresh();
@@ -128,7 +207,7 @@ internal sealed class InlineTableEditingFeature
         var span = FindCurrentTableSpan(_editor);
         if (span is null)
         {
-            if (_surface.IsKeyboardFocusWithin) return;
+            if (_surface.IsKeyboardFocusWithin || _cellToolbarPopup?.IsOpen == true) return;
             HideSurface();
             return;
         }
@@ -165,11 +244,19 @@ internal sealed class InlineTableEditingFeature
         if (_surface is null || _edit is null) return;
         var cells = NormalizeCells(_edit.Cells);
         var merges = TableEditCodec.NormalizeMerges(_edit.Merges ?? [], cells.Count, cells[0].Count);
+        var alignments = _edit.Alignments.ToList();
+        while (alignments.Count < cells[0].Count) alignments.Add(TableAlignment.Default);
+        while (alignments.Count > cells[0].Count) alignments.RemoveAt(alignments.Count - 1);
         _edit = _edit with
         {
             Cells = cells.Select(static row => (IReadOnlyList<string>)row.ToArray()).ToArray(),
+            Alignments = alignments,
             Merges = merges
         };
+
+        _activeRow = Math.Clamp(_activeRow, 0, cells.Count - 1);
+        _activeColumn = Math.Clamp(_activeColumn, 0, cells[0].Count - 1);
+        _cellEditors.Clear();
 
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         var title = new TextBlock
@@ -177,27 +264,36 @@ internal sealed class InlineTableEditingFeature
             Text = "TABLE",
             FontSize = 9,
             FontWeight = FontWeight.SemiBold,
-            Opacity = 0.55,
+            Opacity = 0.58,
             VerticalAlignment = VerticalAlignment.Center
         };
-        var mergeRight = SmallButton("Merge →", "Merge the active cell with the adjacent cell on the right", () => MergeActive(1, 2));
-        var mergeDown = SmallButton("Merge ↓", "Merge the active cell with the cell below", () => MergeActive(2, 1));
-        var unmerge = SmallButton("Unmerge", "Split the active merged cell back into grid cells", UnmergeActive);
-        var openDialog = SmallButton("More…", "Open the full table editor", OpenFullEditor);
-        var status = new TextBlock
+        var position = new TextBlock
         {
-            Text = "Direct cell editing · canonical Markdown is preserved",
+            Text = $"{cells.Count} rows × {cells[0].Count} columns",
             FontSize = 10,
-            Opacity = 0.58,
+            Opacity = 0.62,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0)
         };
+        var hint = new TextBlock
+        {
+            Text = "Click a cell to edit · Tab moves between cells",
+            FontSize = 10,
+            Opacity = 0.5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0)
+        };
+        var addRow = SmallButton("+ Row", "Insert row below the active cell", AddRowBelow);
+        var addColumn = SmallButton("+ Column", "Insert column right of the active cell", AddColumnRight);
+        var openDialog = SmallButton("Table options…", "Open the full table editor", OpenFullEditor);
+
         var bar = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        bar.Classes.Add("table-top-bar");
         bar.Children.Add(title);
-        bar.Children.Add(status);
-        bar.Children.Add(mergeRight);
-        bar.Children.Add(mergeDown);
-        bar.Children.Add(unmerge);
+        bar.Children.Add(position);
+        bar.Children.Add(hint);
+        bar.Children.Add(addRow);
+        bar.Children.Add(addColumn);
         bar.Children.Add(openDialog);
         root.Children.Add(bar);
 
@@ -207,57 +303,84 @@ internal sealed class InlineTableEditingFeature
             Content = grid,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            MaxHeight = 350,
-            Margin = new Thickness(0, 7, 0, 0)
+            MaxHeight = 430,
+            Margin = new Thickness(0, 8, 0, 0)
         };
         Grid.SetRow(scroll, 1);
         root.Children.Add(scroll);
         _surface.Child = root;
+        RefreshActiveCellChrome();
     }
 
     private Grid BuildInteractiveGrid(List<List<string>> cells, IReadOnlyList<TableMergeSpan> merges)
     {
-        var grid = new Grid { ColumnSpacing = 2, RowSpacing = 2 };
-        grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(40)));
+        var grid = new Grid { ColumnSpacing = 1, RowSpacing = 1 };
+        grid.Classes.Add("word-table-grid");
+        grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(36)));
         for (var column = 0; column < cells[0].Count; column++)
-            grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(1, GridUnitType.Star)) { MinWidth = 110 });
+            grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(1, GridUnitType.Star)) { MinWidth = 115 });
         grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         for (var row = 0; row < cells.Count; row++) grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+
+        var corner = new Border { MinHeight = 27 };
+        corner.Classes.Add("table-coordinate-header");
+        grid.Children.Add(corner);
 
         for (var column = 0; column < cells[0].Count; column++)
         {
             var captured = column;
-            var affordance = new StackPanel
+            var header = new Grid { MinHeight = 27 };
+            header.Classes.Add("table-coordinate-header");
+            header.Children.Add(new TextBlock
             {
-                Orientation = Orientation.Horizontal,
+                Text = ColumnName(column),
+                FontSize = 10,
+                FontWeight = FontWeight.SemiBold,
+                Opacity = 0.68,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Opacity = 0.28
-            };
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var affordance = MicroButton("+", $"Insert column after {ColumnName(column)}", () =>
+            {
+                _activeColumn = captured;
+                AddColumnRight();
+            });
+            affordance.HorizontalAlignment = HorizontalAlignment.Right;
+            affordance.Opacity = 0.18;
             affordance.PointerEntered += (_, _) => affordance.Opacity = 1;
-            affordance.PointerExited += (_, _) => affordance.Opacity = 0.28;
-            affordance.Children.Add(MicroButton("←+", $"Insert column left of {column + 1}", () => InsertColumn(captured)));
-            affordance.Children.Add(MicroButton("+→", $"Insert column right of {column + 1}", () => InsertColumn(captured + 1)));
-            Grid.SetRow(affordance, 0);
-            Grid.SetColumn(affordance, column + 1);
-            grid.Children.Add(affordance);
+            affordance.PointerExited += (_, _) => affordance.Opacity = 0.18;
+            header.Children.Add(affordance);
+            Grid.SetRow(header, 0);
+            Grid.SetColumn(header, column + 1);
+            grid.Children.Add(header);
         }
 
         for (var row = 0; row < cells.Count; row++)
         {
             var captured = row;
-            var affordance = new StackPanel
+            var header = new Grid { MinHeight = 33 };
+            header.Classes.Add("table-coordinate-header");
+            header.Children.Add(new TextBlock
             {
-                Orientation = Orientation.Vertical,
-                VerticalAlignment = VerticalAlignment.Center,
-                Opacity = 0.28
-            };
+                Text = (row + 1).ToString(),
+                FontSize = 10,
+                Opacity = 0.65,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var affordance = MicroButton("+", $"Insert row below {row + 1}", () =>
+            {
+                _activeRow = captured;
+                AddRowBelow();
+            });
+            affordance.HorizontalAlignment = HorizontalAlignment.Right;
+            affordance.Opacity = 0.18;
             affordance.PointerEntered += (_, _) => affordance.Opacity = 1;
-            affordance.PointerExited += (_, _) => affordance.Opacity = 0.28;
-            affordance.Children.Add(MicroButton("↑+", $"Insert row above {row + 1}", () => InsertRow(captured)));
-            affordance.Children.Add(MicroButton("+↓", $"Insert row below {row + 1}", () => InsertRow(captured + 1)));
-            Grid.SetRow(affordance, row + 1);
-            Grid.SetColumn(affordance, 0);
-            grid.Children.Add(affordance);
+            affordance.PointerExited += (_, _) => affordance.Opacity = 0.18;
+            header.Children.Add(affordance);
+            Grid.SetRow(header, row + 1);
+            Grid.SetColumn(header, 0);
+            grid.Children.Add(header);
         }
 
         for (var row = 0; row < cells.Count; row++)
@@ -266,32 +389,115 @@ internal sealed class InlineTableEditingFeature
             {
                 if (TableEditCodec.IsContinuation(merges, row, column)) continue;
                 var region = TableEditCodec.CoveringSpan(merges, row, column);
-                var editor = new TextBox
+                var alignment = column < _edit!.Alignments.Count ? _edit.Alignments[column] : TableAlignment.Default;
+                var cell = new TextBox
                 {
                     Text = cells[row][column],
-                    MinHeight = region is { RowSpan: > 1 } ? 58 : 31,
-                    Padding = new Thickness(6, 3),
+                    MinHeight = region is { RowSpan: > 1 } ? 64 : 34,
+                    Padding = new Thickness(8, 5),
                     TextWrapping = TextWrapping.Wrap,
                     VerticalContentAlignment = VerticalAlignment.Center,
-                    FontWeight = row == 0 && _edit?.HeaderRow == true ? FontWeight.SemiBold : FontWeight.Normal,
-                    Watermark = region is not null ? "Merged cell" : "Cell"
+                    FontWeight = row == 0 && _edit.HeaderRow ? FontWeight.SemiBold : FontWeight.Normal,
+                    Watermark = region is not null ? "Merged cell" : "Cell",
+                    TextAlignment = alignment switch
+                    {
+                        TableAlignment.Center => TextAlignment.Center,
+                        TableAlignment.Right => TextAlignment.Right,
+                        _ => TextAlignment.Left
+                    }
                 };
+                cell.Classes.Add("table-cell");
+                if (row == 0 && _edit.HeaderRow) cell.Classes.Add("table-header-cell");
                 var capturedRow = row;
                 var capturedColumn = column;
-                editor.GotFocus += (_, _) => { _activeRow = capturedRow; _activeColumn = capturedColumn; };
-                editor.TextChanged += (_, _) => UpdateCellState(capturedRow, capturedColumn, editor.Text ?? string.Empty);
-                editor.LostFocus += (_, _) => CommitCurrentState();
-                Grid.SetRow(editor, row + 1);
-                Grid.SetColumn(editor, column + 1);
+                cell.GotFocus += (_, _) => ActivateCell(capturedRow, capturedColumn, cell);
+                cell.TextChanged += (_, _) => UpdateCellState(capturedRow, capturedColumn, cell.Text ?? string.Empty);
+                cell.LostFocus += (_, _) => CommitCurrentState();
+                cell.KeyDown += (_, e) => CellKeyDown(e, capturedRow, capturedColumn);
+                _cellEditors[(row, column)] = cell;
+
+                Grid.SetRow(cell, row + 1);
+                Grid.SetColumn(cell, column + 1);
                 if (region is not null)
                 {
-                    Grid.SetRowSpan(editor, region.RowSpan);
-                    Grid.SetColumnSpan(editor, region.ColumnSpan);
+                    Grid.SetRowSpan(cell, region.RowSpan);
+                    Grid.SetColumnSpan(cell, region.ColumnSpan);
                 }
-                grid.Children.Add(editor);
+                grid.Children.Add(cell);
             }
         }
         return grid;
+    }
+
+    private void ActivateCell(int row, int column, TextBox cell)
+    {
+        _activeRow = row;
+        _activeColumn = column;
+        RefreshActiveCellChrome();
+        if (_cellToolbarPopup is not null)
+        {
+            _cellToolbarPopup.PlacementTarget = cell;
+            _cellToolbarPopup.IsOpen = true;
+        }
+    }
+
+    private void RefreshActiveCellChrome()
+    {
+        foreach (var pair in _cellEditors)
+        {
+            var active = pair.Key.Row == _activeRow && pair.Key.Column == _activeColumn;
+            SetClass(pair.Value, "active-table-cell", active);
+        }
+
+        if (_cellPositionText is not null)
+            _cellPositionText.Text = $"R{_activeRow + 1} · C{_activeColumn + 1}";
+        if (_alignmentText is not null && _edit is not null)
+        {
+            var alignment = _activeColumn < _edit.Alignments.Count ? _edit.Alignments[_activeColumn] : TableAlignment.Default;
+            _alignmentText.Text = alignment.ToString();
+        }
+    }
+
+    private static void SetClass(Control control, string className, bool enabled)
+    {
+        var has = control.Classes.Contains(className);
+        if (enabled && !has) control.Classes.Add(className);
+        else if (!enabled && has) control.Classes.Remove(className);
+    }
+
+    private void CellKeyDown(KeyEventArgs e, int row, int column)
+    {
+        if (e.Key != Key.Tab) return;
+        e.Handled = true;
+        _activeRow = row;
+        _activeColumn = column;
+        CommitCurrentState();
+        MoveCellFocus(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
+    }
+
+    private void MoveCellFocus(int delta)
+    {
+        var keys = _cellEditors.Keys.OrderBy(static key => key.Row).ThenBy(static key => key.Column).ToArray();
+        var index = Array.IndexOf(keys, (_activeRow, _activeColumn));
+        if (index < 0) return;
+        var next = index + delta;
+        if (next >= 0 && next < keys.Length)
+        {
+            var key = keys[next];
+            _activeRow = key.Row;
+            _activeColumn = key.Column;
+            _cellEditors[key].Focus();
+            _cellEditors[key].SelectAll();
+            return;
+        }
+
+        if (delta > 0 && _edit is not null)
+        {
+            var cells = NormalizeCells(_edit.Cells);
+            _activeRow = cells.Count;
+            _activeColumn = 0;
+            InsertRow(cells.Count, focusAfter: true);
+        }
     }
 
     private void UpdateCellState(int row, int column, string value)
@@ -303,7 +509,10 @@ internal sealed class InlineTableEditingFeature
         _edit = _edit with { Cells = cells.Select(static item => (IReadOnlyList<string>)item.ToArray()).ToArray() };
     }
 
-    private void InsertRow(int index)
+    private void AddRowBelow() => InsertRow(_activeRow + 1, focusAfter: true);
+    private void AddColumnRight() => InsertColumn(_activeColumn + 1, focusAfter: true);
+
+    private void InsertRow(int index, bool focusAfter = false)
     {
         if (_edit is null) return;
         var cells = NormalizeCells(_edit.Cells);
@@ -320,11 +529,13 @@ internal sealed class InlineTableEditingFeature
             Cells = cells.Select(static row => (IReadOnlyList<string>)row.ToArray()).ToArray(),
             Merges = TableEditCodec.NormalizeMerges(merges, cells.Count, cells[0].Count)
         };
-        if (_activeRow >= index) _activeRow++;
+        _activeRow = index;
+        _activeColumn = Math.Clamp(_activeColumn, 0, cells[0].Count - 1);
         CommitCurrentState(rebuild: true);
+        if (focusAfter) QueueFocusActiveCell();
     }
 
-    private void InsertColumn(int index)
+    private void InsertColumn(int index, bool focusAfter = false)
     {
         if (_edit is null) return;
         var cells = NormalizeCells(_edit.Cells);
@@ -344,8 +555,88 @@ internal sealed class InlineTableEditingFeature
             Alignments = alignments,
             Merges = TableEditCodec.NormalizeMerges(merges, cells.Count, cells[0].Count)
         };
-        if (_activeColumn >= index) _activeColumn++;
+        _activeColumn = index;
+        _activeRow = Math.Clamp(_activeRow, 0, cells.Count - 1);
         CommitCurrentState(rebuild: true);
+        if (focusAfter) QueueFocusActiveCell();
+    }
+
+    private void DeleteActiveRow()
+    {
+        if (_edit is null) return;
+        var cells = NormalizeCells(_edit.Cells);
+        if (cells.Count <= 1) return;
+        var deleted = Math.Clamp(_activeRow, 0, cells.Count - 1);
+        cells.RemoveAt(deleted);
+        var merges = new List<TableMergeSpan>();
+        foreach (var span in _edit.Merges ?? [])
+        {
+            if (deleted < span.Row) merges.Add(span with { Row = span.Row - 1 });
+            else if (deleted >= span.Row + span.RowSpan) merges.Add(span);
+            else if (span.RowSpan > 1) merges.Add(span with { RowSpan = span.RowSpan - 1 });
+        }
+        _activeRow = Math.Min(deleted, cells.Count - 1);
+        _edit = _edit with
+        {
+            Cells = cells.Select(static row => (IReadOnlyList<string>)row.ToArray()).ToArray(),
+            Merges = TableEditCodec.NormalizeMerges(merges, cells.Count, cells[0].Count)
+        };
+        CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
+    }
+
+    private void DeleteActiveColumn()
+    {
+        if (_edit is null) return;
+        var cells = NormalizeCells(_edit.Cells);
+        if (cells[0].Count <= 1) return;
+        var deleted = Math.Clamp(_activeColumn, 0, cells[0].Count - 1);
+        foreach (var row in cells) row.RemoveAt(deleted);
+        var merges = new List<TableMergeSpan>();
+        foreach (var span in _edit.Merges ?? [])
+        {
+            if (deleted < span.Column) merges.Add(span with { Column = span.Column - 1 });
+            else if (deleted >= span.Column + span.ColumnSpan) merges.Add(span);
+            else if (span.ColumnSpan > 1) merges.Add(span with { ColumnSpan = span.ColumnSpan - 1 });
+        }
+        var alignments = _edit.Alignments.ToList();
+        if (deleted < alignments.Count) alignments.RemoveAt(deleted);
+        _activeColumn = Math.Min(deleted, cells[0].Count - 1);
+        _edit = _edit with
+        {
+            Cells = cells.Select(static row => (IReadOnlyList<string>)row.ToArray()).ToArray(),
+            Alignments = alignments,
+            Merges = TableEditCodec.NormalizeMerges(merges, cells.Count, cells[0].Count)
+        };
+        CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
+    }
+
+    private void ToggleHeaderRow()
+    {
+        if (_edit is null) return;
+        _edit = _edit with { HeaderRow = !_edit.HeaderRow };
+        CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
+    }
+
+    private void CycleActiveColumnAlignment()
+    {
+        if (_edit is null) return;
+        var cells = NormalizeCells(_edit.Cells);
+        var alignments = _edit.Alignments.ToList();
+        while (alignments.Count < cells[0].Count) alignments.Add(TableAlignment.Default);
+        var index = Math.Clamp(_activeColumn, 0, cells[0].Count - 1);
+        alignments[index] = alignments[index] switch
+        {
+            TableAlignment.Default => TableAlignment.Left,
+            TableAlignment.Left => TableAlignment.Center,
+            TableAlignment.Center => TableAlignment.Right,
+            _ => TableAlignment.Default
+        };
+        _edit = _edit with { Alignments = alignments };
+        CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
     }
 
     private void MergeActive(int rowSpan, int columnSpan)
@@ -363,6 +654,7 @@ internal sealed class InlineTableEditingFeature
         merges.Add(new TableMergeSpan(_activeRow, _activeColumn, rowSpan, columnSpan));
         _edit = _edit with { Merges = TableEditCodec.NormalizeMerges(merges, cells.Count, cells[0].Count) };
         CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
     }
 
     private void UnmergeActive()
@@ -376,6 +668,21 @@ internal sealed class InlineTableEditingFeature
         _activeColumn = covering.Column;
         _edit = _edit with { Merges = merges };
         CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
+    }
+
+    private void QueueFocusActiveCell()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_cellEditors.TryGetValue((_activeRow, _activeColumn), out var cell))
+            {
+                cell.Focus();
+                _cellToolbarPopup!.PlacementTarget = cell;
+                _cellToolbarPopup.IsOpen = true;
+            }
+            RefreshActiveCellChrome();
+        }, DispatcherPriority.Background);
     }
 
     private async void OpenFullEditor()
@@ -385,6 +692,7 @@ internal sealed class InlineTableEditingFeature
         if (result is null) return;
         _edit = result;
         CommitCurrentState(rebuild: true);
+        QueueFocusActiveCell();
     }
 
     private void CommitCurrentState(bool rebuild = false)
@@ -412,6 +720,8 @@ internal sealed class InlineTableEditingFeature
     private void HideSurface()
     {
         if (_surface is not null) _surface.IsVisible = false;
+        if (_cellToolbarPopup is not null) _cellToolbarPopup.IsOpen = false;
+        _cellEditors.Clear();
         _span = null;
         _edit = null;
         _mask?.Clear();
@@ -488,17 +798,31 @@ internal sealed class InlineTableEditingFeature
         return rows;
     }
 
-    private static Button SmallButton(string text, string tip, Action action)
+    private static string ColumnName(int index)
     {
-        var button = new Button { Content = text, MinHeight = 24, Padding = new Thickness(7, 1), Margin = new Thickness(2, 0) };
-        ToolTip.SetTip(button, tip);
+        index++;
+        var result = string.Empty;
+        while (index > 0)
+        {
+            index--;
+            result = (char)('A' + index % 26) + result;
+            index /= 26;
+        }
+        return result;
+    }
+
+    private static Button SmallButton(string text, string toolTip, Action action)
+    {
+        var button = new Button { Content = text, MinHeight = 25, Padding = new Thickness(7, 1), Margin = new Thickness(2, 0) };
+        button.Classes.Add("table-toolbar-button");
+        ToolTip.SetTip(button, toolTip);
         button.Click += (_, _) => action();
         return button;
     }
 
     private static Button MicroButton(string text, string tip, Action action)
     {
-        var button = new Button { Content = text, MinWidth = 28, Height = 21, MinHeight = 21, FontSize = 9, Padding = new Thickness(2, 0), Margin = new Thickness(1) };
+        var button = new Button { Content = text, MinWidth = 20, Width = 20, Height = 20, MinHeight = 20, FontSize = 9, Padding = new Thickness(1), Margin = new Thickness(1) };
         ToolTip.SetTip(button, tip);
         button.Click += (_, _) => action();
         return button;
@@ -517,6 +841,7 @@ internal sealed class InlineTableEditingFeature
             _editor.TextChanged -= EditorTextChanged;
             if (_mask is not null) _editor.TextArea.TextView.LineTransformers.Remove(_mask);
         }
+        if (_cellToolbarPopup is not null) _cellToolbarPopup.IsOpen = false;
     }
 
     private sealed record TableCoordinate(int Row, int Column);
@@ -541,10 +866,7 @@ internal sealed class InlineTableEditingFeature
             var start = Math.Max(line.Offset, _start);
             var end = Math.Min(line.EndOffset, _end);
             if (end <= start) return;
-            ChangeLinePart(start, end, static element =>
-            {
-                element.TextRunProperties.SetForegroundBrush(Brushes.Transparent);
-            });
+            ChangeLinePart(start, end, static element => element.TextRunProperties.SetForegroundBrush(Brushes.Transparent));
         }
     }
 }
