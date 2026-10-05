@@ -87,10 +87,15 @@ internal sealed class EditorDefaultStateFeature
         {
             // Long documents must always remain vertically scrollable. Horizontal scrolling
             // is useful only when soft wrapping is disabled; otherwise it adds dead chrome.
-            editor.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            editor.WordWrap = wordWrap;
+            editor.VerticalScrollBarVisibility = ScrollBarVisibility.Visible;
             editor.HorizontalScrollBarVisibility = wordWrap
                 ? ScrollBarVisibility.Disabled
-                : ScrollBarVisibility.Auto;
+                : ScrollBarVisibility.Visible;
+            editor.InvalidateMeasure();
+            editor.TextArea.TextView.InvalidateMeasure();
+            editor.TextArea.TextView.Redraw();
+            editor.TextArea.RaiseScrollInvalidated(EventArgs.Empty);
         }
     }
 

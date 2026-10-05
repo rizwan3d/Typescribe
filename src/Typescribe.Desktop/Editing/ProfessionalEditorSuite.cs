@@ -182,13 +182,7 @@ internal sealed class ProfessionalEditorSuite
         if ((_revisionPicker?.SelectedIndex ?? 0) > 0)
             _lastRevisionLevel = Math.Clamp(_revisionPicker!.SelectedIndex, 1, 5);
 
-        var existingChildren = host.Children.ToArray();
-        host.RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto");
-        foreach (var child in existingChildren)
-        {
-            var row = Grid.GetRow(child);
-            if (row >= 1) Grid.SetRow(child, row + 1);
-        }
+        InsertHostRow(host, 1);
 
         _reviewBar = BuildReviewBar();
         Grid.SetRow(_reviewBar, 1);
@@ -215,6 +209,16 @@ internal sealed class ProfessionalEditorSuite
         SynchronizeDocumentState();
         ScheduleAnalysis();
         RefreshStatus();
+    }
+
+    private static void InsertHostRow(Grid host, int rowIndex)
+    {
+        host.RowDefinitions.Insert(rowIndex, new RowDefinition(GridLength.Auto));
+        foreach (var child in host.Children.OfType<Control>().ToArray())
+        {
+            var row = Grid.GetRow(child);
+            if (row >= rowIndex) Grid.SetRow(child, row + 1);
+        }
     }
 
     private void UpdateEnabledState()

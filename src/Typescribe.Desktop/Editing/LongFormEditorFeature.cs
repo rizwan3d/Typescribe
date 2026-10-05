@@ -6,6 +6,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Typescribe.Desktop.ViewModels;
@@ -125,6 +126,11 @@ internal sealed class LongFormEditorFeature
     private void OnLayoutUpdated(object? sender, EventArgs e)
     {
         if (!_installed) TryInstall();
+        else
+        {
+            ConstrainHostToViewport();
+        }
+
         if (!_menuInjected) InjectEditMenu();
     }
 
@@ -194,6 +200,7 @@ internal sealed class LongFormEditorFeature
         Grid.SetColumn(_host, column);
         Grid.SetRowSpan(_host, rowSpan);
         Grid.SetColumnSpan(_host, columnSpan);
+        ConstrainHostToViewport();
 
         HookEditor();
         ExtendEditorContextMenu();
@@ -208,6 +215,21 @@ internal sealed class LongFormEditorFeature
             handledEventsToo: true);
 
         _installed = true;
+    }
+
+    private void ConstrainHostToViewport()
+    {
+        if (_host?.Parent is not Control parent || parent.Bounds.Height <= 0) return;
+
+        var availableHeight = parent.Bounds.Height - _host.Bounds.Y;
+        if (availableHeight <= 0 || double.IsInfinity(availableHeight) || double.IsNaN(availableHeight)) return;
+
+        var maxHeight = Math.Max(180, availableHeight);
+        if (double.IsInfinity(_host.MaxHeight) || Math.Abs(_host.MaxHeight - maxHeight) > 0.5)
+        {
+            _host.MaxHeight = maxHeight;
+            _host.InvalidateMeasure();
+        }
     }
 
     private Control BuildToolbar()
@@ -361,17 +383,17 @@ internal sealed class LongFormEditorFeature
 
     private Control BuildStatusBar()
     {
-        var grid = new Grid
+        var status = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
             Margin = new Thickness(10, 3, 10, 4),
             MinHeight = 24
         };
-        grid.Children.Add(_contextText);
+        status.Children.Add(_contextText);
         Grid.SetColumn(_statsText, 1);
         _statsText.Margin = new Thickness(12, 0, 0, 0);
-        grid.Children.Add(_statsText);
-        return grid;
+        status.Children.Add(_statsText);
+        return status;
     }
 
     private Button CommandButton(
@@ -469,7 +491,11 @@ internal sealed class LongFormEditorFeature
         if (_findPanel?.IsVisible == true) ScheduleFindRefresh();
     }
 
-    private void EditorCaretChanged(object? sender, EventArgs e) => UpdateStatus();
+    private void EditorCaretChanged(object? sender, EventArgs e)
+    {
+        UpdateStatus();
+    }
+
     private void EditorSelectionChanged(object? sender, EventArgs e) => UpdateStatus();
 
     private void ScheduleStatusUpdate()

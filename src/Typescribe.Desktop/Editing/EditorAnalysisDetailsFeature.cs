@@ -86,13 +86,7 @@ internal sealed class EditorAnalysisDetailsFeature
         _editor = editor;
         _host = host;
 
-        var existingChildren = host.Children.ToArray();
-        host.RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,*,Auto");
-        foreach (var child in existingChildren)
-        {
-            var row = Grid.GetRow(child);
-            if (row >= 2) Grid.SetRow(child, row + 1);
-        }
+        InsertHostRow(host, 2);
 
         _panel = BuildPanel();
         Grid.SetRow(_panel, 2);
@@ -105,6 +99,16 @@ internal sealed class EditorAnalysisDetailsFeature
         _installed = true;
         _refreshTimer.Start();
         Refresh();
+    }
+
+    private static void InsertHostRow(Grid host, int rowIndex)
+    {
+        host.RowDefinitions.Insert(rowIndex, new RowDefinition(GridLength.Auto));
+        foreach (var child in host.Children.OfType<Control>().ToArray())
+        {
+            var row = Grid.GetRow(child);
+            if (row >= rowIndex) Grid.SetRow(child, row + 1);
+        }
     }
 
     private Border BuildPanel()

@@ -17,6 +17,7 @@
                             Focusable="False"
                             VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"
                             HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                            AllowAutoHide="False"
                             VerticalContentAlignment="Top"
                             HorizontalContentAlignment="Left"
                             Padding="{TemplateBinding Padding}" />
@@ -71,4 +72,18 @@
       </ControlTheme>
     </ResourceDictionary>
   </Styles.Resources>
+
+  <Style Selector="local|ManuscriptEditor ScrollBar:horizontal">
+    <Setter Property="MinHeight" Value="14" />
+    <Setter Property="Height" Value="14" />
+    <Setter Property="Background" Value="#252A32" />
+    <Setter Property="Foreground" Value="#697386" />
+  </Style>
+
+  <Style Selector="local|ManuscriptEditor ScrollBar:vertical">
+    <Setter Property="MinWidth" Value="14" />
+    <Setter Property="Width" Value="14" />
+    <Setter Property="Background" Value="#252A32" />
+    <Setter Property="Foreground" Value="#697386" />
+  </Style>
 </Styles>

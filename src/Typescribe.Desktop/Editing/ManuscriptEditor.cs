@@ -1,12 +1,13 @@
-using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.Document;
+using AvaloniaEdit.Editing;
 using AvaloniaEdit.Rendering;
 
 namespace Typescribe.Desktop.Editing;
@@ -71,14 +72,14 @@ public sealed class ManuscriptEditor : TextEditor
     private string? _documentIdentity;
 
     public ManuscriptEditor()
+        : base(new ManuscriptTextArea())
     {
         WordWrap = true;
         ShowLineNumbers = false;
         FontFamily = new FontFamily("monospace");
         FontSize = 16;
         Background = Brushes.Transparent;
-        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-        VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        SynchronizeScrollBarsWithWordWrap();
 
         Options.AcceptsTab = true;
         Options.AllowScrollBelowDocument = true;
@@ -150,6 +151,72 @@ public sealed class ManuscriptEditor : TextEditor
 
     private bool EffectiveTypewriterScrolling => _userTypewriterScrolling || _compositionMode;
     private bool EffectiveFocusMode => _userFocusMode || _compositionMode;
+
+    private sealed class ManuscriptTextArea : TextArea
+    {
+        public ManuscriptTextArea()
+            : base(new ManuscriptTextView())
+        {
+        }
+
+        protected override Type StyleKeyOverride => typeof(TextArea);
+    }
+
+    private sealed class ManuscriptTextView : TextView
+    {
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var constrained = availableSize;
+            if (double.IsInfinity(constrained.Height))
+            {
+                var height = FindFiniteViewportSize(static size => size.Height);
+                if (height > 0)
+                    constrained = constrained.WithHeight(height);
+            }
+
+            return base.MeasureOverride(constrained);
+        }
+
+        private double FindFiniteViewportSize(Func<Size, double> selector)
+        {
+            const double minimumUsableViewport = 96;
+            var candidates = this.GetVisualAncestors()
+                .OfType<Control>()
+                .Select(control => selector(control.Bounds.Size))
+                .Where(static value => value > 0 && !double.IsInfinity(value) && !double.IsNaN(value))
+                .ToArray();
+
+            return candidates
+                .Where(static value => value >= minimumUsableViewport)
+                .DefaultIfEmpty(candidates.DefaultIfEmpty(0).Min())
+                .Min();
+        }
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == WordWrapProperty)
+            SynchronizeScrollBarsWithWordWrap();
+    }
+
+    private void SynchronizeScrollBarsWithWordWrap()
+    {
+        var horizontalScrollEnabled = !WordWrap;
+        var logicalScroll = (ILogicalScrollable)TextArea;
+        logicalScroll.CanHorizontallyScroll = horizontalScrollEnabled;
+        logicalScroll.CanVerticallyScroll = true;
+
+        VerticalScrollBarVisibility = ScrollBarVisibility.Visible;
+        HorizontalScrollBarVisibility = horizontalScrollEnabled
+            ? ScrollBarVisibility.Visible
+            : ScrollBarVisibility.Disabled;
+
+        InvalidateMeasure();
+        TextArea.TextView.InvalidateMeasure();
+        TextArea.TextView.Redraw();
+        TextArea.RaiseScrollInvalidated(EventArgs.Empty);
+    }
 
     public void SetDocumentIdentity(string? identity)
     {
