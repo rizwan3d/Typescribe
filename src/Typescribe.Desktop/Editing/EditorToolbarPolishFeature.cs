@@ -33,10 +33,9 @@ internal sealed class EditorToolbarPolishFeature
         window.Closed += feature.WindowClosed;
         feature.QueueApply();
 
-        // Always render canonical Markdown pipe tables as real visual tables in the editor.
-        // Clicking a rendered table activates the v2 visual editing surface and commands.
-        InlineMarkdownTableRenderFeature.Apply(window);
-        InlineTableEditingV2Feature.Apply(window);
+        // Canonical Markdown pipe tables are now edited as inline AvaloniaEdit objects.
+        // The Markdown text remains the source of truth; no masking or detached overlay surface.
+        InlineMarkdownTableEditorFeature.Apply(window);
     }
 
     private void WindowOpened(object? sender, EventArgs e) => QueueApply();
