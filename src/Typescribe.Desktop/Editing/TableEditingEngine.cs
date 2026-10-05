@@ -80,6 +80,92 @@ internal static class TableEditingEngine
             coordinate.Column);
     }
 
+    /// <summary>
+    /// Finds every canonical Markdown table in the manuscript so editor rendering can replace
+    /// pipe syntax with a real visual grid even when the caret is outside the table.
+    /// </summary>
+    public static IReadOnlyList<TableEditingContext> FindAll(ManuscriptEditor editor, IDocumentParser parser)
+    {
+        ArgumentNullException.ThrowIfNull(editor);
+        ArgumentNullException.ThrowIfNull(parser);
+        if (editor.Document.TextLength == 0 || editor.Document.LineCount == 0) return [];
+
+        bool PipeLine(int number)
+        {
+            if (number < 1 || number > editor.Document.LineCount) return false;
+            var candidate = editor.Document.GetLineByNumber(number);
+            return editor.Document.GetText(candidate.Offset, candidate.Length).Contains('|');
+        }
+
+        bool MetadataLine(int number)
+        {
+            if (number < 1 || number > editor.Document.LineCount) return false;
+            var candidate = editor.Document.GetLineByNumber(number);
+            var text = editor.Document.GetText(candidate.Offset, candidate.Length).Trim();
+            return text.StartsWith(TableMarkupCodec.MetadataPrefix, StringComparison.Ordinal);
+        }
+
+        var result = new List<TableEditingContext>();
+        var lineNumber = 1;
+        while (lineNumber <= editor.Document.LineCount)
+        {
+            var firstTableLine = lineNumber;
+            if (MetadataLine(lineNumber) && PipeLine(lineNumber + 1))
+            {
+                firstTableLine = lineNumber + 1;
+            }
+            else if (PipeLine(lineNumber))
+            {
+                // A table is handled from the first line in its pipe-row group only.
+                if (PipeLine(lineNumber - 1))
+                {
+                    lineNumber++;
+                    continue;
+                }
+            }
+            else
+            {
+                lineNumber++;
+                continue;
+            }
+
+            var lastTableLine = firstTableLine;
+            while (PipeLine(lastTableLine + 1)) lastTableLine++;
+
+            var firstSourceLine = firstTableLine;
+            if (firstTableLine > 1 && MetadataLine(firstTableLine - 1)) firstSourceLine--;
+
+            var first = editor.Document.GetLineByNumber(firstSourceLine);
+            var last = editor.Document.GetLineByNumber(lastTableLine);
+            var length = last.EndOffset - first.Offset;
+            if (length <= 0)
+            {
+                lineNumber = Math.Max(lineNumber + 1, lastTableLine + 1);
+                continue;
+            }
+
+            var text = editor.Document.GetText(first.Offset, length);
+            var table = parser.Parse(text).Blocks.OfType<TableBlock>().FirstOrDefault();
+            if (table is not null)
+            {
+                result.Add(new TableEditingContext(
+                    first.Offset,
+                    length,
+                    text,
+                    firstTableLine,
+                    Normalize(TableEditCodec.FromTable(table)),
+                    0,
+                    0));
+                lineNumber = lastTableLine + 1;
+                continue;
+            }
+
+            lineNumber = Math.Max(lineNumber + 1, firstTableLine + 1);
+        }
+
+        return result;
+    }
+
     public static TableEditResult Normalize(TableEditResult edit)
     {
         var cells = NormalizeCells(edit.Cells);

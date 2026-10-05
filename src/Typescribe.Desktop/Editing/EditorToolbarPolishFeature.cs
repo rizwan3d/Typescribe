@@ -33,7 +33,9 @@ internal sealed class EditorToolbarPolishFeature
         window.Closed += feature.WindowClosed;
         feature.QueueApply();
 
-        // Table editing v2 owns the visual table surface and all structural commands.
+        // Always render canonical Markdown pipe tables as real visual tables in the editor.
+        // Clicking a rendered table activates the v2 visual editing surface and commands.
+        InlineMarkdownTableRenderFeature.Apply(window);
         InlineTableEditingV2Feature.Apply(window);
     }
 
