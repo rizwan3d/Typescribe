@@ -3,6 +3,8 @@ using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml.Styling;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Typescribe.Desktop.ViewModels;
 using NativeTextBlock = Avalonia.Controls.TextBlock;
@@ -11,32 +13,35 @@ using NativeTextBox = Avalonia.Controls.TextBox;
 namespace Typescribe.Desktop;
 
 /// <summary>
-/// Keeps the Book Design preset selectors while restoring a real editable value field.
-/// This matters for arbitrary installed font names and arbitrary #RRGGBB colors: a preset
-/// must never be the only way to reach a BookStyle property.
+/// Keeps font presets alongside editable values, while color fields use a real spectrum-based
+/// color picker plus an editable #RRGGBB value. Presets must never be the only way to reach a
+/// BookStyle property.
 /// </summary>
 internal static class BookDesignInputWiring
 {
+    private static bool _colorPickerStylesInstalled;
+
     private static readonly FieldSpec[] Fields =
     [
         new("Typography", "Body font", nameof(BookDesignEditorViewModel.BodyFontFamily), "Installed font name", 180),
         new("Typography", "Heading font", nameof(BookDesignEditorViewModel.HeadingFontFamily), "Installed font name", 180),
         new("Typography", "Monospace font", nameof(BookDesignEditorViewModel.MonospaceFontFamily), "Installed font name", 180),
         new("Typography", "Math font", nameof(BookDesignEditorViewModel.MathFontFamily), "Installed math font", 180),
-        new("Typography", "Body color", nameof(BookDesignEditorViewModel.BodyColorHex), "#RRGGBB", 145),
-        new("Typography", "Heading color", nameof(BookDesignEditorViewModel.HeadingColorHex), "#RRGGBB", 145),
-        new("Typography", "Link color", nameof(BookDesignEditorViewModel.LinkColorHex), "#RRGGBB", 145),
-        new("Code", "Background", nameof(BookDesignEditorViewModel.CodeBackgroundHex), "#RRGGBB", 145),
-        new("Code", "Text", nameof(BookDesignEditorViewModel.CodeTextHex), "#RRGGBB", 145),
-        new("Code", "Keywords", nameof(BookDesignEditorViewModel.CodeKeywordHex), "#RRGGBB", 145),
-        new("Code", "Strings", nameof(BookDesignEditorViewModel.CodeStringHex), "#RRGGBB", 145),
-        new("Code", "Comments", nameof(BookDesignEditorViewModel.CodeCommentHex), "#RRGGBB", 145),
-        new("Code", "Frame", nameof(BookDesignEditorViewModel.CodeFrameHex), "#RRGGBB", 145)
+        new("Typography", "Body color", nameof(BookDesignEditorViewModel.BodyColorHex), "#RRGGBB", 52, true),
+        new("Typography", "Heading color", nameof(BookDesignEditorViewModel.HeadingColorHex), "#RRGGBB", 52, true),
+        new("Typography", "Link color", nameof(BookDesignEditorViewModel.LinkColorHex), "#RRGGBB", 52, true),
+        new("Code", "Background", nameof(BookDesignEditorViewModel.CodeBackgroundHex), "#RRGGBB", 52, true),
+        new("Code", "Text", nameof(BookDesignEditorViewModel.CodeTextHex), "#RRGGBB", 52, true),
+        new("Code", "Keywords", nameof(BookDesignEditorViewModel.CodeKeywordHex), "#RRGGBB", 52, true),
+        new("Code", "Strings", nameof(BookDesignEditorViewModel.CodeStringHex), "#RRGGBB", 52, true),
+        new("Code", "Comments", nameof(BookDesignEditorViewModel.CodeCommentHex), "#RRGGBB", 52, true),
+        new("Code", "Frame", nameof(BookDesignEditorViewModel.CodeFrameHex), "#RRGGBB", 52, true)
     ];
 
     public static void Apply(BookDesignDialog dialog)
     {
         ArgumentNullException.ThrowIfNull(dialog);
+        EnsureColorPickerStyles();
         dialog.Opened += (_, _) => Install(dialog);
     }
 
@@ -45,6 +50,7 @@ internal static class BookDesignInputWiring
         const string installedClass = "complete-book-design-inputs";
         if (dialog.Classes.Contains(installedClass)) return;
         dialog.Classes.Add(installedClass);
+        EnsureColorPickerStyles();
 
         if (dialog.Content is not Control root) return;
         var tabs = EnumerateControls(root).OfType<TabControl>().FirstOrDefault();
@@ -59,20 +65,33 @@ internal static class BookDesignInputWiring
             var column = Grid.GetColumn(combo);
             var rowSpan = Grid.GetRowSpan(combo);
             var columnSpan = Grid.GetColumnSpan(combo);
+            var current = GetEditorString(dialog, spec.Property);
 
             var editor = new NativeTextBox
             {
-                Text = GetEditorString(dialog, spec.Property),
+                Text = current,
                 Watermark = spec.Watermark,
                 MinWidth = 100,
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
 
-            combo.Width = spec.PresetWidth;
-            combo.MinWidth = 0;
-            combo.HorizontalAlignment = HorizontalAlignment.Right;
+            Control selector;
+            ColorPicker? colorPicker = null;
+            if (spec.IsColor)
+            {
+                colorPicker = CreateColorPicker(current, spec.SelectorWidth);
+                selector = colorPicker;
+            }
+            else
+            {
+                combo.Width = spec.SelectorWidth;
+                combo.MinWidth = 0;
+                combo.HorizontalAlignment = HorizontalAlignment.Right;
+                selector = combo;
+            }
 
-            // Detach before re-parenting: Avalonia controls can only belong to one visual parent.
+            // Detach the old selector before re-parenting/replacing it: Avalonia controls can only
+            // belong to one visual parent. Color rows intentionally discard the preset ComboBox.
             grid.Children.Remove(combo);
 
             var host = new Grid
@@ -82,8 +101,8 @@ internal static class BookDesignInputWiring
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             host.Children.Add(editor);
-            Grid.SetColumn(combo, 1);
-            host.Children.Add(combo);
+            Grid.SetColumn(selector, 1);
+            host.Children.Add(selector);
 
             Grid.SetRow(host, row);
             Grid.SetColumn(host, column);
@@ -91,19 +110,59 @@ internal static class BookDesignInputWiring
             Grid.SetColumnSpan(host, columnSpan);
             grid.Children.Add(host);
 
-            var state = new WiredInput(spec, editor);
+            var state = new WiredInput(spec, editor, colorPicker);
             wired.Add(state);
 
             editor.TextChanged += (_, _) =>
             {
                 if (state.Syncing) return;
-                SetEditorString(dialog, spec.Property, editor.Text ?? string.Empty);
+
+                var value = editor.Text ?? string.Empty;
+                SetEditorString(dialog, spec.Property, value);
+
+                if (state.ColorPicker is { } picker && TryParseColor(value, out var parsed))
+                {
+                    state.Syncing = true;
+                    try
+                    {
+                        picker.Color = parsed;
+                    }
+                    finally
+                    {
+                        state.Syncing = false;
+                    }
+                }
+
                 dialog.RefreshDesignPreviewFromInputWiring();
             };
 
-            combo.SelectionChanged += (_, _) => Dispatcher.UIThread.Post(
-                () => SyncFromModel(dialog, state),
-                DispatcherPriority.Background);
+            if (colorPicker is not null)
+            {
+                colorPicker.ColorChanged += (_, _) =>
+                {
+                    if (state.Syncing) return;
+
+                    var value = ToRgbHex(colorPicker.Color);
+                    state.Syncing = true;
+                    try
+                    {
+                        editor.Text = value;
+                        SetEditorString(dialog, spec.Property, value);
+                    }
+                    finally
+                    {
+                        state.Syncing = false;
+                    }
+
+                    dialog.RefreshDesignPreviewFromInputWiring();
+                };
+            }
+            else
+            {
+                combo.SelectionChanged += (_, _) => Dispatcher.UIThread.Post(
+                    () => SyncFromModel(dialog, state),
+                    DispatcherPriority.Background);
+            }
         }
 
         dialog.PropertyChanged += (_, e) =>
@@ -116,21 +175,72 @@ internal static class BookDesignInputWiring
         };
     }
 
+    private static ColorPicker CreateColorPicker(string value, double width)
+    {
+        var picker = new ColorPicker
+        {
+            Width = width,
+            MinWidth = width,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            IsAlphaEnabled = false,
+            IsAlphaVisible = false,
+            IsAccentColorsVisible = false,
+            IsColorPaletteVisible = false,
+            IsColorSpectrumVisible = true,
+            IsColorComponentsVisible = true,
+            IsHexInputVisible = true
+        };
+
+        if (TryParseColor(value, out var color)) picker.Color = color;
+        return picker;
+    }
+
+    private static void EnsureColorPickerStyles()
+    {
+        if (_colorPickerStylesInstalled || Application.Current is not { } app) return;
+
+        app.Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
+        {
+            Source = new Uri("avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml")
+        });
+        _colorPickerStylesInstalled = true;
+    }
+
     private static void SyncFromModel(BookDesignDialog dialog, WiredInput state)
     {
         var value = GetEditorString(dialog, state.Spec.Property);
-        if (string.Equals(state.Editor.Text, value, StringComparison.Ordinal)) return;
 
         state.Syncing = true;
         try
         {
-            state.Editor.Text = value;
+            if (!string.Equals(state.Editor.Text, value, StringComparison.Ordinal))
+                state.Editor.Text = value;
+
+            if (state.ColorPicker is { } picker && TryParseColor(value, out var parsed))
+                picker.Color = parsed;
         }
         finally
         {
             state.Syncing = false;
         }
     }
+
+    private static bool TryParseColor(string? value, out Color color)
+    {
+        try
+        {
+            color = Color.Parse(value?.Trim() ?? string.Empty);
+            return true;
+        }
+        catch
+        {
+            color = Colors.Black;
+            return false;
+        }
+    }
+
+    private static string ToRgbHex(Color color)
+        => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
 
     private static string GetEditorString(BookDesignDialog dialog, string propertyName)
     {
@@ -223,12 +333,14 @@ internal static class BookDesignInputWiring
         string Label,
         string Property,
         string Watermark,
-        double PresetWidth);
+        double SelectorWidth,
+        bool IsColor = false);
 
-    private sealed class WiredInput(FieldSpec spec, NativeTextBox editor)
+    private sealed class WiredInput(FieldSpec spec, NativeTextBox editor, ColorPicker? colorPicker)
     {
         public FieldSpec Spec { get; } = spec;
         public NativeTextBox Editor { get; } = editor;
+        public ColorPicker? ColorPicker { get; } = colorPicker;
         public bool Syncing { get; set; }
     }
 }
