@@ -1,0 +1,154 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:editing="using:Typescribe.Desktop.Editing"
+             x:Class="Typescribe.Desktop.Editing.LongFormEditorChrome"
+             x:DataType="editing:EditorCommandSet"
+             x:CompileBindings="True">
+  <UserControl.Styles>
+    <Style Selector="Border.editor-command-bar">
+      <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.editor-command-group">
+      <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="5,3" />
+      <Setter Property="Margin" Value="0,0,5,4" />
+    </Style>
+    <Style Selector="TextBlock.editor-command-group-label">
+      <Setter Property="FontSize" Value="10.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="2,0,5,0" />
+    </Style>
+    <Style Selector="Button.editor-command-button">
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="MinWidth" Value="44" />
+      <Setter Property="Padding" Value="9,4" />
+      <Setter Property="FontSize" Value="11.5" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Margin" Value="1,0" />
+    </Style>
+    <Style Selector="ToggleButton.editor-command-button">
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="MinWidth" Value="48" />
+      <Setter Property="Padding" Value="9,4" />
+      <Setter Property="FontSize" Value="11.5" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Margin" Value="1,0" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+      <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+    </Style>
+    <Style Selector="ToggleButton.editor-command-button:checked">
+      <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+    </Style>
+    <Style Selector="Border.editor-find-panel">
+      <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.editor-status-bar">
+      <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+      <Setter Property="BorderThickness" Value="0,1,0,0" />
+    </Style>
+    <Style Selector="Button.editor-find-button">
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="MinWidth" Value="64" />
+      <Setter Property="Padding" Value="8,3" />
+      <Setter Property="FontSize" Value="11.5" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto">
+    <Border x:Name="EditorCommandBar" Grid.Row="0" Classes="editor-command-bar">
+      <WrapPanel Orientation="Horizontal" Margin="7,5,7,1">
+        <Border Classes="editor-command-group">
+          <StackPanel Orientation="Horizontal" Spacing="2">
+            <TextBlock Classes="editor-command-group-label" Text="FORMAT" />
+            <Button Classes="editor-command-button" Content="{Binding Bold.ToolbarLabel}" Command="{Binding Bold}" ToolTip.Tip="{Binding Bold.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding Italic.ToolbarLabel}" Command="{Binding Italic}" ToolTip.Tip="{Binding Italic.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding InlineCode.ToolbarLabel}" Command="{Binding InlineCode}" ToolTip.Tip="{Binding InlineCode.ToolTip}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="editor-command-group">
+          <StackPanel Orientation="Horizontal" Spacing="2">
+            <TextBlock Classes="editor-command-group-label" Text="STRUCTURE" />
+            <Button Classes="editor-command-button" Content="{Binding Heading1.ToolbarLabel}" Command="{Binding Heading1}" ToolTip.Tip="{Binding Heading1.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding Heading2.ToolbarLabel}" Command="{Binding Heading2}" ToolTip.Tip="{Binding Heading2.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding BlockQuote.ToolbarLabel}" Command="{Binding BlockQuote}" ToolTip.Tip="{Binding BlockQuote.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding BulletList.ToolbarLabel}" Command="{Binding BulletList}" ToolTip.Tip="{Binding BulletList.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding NumberedList.ToolbarLabel}" Command="{Binding NumberedList}" ToolTip.Tip="{Binding NumberedList.ToolTip}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="editor-command-group">
+          <StackPanel Orientation="Horizontal" Spacing="2">
+            <TextBlock Classes="editor-command-group-label" Text="SEARCH" />
+            <Button Classes="editor-command-button" Content="{Binding FindReplace.ToolbarLabel}" Command="{Binding FindReplace}" ToolTip.Tip="{Binding FindReplace.ToolTip}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="editor-command-group">
+          <StackPanel Orientation="Horizontal" Spacing="2">
+            <TextBlock Classes="editor-command-group-label" Text="VIEW" />
+            <ToggleButton Classes="editor-command-button" Content="{Binding FocusMode.ToolbarLabel}" Command="{Binding FocusMode}" IsChecked="{Binding FocusMode.IsChecked, Mode=OneWay}" ToolTip.Tip="{Binding FocusMode.ToolTip}" />
+            <ToggleButton Classes="editor-command-button" Content="{Binding TypewriterMode.ToolbarLabel}" Command="{Binding TypewriterMode}" IsChecked="{Binding TypewriterMode.IsChecked, Mode=OneWay}" ToolTip.Tip="{Binding TypewriterMode.ToolTip}" />
+            <ToggleButton Classes="editor-command-button" Content="{Binding MarkdownMarks.ToolbarLabel}" Command="{Binding MarkdownMarks}" IsChecked="{Binding MarkdownMarks.IsChecked, Mode=OneWay}" ToolTip.Tip="{Binding MarkdownMarks.ToolTip}" />
+            <ToggleButton Classes="editor-command-button" Content="{Binding WordWrap.ToolbarLabel}" Command="{Binding WordWrap}" IsChecked="{Binding WordWrap.IsChecked, Mode=OneWay}" ToolTip.Tip="{Binding WordWrap.ToolTip}" />
+            <ToggleButton Classes="editor-command-button" Content="{Binding LineNumbers.ToolbarLabel}" Command="{Binding LineNumbers}" IsChecked="{Binding LineNumbers.IsChecked, Mode=OneWay}" ToolTip.Tip="{Binding LineNumbers.ToolTip}" />
+            <ToggleButton Classes="editor-command-button" Content="{Binding PageWidth.ToolbarLabel}" Command="{Binding PageWidth}" IsChecked="{Binding PageWidth.IsChecked, Mode=OneWay}" ToolTip.Tip="{Binding PageWidth.ToolTip}" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="editor-command-group">
+          <StackPanel Orientation="Horizontal" Spacing="2">
+            <TextBlock Classes="editor-command-group-label" Text="ZOOM" />
+            <Button Classes="editor-command-button" Content="{Binding ZoomOut.ToolbarLabel}" Command="{Binding ZoomOut}" ToolTip.Tip="{Binding ZoomOut.ToolTip}" />
+            <TextBlock x:Name="ZoomText" MinWidth="46" VerticalAlignment="Center" TextAlignment="Center" FontSize="11.5" />
+            <Button Classes="editor-command-button" Content="{Binding ZoomIn.ToolbarLabel}" Command="{Binding ZoomIn}" ToolTip.Tip="{Binding ZoomIn.ToolTip}" />
+            <Button Classes="editor-command-button" Content="{Binding ZoomReset.ToolbarLabel}" Command="{Binding ZoomReset}" ToolTip.Tip="{Binding ZoomReset.ToolTip}" />
+          </StackPanel>
+        </Border>
+      </WrapPanel>
+    </Border>
+
+    <Border x:Name="FindPanel" Grid.Row="1" Classes="editor-find-panel" IsVisible="False">
+      <Grid RowDefinitions="Auto,Auto" Margin="10,7,10,8">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+          <TextBox x:Name="FindBox" Watermark="Find in document" MinWidth="190" Height="30" VerticalContentAlignment="Center" Padding="8,2" />
+          <TextBlock x:Name="FindStatus" Grid.Column="1" MinWidth="72" VerticalAlignment="Center" Opacity="0.68" />
+          <Button Grid.Column="2" Classes="editor-find-button" Content="{Binding FindPrevious.ToolbarLabel}" Command="{Binding FindPrevious}" ToolTip.Tip="{Binding FindPrevious.ToolTip}" />
+          <Button Grid.Column="3" Classes="editor-find-button" Content="{Binding FindNext.ToolbarLabel}" Command="{Binding FindNext}" ToolTip.Tip="{Binding FindNext.ToolTip}" />
+          <Button Grid.Column="4" Classes="editor-find-button" Content="{Binding CloseFind.ToolbarLabel}" Command="{Binding CloseFind}" ToolTip.Tip="{Binding CloseFind.ToolTip}" />
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="7" Margin="0,6,0,0">
+          <TextBox x:Name="ReplaceBox" Watermark="Replace with" MinWidth="190" Height="30" VerticalContentAlignment="Center" Padding="8,2" />
+          <CheckBox x:Name="MatchCase" Grid.Column="1" Content="Match case" VerticalAlignment="Center" />
+          <CheckBox x:Name="WholeWord" Grid.Column="2" Content="Whole word" VerticalAlignment="Center" />
+          <Button Grid.Column="3" Classes="editor-find-button" Content="{Binding ReplaceCurrent.ToolbarLabel}" Command="{Binding ReplaceCurrent}" ToolTip.Tip="{Binding ReplaceCurrent.ToolTip}" />
+          <Button Grid.Column="4" Classes="editor-find-button" Content="{Binding ReplaceAll.ToolbarLabel}" Command="{Binding ReplaceAll}" ToolTip.Tip="{Binding ReplaceAll.ToolTip}" />
+        </Grid>
+      </Grid>
+    </Border>
+
+    <ContentControl x:Name="EditorHost" Grid.Row="2" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+
+    <Border x:Name="EditorStatusBar" Grid.Row="3" Classes="editor-status-bar">
+      <Grid ColumnDefinitions="*,Auto" Margin="10,4,10,5" MinHeight="26">
+        <TextBlock x:Name="ContextText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        <TextBlock x:Name="StatsText" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" Opacity="0.72" />
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>
