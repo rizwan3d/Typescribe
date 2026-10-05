@@ -25,6 +25,7 @@ namespace Typescribe.Desktop.Editing;
 /// </summary>
 internal sealed class InlineMarkdownTableEditorFeature
 {
+    private const string InlineTableCellClass = "inline-markdown-table-cell-editor";
     private readonly StudioWorkspaceWindow _window;
     private readonly IDocumentParser _parser = new EmojiDocumentParser(new AdvancedDocumentParser());
     private readonly DispatcherTimer _refreshTimer;
@@ -197,25 +198,29 @@ internal sealed class InlineMarkdownTableEditorFeature
                 BorderThickness = new Thickness(.5),
                 TextAlignment = AlignmentFor(edit, column)
             };
+            editor.Classes.Add(InlineTableCellClass);
             editor.GotFocus += (_, _) =>
             {
                 _activeCells[row.TableOffset] = (rowIndex, capturedColumn);
                 editor.SelectAll();
             };
             editor.LostFocus += (_, _) =>
-            {
-                var current = editor.Text ?? string.Empty;
-                if (!string.Equals(current, initial, StringComparison.Ordinal))
-                    UpdateCell(row.TableOffset, rowIndex, capturedColumn, current);
-            };
+                CommitCell(row.TableOffset, row.Edit, rowIndex, capturedColumn, editor.Text ?? string.Empty);
             editor.KeyDown += (_, e) =>
             {
-                if (e.Key != Key.Enter) return;
-                e.Handled = true;
-                var current = editor.Text ?? string.Empty;
-                if (!string.Equals(current, initial, StringComparison.Ordinal))
-                    UpdateCell(row.TableOffset, rowIndex, capturedColumn, current);
-                _editor?.Focus();
+                switch (e.Key)
+                {
+                    case Key.Escape:
+                        e.Handled = true;
+                        editor.Text = initial;
+                        _editor?.Focus();
+                        break;
+                    case Key.Enter when !e.KeyModifiers.HasFlag(KeyModifiers.Shift):
+                        e.Handled = true;
+                        CommitCell(row.TableOffset, row.Edit, rowIndex, capturedColumn, editor.Text ?? string.Empty);
+                        _editor?.Focus();
+                        break;
+                }
             };
 
             Grid.SetColumn(editor, column);
@@ -312,17 +317,21 @@ internal sealed class InlineMarkdownTableEditorFeature
         return button;
     }
 
-    private void UpdateCell(int tableOffset, int row, int column, string value)
+    private void CommitCell(int tableOffset, TableEditResult expectedEdit, int row, int column, string value)
     {
+        var cells = TableEditingEngine.NormalizeCells(expectedEdit.Cells);
+        row = Math.Clamp(row, 0, cells.Count - 1);
+        column = Math.Clamp(column, 0, cells[0].Count - 1);
+        if (string.Equals(cells[row][column], value, StringComparison.Ordinal)) return;
+
         Mutate(tableOffset, edit =>
         {
-            var cells = TableEditingEngine.NormalizeCells(edit.Cells);
-            row = Math.Clamp(row, 0, cells.Count - 1);
-            column = Math.Clamp(column, 0, cells[0].Count - 1);
-            cells[row][column] = value;
+            var current = TableEditingEngine.NormalizeCells(edit.Cells);
+            if (row >= current.Count || column >= current[0].Count) return edit;
+            current[row][column] = value;
             return edit with
             {
-                Cells = cells.Select(static current => (IReadOnlyList<string>)current.ToArray()).ToArray()
+                Cells = current.Select(static currentRow => (IReadOnlyList<string>)currentRow.ToArray()).ToArray()
             };
         });
     }

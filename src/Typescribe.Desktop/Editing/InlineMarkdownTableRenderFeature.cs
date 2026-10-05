@@ -277,7 +277,7 @@ internal sealed class InlineMarkdownTableRenderFeature
             var width = CurrentContext.TextView.Bounds.Width;
             var control = buildControl(table, width, hiddenSourceHeight);
 
-            var length = Math.Min(table.Length, document.TextLength - offset);
+            var length = Math.Min(line.Length, document.TextLength - offset);
             return length > 0 ? new InlineObjectElement(length, control) : null!;
         }
 

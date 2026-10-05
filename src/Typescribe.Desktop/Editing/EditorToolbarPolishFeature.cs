@@ -33,8 +33,8 @@ internal sealed class EditorToolbarPolishFeature
         window.Closed += feature.WindowClosed;
         feature.QueueApply();
 
-        // Canonical Markdown pipe tables are now edited as inline AvaloniaEdit objects.
-        // The Markdown text remains the source of truth; no masking or detached overlay surface.
+        // Canonical Markdown pipe tables stay in the manuscript, but authors edit them
+        // directly in the text flow through per-line inline controls.
         InlineMarkdownTableEditorFeature.Apply(window);
 
         // AvaloniaEdit 12 hardcodes visual-line paragraph direction to LTR. RTL manuscript lines
