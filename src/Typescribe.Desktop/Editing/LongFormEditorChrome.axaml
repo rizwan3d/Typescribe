@@ -117,7 +117,7 @@
         <StackPanel Orientation="Horizontal" Spacing="2">
           <TextBlock Classes="editor-command-group-label" Text="ZOOM" />
           <Button Classes="editor-command-button" Content="{Binding ZoomOut.ToolbarLabel}" Command="{Binding ZoomOut}" ToolTip.Tip="{Binding ZoomOut.ToolTip}" />
-          <TextBlock x:Name="ZoomText" MinWidth="46" VerticalAlignment="Center" TextAlignment="Center" FontSize="11.5" />
+          <TextBlock x:Name="ZoomTextElement" MinWidth="46" VerticalAlignment="Center" TextAlignment="Center" FontSize="11.5" />
           <Button Classes="editor-command-button" Content="{Binding ZoomIn.ToolbarLabel}" Command="{Binding ZoomIn}" ToolTip.Tip="{Binding ZoomIn.ToolTip}" />
           <Button Classes="editor-command-button" Content="{Binding ZoomReset.ToolbarLabel}" Command="{Binding ZoomReset}" ToolTip.Tip="{Binding ZoomReset.ToolTip}" />
         </StackPanel>
@@ -125,20 +125,20 @@
     </WrapPanel>
   </Border>
 
-  <Border x:Name="FindPanel" Grid.Row="1" Classes="editor-find-panel" IsVisible="False">
+  <Border x:Name="FindPanelElement" Grid.Row="1" Classes="editor-find-panel" IsVisible="False">
     <Grid RowDefinitions="Auto,Auto" Margin="10,7,10,8">
       <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="6">
-        <TextBox x:Name="FindBox" Watermark="Find in document" MinWidth="190" Height="30" VerticalContentAlignment="Center" Padding="8,2" />
-        <TextBlock x:Name="FindStatus" Grid.Column="1" MinWidth="72" VerticalAlignment="Center" Opacity="0.68" />
+        <TextBox x:Name="FindBoxElement" Watermark="Find in document" MinWidth="190" Height="30" VerticalContentAlignment="Center" Padding="8,2" />
+        <TextBlock x:Name="FindStatusElement" Grid.Column="1" MinWidth="72" VerticalAlignment="Center" Opacity="0.68" />
         <Button Grid.Column="2" Classes="editor-find-button" Content="{Binding FindPrevious.ToolbarLabel}" Command="{Binding FindPrevious}" ToolTip.Tip="{Binding FindPrevious.ToolTip}" />
         <Button Grid.Column="3" Classes="editor-find-button" Content="{Binding FindNext.ToolbarLabel}" Command="{Binding FindNext}" ToolTip.Tip="{Binding FindNext.ToolTip}" />
         <Button Grid.Column="4" Classes="editor-find-button" Content="{Binding CloseFind.ToolbarLabel}" Command="{Binding CloseFind}" ToolTip.Tip="{Binding CloseFind.ToolTip}" />
       </Grid>
 
       <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="7" Margin="0,6,0,0">
-        <TextBox x:Name="ReplaceBox" Watermark="Replace with" MinWidth="190" Height="30" VerticalContentAlignment="Center" Padding="8,2" />
-        <CheckBox x:Name="MatchCase" Grid.Column="1" Content="Match case" VerticalAlignment="Center" />
-        <CheckBox x:Name="WholeWord" Grid.Column="2" Content="Whole word" VerticalAlignment="Center" />
+        <TextBox x:Name="ReplaceBoxElement" Watermark="Replace with" MinWidth="190" Height="30" VerticalContentAlignment="Center" Padding="8,2" />
+        <CheckBox x:Name="MatchCaseElement" Grid.Column="1" Content="Match case" VerticalAlignment="Center" />
+        <CheckBox x:Name="WholeWordElement" Grid.Column="2" Content="Whole word" VerticalAlignment="Center" />
         <Button Grid.Column="3" Classes="editor-find-button" Content="{Binding ReplaceCurrent.ToolbarLabel}" Command="{Binding ReplaceCurrent}" ToolTip.Tip="{Binding ReplaceCurrent.ToolTip}" />
         <Button Grid.Column="4" Classes="editor-find-button" Content="{Binding ReplaceAll.ToolbarLabel}" Command="{Binding ReplaceAll}" ToolTip.Tip="{Binding ReplaceAll.ToolTip}" />
       </Grid>
@@ -151,8 +151,8 @@
 
   <Border x:Name="EditorStatusBar" Grid.Row="3" Classes="editor-status-bar">
     <Grid ColumnDefinitions="*,Auto" Margin="10,4,10,5" MinHeight="26">
-      <TextBlock x:Name="ContextText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-      <TextBlock x:Name="StatsText" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" Opacity="0.72" />
+      <TextBlock x:Name="ContextTextElement" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+      <TextBlock x:Name="StatsTextElement" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" Opacity="0.72" />
     </Grid>
   </Border>
 </Grid>
