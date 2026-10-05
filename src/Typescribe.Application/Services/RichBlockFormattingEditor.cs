@@ -54,31 +54,16 @@ public static class RichBlockFormattingEditor
     }
 
     public static string SetSection(string markdown, int sourceLine, SectionFormatting? section)
-        => Upsert(markdown, sourceLine, current => MergeOrRemove(current, section: section));
+        => Upsert(markdown, sourceLine, current => ReplaceSection(current, section));
 
     public static string SetParagraph(string markdown, int sourceLine, ParagraphFormatting? paragraph)
-        => Upsert(markdown, sourceLine, current => MergeOrRemove(current, paragraph: paragraph));
+        => Upsert(markdown, sourceLine, current => ReplaceParagraph(current, paragraph));
 
     public static string SetTextFrame(string markdown, int sourceLine, TextFrameFormatting? frame)
-        => Upsert(markdown, sourceLine, current => MergeOrRemove(current, textFrame: frame));
+        => Upsert(markdown, sourceLine, current => ReplaceTextFrame(current, frame));
 
     public static string SetAnchoredObject(string markdown, int sourceLine, AnchoredObjectFormatting? anchoredObject)
-        => Upsert(markdown, sourceLine, current => MergeOrRemove(current, anchoredObject: anchoredObject));
-
-    private static RichBlockFormatting? MergeOrRemove(
-        RichBlockFormatting? current,
-        ParagraphFormatting? paragraph = null,
-        SectionFormatting? section = null,
-        TextFrameFormatting? textFrame = null,
-        AnchoredObjectFormatting? anchoredObject = null)
-    {
-        var next = new RichBlockFormatting(
-            paragraph ?? current?.Paragraph,
-            section ?? current?.Section,
-            textFrame ?? current?.TextFrame,
-            anchoredObject ?? current?.AnchoredObject);
-        return IsEmpty(next) ? null : next;
-    }
+        => Upsert(markdown, sourceLine, current => ReplaceAnchoredObject(current, anchoredObject));
 
     public static RichBlockFormatting? ReplaceSection(RichBlockFormatting? current, SectionFormatting? section)
     {
