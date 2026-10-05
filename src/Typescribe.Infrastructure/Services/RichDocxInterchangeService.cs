@@ -228,7 +228,7 @@ public sealed class RichDocxInterchangeService
             var wordTabs = new XElement(W + "tabs");
             foreach (var tab in tabs)
             {
-                var alignment = tab.Alignment switch
+                var tabAlignment = tab.Alignment switch
                 {
                     TabStopAlignment.Center => "center",
                     TabStopAlignment.Right => "right",
@@ -236,7 +236,7 @@ public sealed class RichDocxInterchangeService
                     _ => "left"
                 };
                 var item = new XElement(W + "tab",
-                    new XAttribute(W + "val", alignment),
+                    new XAttribute(W + "val", tabAlignment),
                     new XAttribute(W + "pos", ToTwips(tab.PositionPoints).ToString(CultureInfo.InvariantCulture)));
                 if (tab.Leader is not null)
                     item.SetAttributeValue(W + "leader", tab.Leader == '.' ? "dot" : tab.Leader == '-' ? "hyphen" : "middleDot");
