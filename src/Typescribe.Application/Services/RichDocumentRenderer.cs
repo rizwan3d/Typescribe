@@ -105,15 +105,17 @@ public sealed class RichDocumentRenderer : IDocumentRenderer
             RichBlockFormatting? formatting)
         {
             var rewritten = RewriteInlines(inlines);
-            if (!latex || formatting?.Paragraph is not { } paragraph) return rewritten;
-            var character = EffectiveCharacterFormatting(paragraph);
+            if (!latex) return rewritten;
+
+            var character = EffectiveCharacterFormatting(formatting?.Paragraph, inlines.ToPlainText());
             if (character is null) return rewritten;
+
             var tokens = CreateTokens(character);
             return [new TextInline(tokens.Open), .. rewritten, new TextInline(tokens.Close)];
         }
 
         TableCell RewriteCell(TableCell cell)
-            => cell with { Inlines = RewriteInlines(cell.Inlines) };
+            => cell with { Inlines = ApplyParagraphFormatting(cell.Inlines, formatting: null) };
 
         AstBlock RewriteBlock(AstBlock block)
             => block switch
@@ -150,19 +152,40 @@ public sealed class RichDocumentRenderer : IDocumentRenderer
         return new RewriteResult(new DocumentAst(blocks), replacements, languages, requiresBidi);
     }
 
-    private static CharacterFormatting? EffectiveCharacterFormatting(ParagraphFormatting paragraph)
+    private static CharacterFormatting? EffectiveCharacterFormatting(ParagraphFormatting? paragraph, string text)
     {
-        var defaults = paragraph.CharacterDefaults ?? new CharacterFormatting();
-        var language = paragraph.Language ?? defaults.Language;
-        var script = paragraph.Script ?? defaults.Script;
-        var direction = paragraph.Direction ?? defaults.Direction;
-        var hasValues = defaults.Font is not null || defaults.FontSizePoints is not null ||
-                        defaults.Bold is not null || defaults.Italic is not null || defaults.Underline is not null ||
-                        defaults.SmallCaps is not null || defaults.Ligatures is not null || defaults.Kerning is not null ||
-                        defaults.TrackingEm is not null || defaults.BaselineShiftPoints is not null ||
-                        defaults.ColorHex is not null || defaults.OpenTypeFeatures is not null ||
-                        defaults.VariableAxes is not null || language is not null || script is not null || direction is not null;
-        return hasValues ? defaults with { Language = language, Script = script, Direction = direction } : null;
+        var defaults = paragraph?.CharacterDefaults ?? new CharacterFormatting();
+        var language = paragraph?.Language ?? defaults.Language;
+        var script = paragraph?.Script ?? defaults.Script;
+        var direction = paragraph?.Direction ?? defaults.Direction;
+
+        var hasExplicitValues = defaults.Font is not null || defaults.FontSizePoints is not null ||
+                                defaults.Bold is not null || defaults.Italic is not null || defaults.Underline is not null ||
+                                defaults.SmallCaps is not null || defaults.Ligatures is not null || defaults.Kerning is not null ||
+                                defaults.TrackingEm is not null || defaults.BaselineShiftPoints is not null ||
+                                defaults.ColorHex is not null || defaults.OpenTypeFeatures is not null ||
+                                defaults.VariableAxes is not null || language is not null || script is not null || direction is not null;
+
+        var effectiveScript = script is null or ScriptMode.Auto
+            ? UnicodeScriptClassifier.DetectScript(text, language)
+            : script.Value;
+        var inferredArabicScript = effectiveScript is ScriptMode.Arabic or ScriptMode.UrduNastaliq or ScriptMode.Persian;
+
+        // Plain Markdown has no rich formatting metadata. Still recognize Arabic-script blocks so
+        // publishing gets the same Unicode-driven language/direction behavior as the editor.
+        if (!hasExplicitValues && !inferredArabicScript)
+            return null;
+
+        var effectiveDirection = direction is null or TextDirectionMode.Auto
+            ? UnicodeScriptClassifier.DetectDirection(text)
+            : direction.Value;
+
+        return defaults with
+        {
+            Language = language,
+            Script = effectiveScript == ScriptMode.Auto ? script : effectiveScript,
+            Direction = effectiveDirection == TextDirectionMode.Auto ? direction : effectiveDirection
+        };
     }
 
     private static RenderedGroup RenderCharacterGroup(
@@ -188,6 +211,8 @@ public sealed class RichDocumentRenderer : IDocumentRenderer
 
         if (formatting.Font is { } font)
             AppendFontSpec(open, font, formatting, script);
+        else
+            AppendScriptFallbackFont(open, script);
 
         if (formatting.FontSizePoints is { } size && size > 0)
         {
@@ -263,6 +288,54 @@ public sealed class RichDocumentRenderer : IDocumentRenderer
         output.Append("\\fontspec");
         if (options.Count > 0) output.Append('[').Append(string.Join(',', options)).Append(']');
         output.Append('{').Append(EscapeFontSpecValue(target)).Append("} ");
+    }
+
+    private static void AppendScriptFallbackFont(StringBuilder output, ScriptMode script)
+    {
+        string[] candidates = script switch
+        {
+            ScriptMode.UrduNastaliq =>
+            [
+                "Noto Nastaliq Urdu",
+                "Awami Nastaliq",
+                "Jameel Noori Nastaleeq",
+                "Nafees Nastaleeq",
+                "Urdu Typesetting",
+                "Mehr Nastaliq Web",
+                "Noto Naskh Arabic",
+                "Amiri"
+            ],
+            ScriptMode.Persian =>
+            [
+                "Noto Naskh Arabic",
+                "Vazirmatn",
+                "Amiri",
+                "Noto Sans Arabic",
+                "Segoe UI"
+            ],
+            ScriptMode.Arabic =>
+            [
+                "Noto Naskh Arabic",
+                "Amiri",
+                "Scheherazade New",
+                "Noto Sans Arabic",
+                "Segoe UI"
+            ],
+            _ => []
+        };
+
+        if (candidates.Length == 0) return;
+
+        foreach (var candidate in candidates)
+        {
+            var escaped = EscapeFontSpecValue(candidate);
+            output.Append("\\IfFontExistsTF{").Append(escaped).Append("}{")
+                .Append("\\fontspec[Renderer=HarfBuzz,Script=Arabic]{").Append(escaped).Append("} ")
+                .Append("}{");
+        }
+
+        output.Append('}', candidates.Length);
+        output.Append(' ');
     }
 
     private static string InjectMultilingualPreamble(string latex, IReadOnlySet<string> languages)
