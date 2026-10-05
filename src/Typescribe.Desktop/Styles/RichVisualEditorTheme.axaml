@@ -4,6 +4,7 @@
 
   <!-- Writing canvas -->
   <Style Selector="local|ManuscriptEditor.rich-manuscript-editor">
+    <Setter Property="local:RichVisualEditingCorrections.IsEnabled" Value="True" />
     <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
