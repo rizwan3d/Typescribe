@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text;
+
 namespace Typescribe.Domain.Models;
 
 /// <summary>
@@ -204,27 +207,69 @@ public sealed record RichBlockFormatting(
     AnchoredObjectFormatting? AnchoredObject = null);
 
 /// <summary>
-/// Script heuristics used by the editor and exporters. Unicode BiDi remains the authority for
-/// mixed-direction runs; this helper only supplies a sensible paragraph default.
+/// Unicode first-strong-direction and script heuristics shared by the editor and exporters.
+/// This classifier never reorders, normalizes, joins, or otherwise mutates authored text: the
+/// platform text formatter remains responsible for the full Unicode BiDi algorithm and OpenType
+/// shaping. These helpers choose only the paragraph base direction and a sensible script/font hint.
 /// </summary>
 public static class UnicodeScriptClassifier
 {
-    public static bool IsArabicScript(char value)
-        => value is >= '\u0600' and <= '\u06FF'
-            or >= '\u0750' and <= '\u077F'
-            or >= '\u08A0' and <= '\u08FF'
-            or >= '\uFB50' and <= '\uFDFF'
-            or >= '\uFE70' and <= '\uFEFF';
+    private static readonly int[] UrduDistinctCodepoints =
+    [
+        0x0679, // TTEH
+        0x0688, // DDAL
+        0x0691, // RREH
+        0x06BA, // NOON GHUNNA
+        0x06BE, // HEH DOACHASHMEE
+        0x06D2, // YEH BARREE
+        0x06D3  // YEH BARREE WITH HAMZA ABOVE
+    ];
 
+    public static bool IsArabicScript(char value) => IsArabicScript(new Rune(value));
+
+    public static bool IsArabicScript(Rune value)
+    {
+        var codepoint = value.Value;
+        return codepoint is >= 0x0600 and <= 0x06FF
+            or >= 0x0750 and <= 0x077F
+            or >= 0x0870 and <= 0x089F
+            or >= 0x08A0 and <= 0x08FF
+            or >= 0xFB50 and <= 0xFDFF
+            or >= 0xFE70 and <= 0xFEFF
+            or >= 0x1EE00 and <= 0x1EEFF;
+    }
+
+    public static bool ContainsArabicScript(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (var rune in text.EnumerateRunes())
+            if (IsArabicScript(rune)) return true;
+        return false;
+    }
+
+    public static bool ContainsUrduDistinctCharacters(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (var rune in text.EnumerateRunes())
+            if (UrduDistinctCodepoints.Contains(rune.Value)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Implements the paragraph-level first-strong rule used to choose a base direction.
+    /// Neutral punctuation, Markdown markers, emoji and digits are ignored until a strong script
+    /// character is found. Full mixed-run ordering is delegated to Avalonia's text formatter.
+    /// </summary>
     public static TextDirectionMode DetectDirection(string? text)
     {
         if (string.IsNullOrEmpty(text)) return TextDirectionMode.Auto;
-        foreach (var value in text)
+
+        foreach (var rune in text.EnumerateRunes())
         {
-            if (IsArabicScript(value) || value is >= '\u0590' and <= '\u05FF')
-                return TextDirectionMode.RightToLeft;
-            if (char.IsLetter(value)) return TextDirectionMode.LeftToRight;
+            if (IsRightToLeftStrong(rune)) return TextDirectionMode.RightToLeft;
+            if (IsLeftToRightStrong(rune)) return TextDirectionMode.LeftToRight;
         }
+
         return TextDirectionMode.Auto;
     }
 
@@ -235,11 +280,69 @@ public static class UnicodeScriptClassifier
             if (language.StartsWith("ur", StringComparison.OrdinalIgnoreCase)) return ScriptMode.UrduNastaliq;
             if (language.StartsWith("fa", StringComparison.OrdinalIgnoreCase)) return ScriptMode.Persian;
             if (language.StartsWith("ar", StringComparison.OrdinalIgnoreCase)) return ScriptMode.Arabic;
+            if (language.StartsWith("he", StringComparison.OrdinalIgnoreCase) ||
+                language.StartsWith("yi", StringComparison.OrdinalIgnoreCase)) return ScriptMode.Hebrew;
         }
 
         if (string.IsNullOrEmpty(text)) return ScriptMode.Auto;
-        foreach (var value in text)
-            if (IsArabicScript(value)) return ScriptMode.Arabic;
-        return ScriptMode.Latin;
+        if (ContainsUrduDistinctCharacters(text)) return ScriptMode.UrduNastaliq;
+
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (IsHebrew(rune)) return ScriptMode.Hebrew;
+            if (IsArabicScript(rune))
+                return ContainsPersianDistinctCharacters(text) ? ScriptMode.Persian : ScriptMode.Arabic;
+            if (IsDevanagari(rune)) return ScriptMode.Devanagari;
+            if (IsCjk(rune)) return ScriptMode.Cjk;
+            if (Rune.IsLetter(rune)) return ScriptMode.Latin;
+        }
+
+        return ScriptMode.Auto;
+    }
+
+    public static bool IsRtlLanguage(string? language)
+        => !string.IsNullOrWhiteSpace(language) &&
+           (language.StartsWith("ar", StringComparison.OrdinalIgnoreCase) ||
+            language.StartsWith("ur", StringComparison.OrdinalIgnoreCase) ||
+            language.StartsWith("fa", StringComparison.OrdinalIgnoreCase) ||
+            language.StartsWith("he", StringComparison.OrdinalIgnoreCase) ||
+            language.StartsWith("yi", StringComparison.OrdinalIgnoreCase) ||
+            language.StartsWith("ps", StringComparison.OrdinalIgnoreCase) ||
+            language.StartsWith("sd", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsRightToLeftStrong(Rune rune)
+        => IsArabicScript(rune) || IsHebrew(rune) || IsSyriac(rune) || IsThaana(rune) || IsNko(rune);
+
+    private static bool IsLeftToRightStrong(Rune rune)
+    {
+        var category = Rune.GetUnicodeCategory(rune);
+        return category is UnicodeCategory.UppercaseLetter
+            or UnicodeCategory.LowercaseLetter
+            or UnicodeCategory.TitlecaseLetter
+            or UnicodeCategory.ModifierLetter
+            or UnicodeCategory.OtherLetter
+            or UnicodeCategory.LetterNumber;
+    }
+
+    private static bool IsHebrew(Rune rune) => rune.Value is >= 0x0590 and <= 0x05FF;
+    private static bool IsSyriac(Rune rune) => rune.Value is >= 0x0700 and <= 0x074F;
+    private static bool IsThaana(Rune rune) => rune.Value is >= 0x0780 and <= 0x07BF;
+    private static bool IsNko(Rune rune) => rune.Value is >= 0x07C0 and <= 0x07FF;
+    private static bool IsDevanagari(Rune rune) => rune.Value is >= 0x0900 and <= 0x097F;
+
+    private static bool IsCjk(Rune rune)
+        => rune.Value is >= 0x3400 and <= 0x4DBF
+            or >= 0x4E00 and <= 0x9FFF
+            or >= 0xF900 and <= 0xFAFF
+            or >= 0x20000 and <= 0x2FA1F;
+
+    private static bool ContainsPersianDistinctCharacters(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (rune.Value is 0x067E or 0x0686 or 0x0698 or 0x06AF)
+                return true;
+        }
+        return false;
     }
 }

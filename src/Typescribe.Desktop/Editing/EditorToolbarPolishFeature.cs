@@ -37,9 +37,19 @@ internal sealed class EditorToolbarPolishFeature
         // The Markdown text remains the source of truth; no masking or detached overlay surface.
         InlineMarkdownTableEditorFeature.Apply(window);
 
+        // AvaloniaEdit 12 hardcodes visual-line paragraph direction to LTR. RTL manuscript lines
+        // therefore use a native in-flow Avalonia TextBox so Unicode BiDi, shaping and caret
+        // navigation are handled by the platform text formatter without reordering source text.
+        InlineBidiParagraphEditorFeature.Apply(window);
+
         // Character/paragraph typography uses hidden, Markdown-safe metadata rather than a
         // parallel binary document model. System/project fonts and multilingual intent share it.
         RichTypographyInspectorFeature.Apply(window);
+        BidiInspectorStatusFeature.Apply(window);
+
+        // Ctrl/Cmd+C/X/V now exchanges TypeScribe rich Markdown together with HTML, RTF and
+        // plain Unicode so Word, LibreOffice, browsers and other TypeScribe windows interoperate.
+        RichClipboardFeature.Apply(window);
     }
 
     private void WindowOpened(object? sender, EventArgs e) => QueueApply();

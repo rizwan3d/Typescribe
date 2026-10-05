@@ -1,0 +1,141 @@
+using System.IO.Compression;
+using System.Text;
+using System.Xml.Linq;
+using Typescribe.Application.Abstractions;
+using Typescribe.Application.Services;
+using Typescribe.Domain.Models;
+using Typescribe.Infrastructure.Services;
+
+static void Require(bool condition, string message)
+{
+    if (!condition) throw new InvalidOperationException(message);
+}
+
+static string ReadZipEntry(string path, string entryPath)
+{
+    using var archive = ZipFile.OpenRead(path);
+    var entry = archive.GetEntry(entryPath) ?? throw new InvalidOperationException($"Missing ZIP entry: {entryPath}");
+    using var reader = new StreamReader(entry.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+    return reader.ReadToEnd();
+}
+
+var parser = new EmojiDocumentParser(new AdvancedDocumentParser());
+var projectRoot = Path.Combine(Path.GetTempPath(), "typescribe-interchange-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(projectRoot);
+Directory.CreateDirectory(Path.Combine(projectRoot, "fonts"));
+
+try
+{
+    var root = new ProjectNode("book", "Interchange smoke", NodeKind.Book);
+    var chapter = new ProjectNode("chapter-1", "Multilingual", NodeKind.Chapter, "chapter-1.md");
+    root.AddChild(chapter);
+    var project = new BookProject
+    {
+        RootPath = projectRoot,
+        Title = "Interchange smoke",
+        Author = "TypeScribe",
+        Language = "ur-PK",
+        Root = root
+    };
+
+    var paragraph = new ParagraphFormatting(
+        CharacterDefaults: new CharacterFormatting(
+            Font: new FontReference("Noto Nastaliq Urdu", FontSourceKind.Project, "fonts/NotoNastaliqUrdu.ttf"),
+            FontSizePoints: 16,
+            Language: "ur-PK",
+            Script: ScriptMode.UrduNastaliq,
+            Direction: TextDirectionMode.RightToLeft),
+        Alignment: TextAlignmentMode.Right,
+        Direction: TextDirectionMode.RightToLeft,
+        Language: "ur-PK",
+        Script: ScriptMode.UrduNastaliq,
+        LineSpacing: 1.35,
+        SpaceAfterPoints: 7,
+        KeepWithNext: true,
+        KeepLinesTogether: true,
+        Tabs: [new TabStop(72, TabStopAlignment.Right, '.')]);
+
+    var characters = new CharacterFormatting(
+        Font: new FontReference("Noto Nastaliq Urdu", FontSourceKind.Project, "fonts/NotoNastaliqUrdu.ttf"),
+        FontSizePoints: 18,
+        Bold: true,
+        Underline: true,
+        SmallCaps: true,
+        Ligatures: true,
+        Kerning: true,
+        TrackingEm: .03,
+        Language: "ur-PK",
+        Script: ScriptMode.UrduNastaliq,
+        Direction: TextDirectionMode.RightToLeft,
+        OpenTypeFeatures: [new OpenTypeFeatureSetting("liga", 1), new OpenTypeFeatureSetting("kern", 1)],
+        VariableAxes: [new VariableFontAxisSetting("wght", 500)]);
+
+    var source = RichMarkdownFormattingCodec.CreateBlockMetadata(new RichBlockFormatting(Paragraph: paragraph))
+        + Environment.NewLine
+        + RichMarkdownFormattingCodec.WrapInline("اردو", characters)
+        + " English 123";
+
+    // Clipboard: TypeScribe -> HTML/RTF/plain keeps logical Unicode order and rich semantics.
+    var clipboard = RichClipboardCodec.Export(source, parser);
+    Require(clipboard.PlainText.Contains("اردو English 123", StringComparison.Ordinal), "Clipboard plain text changed logical Unicode order.");
+    Require(clipboard.Html.Contains("dir=\"rtl\"", StringComparison.Ordinal), "Clipboard HTML did not preserve RTL direction.");
+    Require(clipboard.Html.Contains("font-feature-settings", StringComparison.Ordinal), "Clipboard HTML did not preserve OpenType settings.");
+    Require(clipboard.Html.Contains("font-variation-settings", StringComparison.Ordinal), "Clipboard HTML did not preserve variable-font axes.");
+
+    var htmlImport = RichClipboardCodec.Import(null, Encoding.UTF8.GetBytes(clipboard.Html), null, null);
+    Require(htmlImport.Markdown.Contains("اردو", StringComparison.Ordinal), "HTML clipboard import lost Urdu text.");
+    Require(htmlImport.Markdown.Contains(RichMarkdownFormattingCodec.InlinePrefix, StringComparison.Ordinal), "HTML clipboard import lost rich inline metadata.");
+
+    var rtfImport = RichClipboardCodec.Import(null, null, clipboard.Rtf, null);
+    Require(rtfImport.Markdown.Contains("اردو", StringComparison.Ordinal), "RTF clipboard import lost Urdu text.");
+    Require(rtfImport.Markdown.Contains(RichMarkdownFormattingCodec.InlinePrefix, StringComparison.Ordinal), "RTF clipboard import lost rich inline metadata.");
+
+    var privateImport = RichClipboardCodec.Import(source, null, null, null);
+    Require(string.Equals(privateImport.Markdown, source, StringComparison.Ordinal), "TypeScribe private clipboard flavor was not exact.");
+
+    // DOCX: inspect actual WordprocessingML and then import back to rich Markdown.
+    var docxPath = Path.Combine(projectRoot, "rich.docx");
+    var docx = new RichDocxInterchangeService(parser, new BibTeXDatabase());
+    await docx.ExportAsync(project, [(chapter, source)], docxPath);
+    var wordXml = XDocument.Parse(ReadZipEntry(docxPath, "word/document.xml"));
+    XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    Require(wordXml.Descendants(w + "bidi").Any(), "DOCX paragraph direction was not written.");
+    Require(wordXml.Descendants(w + "rtl").Any(), "DOCX run RTL property was not written.");
+    Require(wordXml.Descendants(w + "rFonts").Any(element =>
+        string.Equals((string?)element.Attribute(w + "cs"), "Noto Nastaliq Urdu", StringComparison.Ordinal)), "DOCX font family was not written.");
+    Require(wordXml.Descendants(w + "lang").Any(element =>
+        string.Equals((string?)element.Attribute(w + "bidi"), "ur-PK", StringComparison.OrdinalIgnoreCase)), "DOCX language metadata was not written.");
+    Require(wordXml.Descendants(w + "u").Any(), "DOCX underline was not written.");
+    Require(wordXml.Descendants(w + "smallCaps").Any(), "DOCX small caps were not written.");
+    Require(string.Concat(wordXml.Descendants(w + "t").Select(static node => node.Value)).Contains("اردو English 123", StringComparison.Ordinal), "DOCX changed logical Unicode text.");
+    Require(docx.LastWarnings.Any(), "DOCX unsupported OpenType/variable settings should produce warnings.");
+
+    var importedDocx = await docx.ImportAsync(project, docxPath);
+    Require(importedDocx.Contains("اردو", StringComparison.Ordinal), "DOCX import lost Urdu text.");
+    Require(importedDocx.Contains(RichMarkdownFormattingCodec.BlockPrefix, StringComparison.Ordinal), "DOCX import did not recreate paragraph metadata.");
+    Require(importedDocx.Contains(RichMarkdownFormattingCodec.InlinePrefix, StringComparison.Ordinal), "DOCX import did not recreate character metadata.");
+
+    // EPUB: inspect emitted XHTML/CSS. The unapproved project font must not be copied.
+    var epubPath = args.Length > 0 ? Path.GetFullPath(args[0]) : Path.Combine(projectRoot, "rich.epub");
+    var epub = new RichEpub3ExportService(parser);
+    await epub.ExportAsync(project, [new EpubDocumentSource(chapter, source)], epubPath);
+    var xhtml = XDocument.Parse(ReadZipEntry(epubPath, "chapters/chapter-001.xhtml"));
+    XNamespace xhtmlNs = "http://www.w3.org/1999/xhtml";
+    Require(xhtml.Descendants().Any(element => string.Equals((string?)element.Attribute("dir"), "rtl", StringComparison.Ordinal)), "EPUB did not preserve RTL direction.");
+    Require(xhtml.Descendants().Any(element => string.Equals((string?)element.Attribute("lang"), "ur-PK", StringComparison.OrdinalIgnoreCase)), "EPUB did not preserve language.");
+    Require(xhtml.Descendants(xhtmlNs + "span").Any(element => ((string?)element.Attribute("style"))?.Contains("font-feature-settings", StringComparison.Ordinal) == true), "EPUB did not preserve OpenType feature CSS.");
+    Require(xhtml.Descendants(xhtmlNs + "span").Any(element => ((string?)element.Attribute("style"))?.Contains("font-variation-settings", StringComparison.Ordinal) == true), "EPUB did not preserve variable-font CSS.");
+    Require(string.Concat(xhtml.DescendantNodes().OfType<XText>().Select(static node => node.Value)).Contains("اردو English 123", StringComparison.Ordinal), "EPUB changed logical Unicode text.");
+    Require(epub.LastWarnings.Any(warning => warning.Contains("not embedded", StringComparison.OrdinalIgnoreCase)), "EPUB should warn when a project font is not explicitly approved for embedding.");
+    using (var package = ZipFile.OpenRead(epubPath))
+        Require(!package.Entries.Any(entry => entry.FullName.StartsWith("fonts/", StringComparison.Ordinal)), "EPUB embedded an unapproved project font.");
+
+    Console.WriteLine("TypeScribe rich interchange smoke fixtures passed.");
+}
+finally
+{
+    // Keep an explicitly requested EPUB output for EPUBCheck; clean only the temporary project.
+    var requestedOutput = args.Length > 0 ? Path.GetFullPath(args[0]) : null;
+    if (requestedOutput is not null && requestedOutput.StartsWith(projectRoot, StringComparison.Ordinal)) requestedOutput = null;
+    try { Directory.Delete(projectRoot, recursive: true); } catch { }
+}
