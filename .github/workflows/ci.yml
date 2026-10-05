@@ -28,6 +28,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project tools/Typescribe.BidiSmoke/Typescribe.BidiSmoke.csproj -c Release
       - name: Validate rich clipboard DOCX EPUB interchange
+        run: dotnet run --project tools/Typescribe.InterchangeSmoke/Typescribe.InterchangeSmoke.csproj -c Release
+      - name: Generate rich EPUB for EPUBCheck
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project tools/Typescribe.InterchangeSmoke/Typescribe.InterchangeSmoke.csproj -c Release -- /tmp/typescribe-rich-smoke.epub
       - name: Validate lazy project loading
