@@ -188,11 +188,6 @@ internal sealed class InlineMarkdownTableRenderFeature
             ? Math.Max(260, availableWidth - 28)
             : 680;
 
-        // Every Markdown source row must remain a real AvaloniaEdit document line. Trying to
-        // consume or collapse those rows causes layout exceptions when scrolling/re-measuring.
-        // Compensate their unavoidable default line-height in the inline control's bottom margin
-        // instead. The hidden source lines still exist for the editor, while the total visual
-        // height remains approximately the rendered table's natural height.
         var bottomMargin = 7 - Math.Max(0, hiddenSourceHeight);
         var surface = new Border
         {
@@ -276,8 +271,6 @@ internal sealed class InlineMarkdownTableRenderFeature
             var width = CurrentContext.TextView.Bounds.Width;
             var control = buildControl(table, width, hiddenSourceHeight);
 
-            // Only consume the anchor source line. All later Markdown rows remain ordinary
-            // document lines so AvaloniaEdit's visual-line invariants are never violated.
             return new InlineObjectElement(line.Length, control);
         }
     }
@@ -305,9 +298,6 @@ internal sealed class InlineMarkdownTableRenderFeature
                 ChangeLinePart(start, end, element =>
                 {
                     element.TextRunProperties.SetForegroundBrush(Brushes.Transparent);
-                    // Keep hidden source rows narrow enough that they cannot word-wrap and add
-                    // extra visual lines. AvaloniaEdit still assigns one default line-height to
-                    // each row; the inline table's negative bottom margin compensates for that.
                     if (!anchorLine) element.TextRunProperties.SetFontRenderingEmSize(1);
                 });
                 return;
