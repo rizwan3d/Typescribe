@@ -6,7 +6,7 @@ public abstract record AstBlock(int SourceLine)
 {
     /// <summary>
     /// Optional Markdown-first rich formatting attached to this semantic block. The source stays
-    /// ordinary Markdown; AdvancedDocumentParser hydrates this value from a preceding
+    /// ordinary Markdown; RichDocumentParser hydrates this value from a preceding
     /// typescribe:block64 metadata comment.
     /// </summary>
     public RichBlockFormatting? Formatting { get; init; }
@@ -101,7 +101,14 @@ public sealed record FootnoteDefinitionBlock(
 public sealed record BibliographyEntryBlock(int SourceLine, BibliographyEntry Entry) : AstBlock(SourceLine);
 
 public abstract record AstInline;
-public sealed record TextInline(string Text) : AstInline;
+
+/// <summary>
+/// Plain semantic text. This record is intentionally non-sealed so richer text ranges can remain
+/// backward-compatible with exporters that only understand TextInline while rich-aware exporters
+/// can still inspect their additional semantics.
+/// </summary>
+public record TextInline(string Text) : AstInline;
+
 public sealed record StrongInline(IReadOnlyList<AstInline> Children) : AstInline;
 public sealed record EmphasisInline(IReadOnlyList<AstInline> Children) : AstInline;
 public sealed record CodeInline(string Text) : AstInline;
@@ -113,12 +120,14 @@ public sealed record CrossReferenceInline(string Identifier) : AstInline;
 
 /// <summary>
 /// A character-formatted inline range decoded from TypeScribe's paired Markdown metadata
-/// comments. Children retain normal Markdown semantics (strong/emphasis/link/etc.) so exporters
-/// can apply typography without flattening the authored structure.
+/// comments. Children retain normal Markdown semantics (strong/emphasis/link/etc.) so rich-aware
+/// exporters can apply typography without flattening authored structure. It also derives from
+/// TextInline using the plain Unicode text as a compatibility fallback, so older exporters never
+/// drop the content merely because they do not know the richer node yet.
 /// </summary>
 public sealed record RichSpanInline(
     IReadOnlyList<AstInline> Children,
-    CharacterFormatting Formatting) : AstInline;
+    CharacterFormatting Formatting) : TextInline(Children.ToPlainText());
 
 public static class AstInlineText
 {
@@ -135,6 +144,9 @@ public static class AstInlineText
         {
             switch (inline)
             {
+                case RichSpanInline rich:
+                    AppendPlainText(writer, rich.Children);
+                    break;
                 case TextInline text:
                     writer.Append(text.Text);
                     break;
@@ -164,9 +176,6 @@ public static class AstInlineText
                     break;
                 case CrossReferenceInline reference:
                     writer.Append("[@ref:").Append(reference.Identifier).Append(']');
-                    break;
-                case RichSpanInline rich:
-                    AppendPlainText(writer, rich.Children);
                     break;
             }
         }
