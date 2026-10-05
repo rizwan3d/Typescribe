@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 using Avalonia.Input;
 using AvaloniaEdit.Document;
+using Typescribe.Application.Services;
+using Typescribe.Domain.Models;
 
 namespace Typescribe.Desktop.Editing;
 
@@ -26,7 +28,9 @@ internal static class RichFormattingEngine
         bool Quote,
         bool BulletList,
         bool NumberedList,
-        bool Link);
+        bool Link,
+        TextDirectionMode? Direction,
+        TextAlignmentMode? Alignment);
 
     public readonly record struct LinkRange(int Offset, int Length, string Label, string Url);
 
@@ -51,7 +55,9 @@ internal static class RichFormattingEngine
             Quote: marker == ">",
             BulletList: marker is "-" or "*" or "+",
             NumberedList: marker.Length > 1 && char.IsDigit(marker[0]),
-            Link: TryGetLinkRange(editor, out _));
+            Link: TryGetLinkRange(editor, out _),
+            Direction: ReadParagraphFormatting(editor, line)?.Direction,
+            Alignment: ReadParagraphFormatting(editor, line)?.Alignment);
     }
 
     public static void ToggleBold(ManuscriptEditor editor) => ToggleInline(editor, "**");
@@ -61,6 +67,9 @@ internal static class RichFormattingEngine
     public static void ToggleQuote(ManuscriptEditor editor) => TogglePrefix(editor, PrefixKind.Quote);
     public static void ToggleBulletList(ManuscriptEditor editor) => TogglePrefix(editor, PrefixKind.Bullet);
     public static void ToggleNumberedList(ManuscriptEditor editor) => TogglePrefix(editor, PrefixKind.Numbered);
+    public static void ToggleRightToLeft(ManuscriptEditor editor) => ToggleDirection(editor, TextDirectionMode.RightToLeft);
+    public static void SetAlignment(ManuscriptEditor editor, TextAlignmentMode alignment) => RewriteSelectedParagraphs(editor, paragraph =>
+        Normalize(paragraph with { Alignment = alignment }));
 
     public static bool TryHandleEditingKey(ManuscriptEditor editor, KeyEventArgs e)
     {
@@ -389,6 +398,72 @@ internal static class RichFormattingEngine
         var endLine = editor.Document.GetLineByOffset(Math.Min(Math.Max(0, endLookup), maxOffset));
         return Enumerable.Range(startLine.LineNumber, endLine.LineNumber - startLine.LineNumber + 1).ToArray();
     }
+
+    private static void ToggleDirection(ManuscriptEditor editor, TextDirectionMode direction)
+    {
+        RewriteSelectedParagraphs(editor, paragraph =>
+        {
+            TextDirectionMode? nextDirection = paragraph.Direction == direction ? null : direction;
+            return Normalize(paragraph with { Direction = nextDirection });
+        });
+    }
+
+    private static void RewriteSelectedParagraphs(ManuscriptEditor editor, Func<ParagraphFormatting, ParagraphFormatting?> update)
+    {
+        if (editor.IsReadOnly || editor.Document.LineCount == 0) return;
+        var lineNumbers = SelectedLineNumbers(editor)
+            .Where(number => !IsMetadataLine(editor.Document, number))
+            .OrderByDescending(static number => number)
+            .ToArray();
+        if (lineNumbers.Length == 0) return;
+
+        editor.Document.BeginUpdate();
+        try
+        {
+            foreach (var lineNumber in lineNumbers)
+            {
+                var markdown = editor.Document.Text;
+                var rewritten = RichBlockFormattingEditor.Upsert(
+                    markdown,
+                    lineNumber,
+                    current =>
+                    {
+                        var currentParagraph = current?.Paragraph ?? new ParagraphFormatting();
+                        var nextParagraph = update(currentParagraph);
+                        return RichBlockFormattingEditor.ReplaceParagraph(current, nextParagraph);
+                    });
+
+                if (!string.Equals(markdown, rewritten, StringComparison.Ordinal))
+                    editor.Document.Text = rewritten;
+            }
+        }
+        finally
+        {
+            editor.Document.EndUpdate();
+        }
+        editor.Focus();
+    }
+
+    private static ParagraphFormatting? ReadParagraphFormatting(ManuscriptEditor editor, DocumentLine line)
+    {
+        var previous = line.PreviousLine;
+        if (previous is null || previous.Length <= 0) return null;
+        var text = editor.Document.GetText(previous.Offset, previous.Length);
+        return RichMarkdownFormattingCodec.TryReadBlockMetadata(text, out var block)
+            ? block?.Paragraph
+            : null;
+    }
+
+    private static bool IsMetadataLine(TextDocument document, int lineNumber)
+    {
+        var line = document.GetLineByNumber(lineNumber);
+        if (line.Length <= 0) return false;
+        var text = document.GetText(line.Offset, line.Length);
+        return RichMarkdownFormattingCodec.IsBlockMetadata(text);
+    }
+
+    private static ParagraphFormatting? Normalize(ParagraphFormatting paragraph)
+        => paragraph == new ParagraphFormatting() ? null : paragraph;
 
     private static bool PrefixMatches(string text, PrefixKind kind)
     {

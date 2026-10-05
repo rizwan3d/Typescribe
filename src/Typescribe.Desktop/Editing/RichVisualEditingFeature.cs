@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
+using Typescribe.Domain.Models;
 using Typescribe.Desktop.ViewModels;
 
 namespace Typescribe.Desktop.Editing;
@@ -168,6 +169,10 @@ internal sealed class RichVisualEditingFeature
         row.Children.Add(FloatingFormatButton("•", "Toggle bullet list", "bullet", () => RichFormattingEngine.ToggleBulletList(_editor)));
         row.Children.Add(FloatingFormatButton("1.", "Toggle numbered list", "numbered", () => RichFormattingEngine.ToggleNumberedList(_editor)));
         row.Children.Add(FloatingFormatButton("❝", "Toggle block quote", "quote", () => RichFormattingEngine.ToggleQuote(_editor)));
+        row.Children.Add(FloatingFormatButton("RTL", "Toggle right-to-left paragraph direction", "rtl", () => RichFormattingEngine.ToggleRightToLeft(_editor)));
+        row.Children.Add(FloatingFormatButton("L", "Align paragraph left", "align-left", () => RichFormattingEngine.SetAlignment(_editor, TextAlignmentMode.Left)));
+        row.Children.Add(FloatingFormatButton("C", "Align paragraph center", "align-center", () => RichFormattingEngine.SetAlignment(_editor, TextAlignmentMode.Center)));
+        row.Children.Add(FloatingFormatButton("R", "Align paragraph right", "align-right", () => RichFormattingEngine.SetAlignment(_editor, TextAlignmentMode.Right)));
         row.Children.Add(FloatingAsyncButton("Link", "Insert or edit link (Ctrl+K)", "link", EditLinkAsync));
         row.Children.Add(FloatingFormatButton("Unlink", "Remove link but keep its text", "unlink", () => RichFormattingEngine.Unlink(_editor)));
         row.Children.Add(FloatingFormatButton("Clear", "Clear formatting", "clear", () => RichFormattingEngine.ClearFormatting(_editor)));
@@ -694,6 +699,10 @@ internal sealed class RichVisualEditingFeature
                 Margin = new Thickness(1, 0, 4, 0)
             });
             groupRow.Children.Add(ToolbarFormatButton("H3", "Toggle Heading 3", "h3", () => RichFormattingEngine.ToggleHeading(_editor!, 3)));
+            groupRow.Children.Add(ToolbarFormatButton("RTL", "Toggle right-to-left paragraph direction", "rtl", () => RichFormattingEngine.ToggleRightToLeft(_editor!)));
+            groupRow.Children.Add(ToolbarFormatButton("L", "Align paragraph left", "align-left", () => RichFormattingEngine.SetAlignment(_editor!, TextAlignmentMode.Left)));
+            groupRow.Children.Add(ToolbarFormatButton("C", "Align paragraph center", "align-center", () => RichFormattingEngine.SetAlignment(_editor!, TextAlignmentMode.Center)));
+            groupRow.Children.Add(ToolbarFormatButton("R", "Align paragraph right", "align-right", () => RichFormattingEngine.SetAlignment(_editor!, TextAlignmentMode.Right)));
             groupRow.Children.Add(ToolbarAsyncButton("Link", "Edit link (Ctrl+K)", "link", EditLinkAsync));
             groupRow.Children.Add(ToolbarFormatButton("Unlink", "Remove current link", "unlink", () => RichFormattingEngine.Unlink(_editor!)));
             groupRow.Children.Add(ToolbarFormatButton("Clear", "Clear formatting", "clear", () => RichFormattingEngine.ClearFormatting(_editor!)));
@@ -798,6 +807,10 @@ internal sealed class RichVisualEditingFeature
         SetFormatState("numbered", state.NumberedList);
         SetFormatState("link", state.Link);
         SetFormatState("unlink", state.Link);
+        SetFormatState("rtl", state.Direction == TextDirectionMode.RightToLeft);
+        SetFormatState("align-left", state.Alignment == TextAlignmentMode.Left);
+        SetFormatState("align-center", state.Alignment == TextAlignmentMode.Center);
+        SetFormatState("align-right", state.Alignment == TextAlignmentMode.Right);
 
         if (_selectionControls.TryGetValue("unlink", out var unlink)) unlink.IsEnabled = state.Link;
         if (_toolbarControls.TryGetValue("unlink", out var toolbarUnlink)) toolbarUnlink.IsEnabled = state.Link;
