@@ -1,5 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using AvaloniaTextBlock = Avalonia.Controls.TextBlock;
+using AvaloniaTextBox = Avalonia.Controls.TextBox;
 
 namespace Typescribe.Desktop.Editing;
 
@@ -22,14 +24,14 @@ public sealed partial class LongFormEditorChrome : Grid
     internal Border CommandBar => Require<Border>("EditorCommandBar");
     internal Border FindPanel => Require<Border>("FindPanelElement");
     internal Border StatusBar => Require<Border>("EditorStatusBar");
-    internal TextBox FindBox => Require<TextBox>("FindBoxElement");
-    internal TextBox ReplaceBox => Require<TextBox>("ReplaceBoxElement");
+    internal AvaloniaTextBox FindBox => Require<AvaloniaTextBox>("FindBoxElement");
+    internal AvaloniaTextBox ReplaceBox => Require<AvaloniaTextBox>("ReplaceBoxElement");
     internal CheckBox MatchCase => Require<CheckBox>("MatchCaseElement");
     internal CheckBox WholeWord => Require<CheckBox>("WholeWordElement");
-    internal TextBlock FindStatus => Require<TextBlock>("FindStatusElement");
-    internal TextBlock ContextText => Require<TextBlock>("ContextTextElement");
-    internal TextBlock StatsText => Require<TextBlock>("StatsTextElement");
-    internal TextBlock ZoomText => Require<TextBlock>("ZoomTextElement");
+    internal AvaloniaTextBlock FindStatus => Require<AvaloniaTextBlock>("FindStatusElement");
+    internal AvaloniaTextBlock ContextText => Require<AvaloniaTextBlock>("ContextTextElement");
+    internal AvaloniaTextBlock StatsText => Require<AvaloniaTextBlock>("StatsTextElement");
+    internal AvaloniaTextBlock ZoomText => Require<AvaloniaTextBlock>("ZoomTextElement");
 
     internal void SetEditor(ManuscriptEditor editor)
     {
