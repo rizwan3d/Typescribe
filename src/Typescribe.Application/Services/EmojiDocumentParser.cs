@@ -114,11 +114,13 @@ public sealed class EmojiDocumentParser : IDocumentParser
     private static AstInline RewriteInline(AstInline inline)
         => inline switch
         {
+            // RichSpanInline derives from TextInline for backward-compatible exporters, so this
+            // case must precede the general TextInline case to retain the rich semantics.
+            RichSpanInline rich => rich with { Children = RewriteInlines(rich.Children) },
             TextInline text => text with { Text = Expand(text.Text) },
             StrongInline strong => strong with { Children = RewriteInlines(strong.Children) },
             EmphasisInline emphasis => emphasis with { Children = RewriteInlines(emphasis.Children) },
             LinkInline link => link with { Label = RewriteInlines(link.Label) },
-            RichSpanInline rich => rich with { Children = RewriteInlines(rich.Children) },
             _ => inline
         };
 
