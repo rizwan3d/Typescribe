@@ -65,10 +65,9 @@ public static class PagedLayoutSourceMapper
     {
         var span = GetEditableSpan(source, document, sourceBlockIndex);
         replacement ??= string.Empty;
-        return string.Concat(
-            source.AsSpan(0, span.StartOffset),
-            replacement,
-            source.AsSpan(span.StartOffset + span.Length));
+        return source[..span.StartOffset] +
+               replacement +
+               source[(span.StartOffset + span.Length)..];
     }
 
     private sealed class LineIndex
