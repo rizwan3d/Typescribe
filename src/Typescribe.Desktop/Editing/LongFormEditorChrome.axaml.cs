@@ -17,19 +17,19 @@ public sealed partial class LongFormEditorChrome : Grid
         : this()
         => DataContext = commands ?? throw new ArgumentNullException(nameof(commands));
 
-    // Avalonia's name generator creates members for every x:Name. Expose stable aliases with
-    // distinct names so LongFormEditorFeature never needs to search the visual tree.
-    internal Border CommandBarControl => EditorCommandBar;
-    internal Border FindPanelControl => FindPanel;
-    internal Border StatusBarControl => EditorStatusBar;
-    internal TextBox FindBoxControl => FindBox;
-    internal TextBox ReplaceBoxControl => ReplaceBox;
-    internal CheckBox MatchCaseControl => MatchCase;
-    internal CheckBox WholeWordControl => WholeWord;
-    internal TextBlock FindStatusText => FindStatus;
-    internal TextBlock ContextStatusText => ContextText;
-    internal TextBlock StatisticsText => StatsText;
-    internal TextBlock ZoomStatusText => ZoomText;
+    // Avalonia generates members for x:Name elements. These semantic aliases give the editor
+    // feature a small stable API without any visual-tree queries or generated-name collisions.
+    internal Border CommandBar => EditorCommandBar;
+    internal Border FindPanel => FindPanelElement;
+    internal Border StatusBar => EditorStatusBar;
+    internal TextBox FindBox => FindBoxElement;
+    internal TextBox ReplaceBox => ReplaceBoxElement;
+    internal CheckBox MatchCase => MatchCaseElement;
+    internal CheckBox WholeWord => WholeWordElement;
+    internal TextBlock FindStatus => FindStatusElement;
+    internal TextBlock ContextText => ContextTextElement;
+    internal TextBlock StatsText => StatsTextElement;
+    internal TextBlock ZoomText => ZoomTextElement;
 
     internal void SetEditor(ManuscriptEditor editor)
     {
