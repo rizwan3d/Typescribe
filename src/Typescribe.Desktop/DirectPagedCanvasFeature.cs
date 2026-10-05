@@ -330,13 +330,14 @@ internal sealed class EditablePagedCanvas : Grid
     {
         CommitActiveEdit();
         var viewport = _scroll.Bounds.Width;
-        if (viewport <= 0 || _layout?.Pages.Count == 0)
+        var layout = _layout;
+        if (viewport <= 0 || layout is null || layout.Pages.Count == 0)
         {
             _scale = DefaultScale;
         }
         else
         {
-            var sample = _layout.Pages[0];
+            var sample = layout.Pages[0];
             var pageCount = _spreadMode && sample.FacingPages ? 2 : 1;
             var available = Math.Max(300, viewport - 90);
             _scale = Math.Clamp(
