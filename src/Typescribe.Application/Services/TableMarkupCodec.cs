@@ -1,13 +1,14 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Typescribe.Domain.Models;
 
 namespace Typescribe.Application.Services;
 
 /// <summary>
 /// Canonical table text codec. Pipe rows remain normal Markdown; Typescribe-only merge
-/// geometry is stored in the existing table metadata comment as a compact base64 token.
-/// This keeps manuscripts readable in ordinary editors while preserving merged cells.
+/// geometry and semantic design properties are stored in the table metadata comment.
+/// This keeps manuscripts readable in ordinary editors while preserving rich table design.
 /// </summary>
 public static class TableMarkupCodec
 {
@@ -24,6 +25,17 @@ public static class TableMarkupCodec
 
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(EncodeSpans(merged)));
         return baseMetadata.Replace(" -->", $" spans64:{encoded} -->", StringComparison.Ordinal);
+    }
+
+    public static string CreateMetadata(TableBlock table)
+    {
+        var metadata = CreateMetadata(table.Identifier, table.Caption, ExtractSpans(table));
+        var payload = BuildSemanticPayload(table);
+        if (payload is null) return metadata;
+
+        var json = JsonSerializer.Serialize(payload);
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+        return metadata.Replace(" -->", $" semantic64:{encoded} -->", StringComparison.Ordinal);
     }
 
     public static string Serialize(TableBlock table, string? newline = null)
@@ -58,15 +70,49 @@ public static class TableMarkupCodec
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(table.Caption) ||
             !string.IsNullOrWhiteSpace(table.Identifier) ||
-            spans.Count > 0)
+            spans.Count > 0 ||
+            HasSemanticMetadata(table))
         {
-            lines.Add(CreateMetadata(table.Identifier, table.Caption, spans));
+            lines.Add(CreateMetadata(table));
         }
 
         lines.Add(Row(table.Header));
         lines.Add("| " + string.Join(" | ", separator) + " |");
         lines.AddRange(table.Rows.Select(Row));
         return string.Join(newline, lines);
+    }
+
+    public static TableBlock ApplyMetadata(string metadataLine, TableBlock table)
+    {
+        if (!TryReadSemanticMetadata(metadataLine, out var payload) || payload is null) return table;
+
+        var allRows = GridRows(table).Select(static row => row.ToArray()).ToArray();
+        foreach (var cellMetadata in payload.Cells ?? [])
+        {
+            if (cellMetadata.Row < 0 || cellMetadata.Row >= allRows.Length ||
+                cellMetadata.Column < 0 || cellMetadata.Column >= allRows[cellMetadata.Row].Length)
+                continue;
+            var cell = allRows[cellMetadata.Row][cellMetadata.Column];
+            allRows[cellMetadata.Row][cellMetadata.Column] = cell with
+            {
+                StyleId = Clean(cellMetadata.StyleId),
+                Properties = cellMetadata.Properties
+            };
+        }
+
+        var header = allRows.Length > 0 ? allRows[0] : table.Header.ToArray();
+        var body = allRows.Skip(1).Select(static row => (IReadOnlyList<TableCell>)row).ToArray();
+        var rowProperties = payload.RowProperties?.ToArray();
+        var repeatRows = Math.Clamp(payload.RepeatHeaderRows, 0, Math.Max(1, allRows.Length));
+        return table with
+        {
+            Header = header,
+            Rows = body,
+            StyleId = Clean(payload.StyleId),
+            RowProperties = rowProperties,
+            RepeatHeaderRows = repeatRows,
+            Properties = payload.Properties
+        };
     }
 
     public static IReadOnlyList<TableMergeSpan> ExtractSpans(TableBlock table)
@@ -145,7 +191,14 @@ public static class TableMarkupCodec
                 for (var column = requested.Column; column < requested.Column + columnSpan; column++)
                 {
                     if (row == requested.Row && column == requested.Column) continue;
-                    allRows[row][column] = EmptyCell() with { IsSpanContinuation = true };
+                    var existing = allRows[row][column];
+                    allRows[row][column] = existing with
+                    {
+                        Inlines = [new TextInline(string.Empty)],
+                        RowSpan = 1,
+                        ColumnSpan = 1,
+                        IsSpanContinuation = true
+                    };
                 }
             }
         }
@@ -158,18 +211,10 @@ public static class TableMarkupCodec
     public static bool TryReadSpans(string metadataLine, out IReadOnlyList<TableMergeSpan> spans)
     {
         spans = [];
-        var trimmed = metadataLine.Trim();
-        if (!trimmed.StartsWith(MetadataPrefix, StringComparison.Ordinal) || !trimmed.EndsWith("-->", StringComparison.Ordinal))
-            return false;
-
-        var body = trimmed[MetadataPrefix.Length..^3].Trim();
-        var token = body.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault(static value => value.StartsWith("spans64:", StringComparison.Ordinal));
-        if (token is null) return true;
-
+        if (!TryGetMetadataToken(metadataLine, "spans64:", out var encoded)) return IsTableMetadata(metadataLine);
         try
         {
-            var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(token[8..]));
+            var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
             spans = DecodeSpans(decoded);
             return true;
         }
@@ -179,6 +224,73 @@ public static class TableMarkupCodec
             return false;
         }
     }
+
+    private static bool TryReadSemanticMetadata(string metadataLine, out TableSemanticPayload? payload)
+    {
+        payload = null;
+        if (!TryGetMetadataToken(metadataLine, "semantic64:", out var encoded)) return IsTableMetadata(metadataLine);
+        try
+        {
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            payload = JsonSerializer.Deserialize<TableSemanticPayload>(json);
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            payload = null;
+            return false;
+        }
+    }
+
+    private static bool TryGetMetadataToken(string metadataLine, string prefix, out string value)
+    {
+        value = string.Empty;
+        var trimmed = metadataLine.Trim();
+        if (!IsTableMetadata(trimmed)) return false;
+        var body = trimmed[MetadataPrefix.Length..^3].Trim();
+        var token = body.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(candidate => candidate.StartsWith(prefix, StringComparison.Ordinal));
+        if (token is null) return false;
+        value = token[prefix.Length..];
+        return true;
+    }
+
+    private static bool IsTableMetadata(string metadataLine)
+    {
+        var trimmed = metadataLine.Trim();
+        return trimmed.StartsWith(MetadataPrefix, StringComparison.Ordinal) && trimmed.EndsWith("-->", StringComparison.Ordinal);
+    }
+
+    private static TableSemanticPayload? BuildSemanticPayload(TableBlock table)
+    {
+        var cells = new List<TableCellPayload>();
+        var rows = GridRows(table);
+        for (var row = 0; row < rows.Count; row++)
+        {
+            for (var column = 0; column < rows[row].Count; column++)
+            {
+                var cell = rows[row][column];
+                if (string.IsNullOrWhiteSpace(cell.StyleId) && cell.Properties is null) continue;
+                cells.Add(new TableCellPayload(row, column, Clean(cell.StyleId), cell.Properties));
+            }
+        }
+
+        var hasRows = table.RowProperties is { Count: > 0 } && table.RowProperties.Any(static row => row != new TableRowProperties());
+        var hasTable = !string.IsNullOrWhiteSpace(table.StyleId) ||
+                       table.RepeatHeaderRows != 1 ||
+                       table.Properties is not null ||
+                       hasRows || cells.Count > 0;
+        if (!hasTable) return null;
+
+        return new TableSemanticPayload(
+            Clean(table.StyleId),
+            Math.Max(0, table.RepeatHeaderRows),
+            table.Properties,
+            table.RowProperties,
+            cells);
+    }
+
+    private static bool HasSemanticMetadata(TableBlock table) => BuildSemanticPayload(table) is not null;
 
     private static IReadOnlyList<IReadOnlyList<TableCell>> GridRows(TableBlock table)
     {
@@ -212,6 +324,9 @@ public static class TableMarkupCodec
         return result;
     }
 
+    private static string? Clean(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static TableCell EmptyCell() => new([new TextInline(string.Empty)]);
 
     private static string EscapeCell(string value)
@@ -220,4 +335,17 @@ public static class TableMarkupCodec
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal)
             .Trim();
+
+    private sealed record TableSemanticPayload(
+        string? StyleId,
+        int RepeatHeaderRows,
+        TableProperties? Properties,
+        IReadOnlyList<TableRowProperties>? RowProperties,
+        IReadOnlyList<TableCellPayload>? Cells);
+
+    private sealed record TableCellPayload(
+        int Row,
+        int Column,
+        string? StyleId,
+        TableCellProperties? Properties);
 }

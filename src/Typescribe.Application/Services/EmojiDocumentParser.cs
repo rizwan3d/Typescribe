@@ -6,7 +6,8 @@ namespace Typescribe.Application.Services;
 /// <summary>
 /// Expands a compact, deterministic set of Markdown-style emoji shortcodes in text inlines.
 /// Canonical manuscript source remains unchanged; expansion happens only in the semantic AST.
-/// This outer semantic layer also reapplies Typescribe table merge geometry stored in table metadata.
+/// This outer semantic layer also reapplies Typescribe table/figure metadata stored beside
+/// human-readable Markdown.
 /// </summary>
 public sealed class EmojiDocumentParser : IDocumentParser
 {
@@ -21,36 +22,66 @@ public sealed class EmojiDocumentParser : IDocumentParser
     {
         source ??= string.Empty;
         var parsed = _inner.Parse(source);
-        var spansByHeaderLine = ReadSpanMetadata(source);
-        var blocks = new AstBlock[parsed.Blocks.Count];
+        var metadata = ReadMetadata(source);
+        var blocks = new List<AstBlock>(parsed.Blocks.Count);
         for (var index = 0; index < parsed.Blocks.Count; index++)
         {
-            var rewritten = RewriteBlock(parsed.Blocks[index]);
-            if (rewritten is TableBlock table &&
-                spansByHeaderLine.TryGetValue(table.SourceLine, out var spans) &&
-                spans.Count > 0)
+            var original = parsed.Blocks[index];
+            if (metadata.MetadataCommentLines.Contains(original.SourceLine) && original is ParagraphBlock)
+                continue;
+
+            var rewritten = RewriteBlock(original);
+            if (rewritten is TableBlock table)
             {
-                rewritten = TableMarkupCodec.ApplySpans(table, spans);
+                if (metadata.TableMetadataByHeaderLine.TryGetValue(table.SourceLine, out var tableLine))
+                {
+                    table = TableMarkupCodec.ApplyMetadata(tableLine, table);
+                    if (TableMarkupCodec.TryReadSpans(tableLine, out var spans) && spans.Count > 0)
+                        table = TableMarkupCodec.ApplySpans(table, spans);
+                }
+                rewritten = table;
             }
-            blocks[index] = rewritten;
+            else if (rewritten is FigureBlock figure &&
+                     metadata.FigureMetadataByImageLine.TryGetValue(figure.SourceLine, out var figureLine) &&
+                     FigureMarkupCodec.TryApplyMetadata(figureLine, figure, out var enriched))
+            {
+                rewritten = enriched;
+            }
+
+            blocks.Add(rewritten);
         }
         return new DocumentAst(blocks);
     }
 
-    private static Dictionary<int, IReadOnlyList<TableMergeSpan>> ReadSpanMetadata(string source)
+    private static SemanticMetadata ReadMetadata(string source)
     {
         var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         var lines = normalized.Split('\n');
-        var result = new Dictionary<int, IReadOnlyList<TableMergeSpan>>();
+        var tables = new Dictionary<int, string>();
+        var figures = new Dictionary<int, string>();
+        var commentLines = new HashSet<int>();
+
         for (var index = 0; index < lines.Length - 1; index++)
         {
-            if (!TableMarkupCodec.TryReadSpans(lines[index], out var spans) || spans.Count == 0) continue;
-            var next = index + 1;
-            while (next < lines.Length && string.IsNullOrWhiteSpace(lines[next])) next++;
-            if (next >= lines.Length || !lines[next].Contains('|')) continue;
-            result[next + 1] = spans;
+            var line = lines[index];
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith(TableMarkupCodec.MetadataPrefix, StringComparison.Ordinal))
+            {
+                var next = index + 1;
+                while (next < lines.Length && string.IsNullOrWhiteSpace(lines[next])) next++;
+                if (next < lines.Length && lines[next].Contains('|')) tables[next + 1] = line;
+                continue;
+            }
+
+            if (!trimmed.StartsWith(FigureMarkupCodec.MetadataPrefix, StringComparison.Ordinal)) continue;
+            var imageLine = index + 1;
+            while (imageLine < lines.Length && string.IsNullOrWhiteSpace(lines[imageLine])) imageLine++;
+            if (imageLine >= lines.Length || !lines[imageLine].TrimStart().StartsWith("![", StringComparison.Ordinal)) continue;
+            figures[imageLine + 1] = line;
+            commentLines.Add(index + 1);
         }
-        return result;
+
+        return new SemanticMetadata(tables, figures, commentLines);
     }
 
     private static AstBlock RewriteBlock(AstBlock block)
@@ -93,6 +124,11 @@ public sealed class EmojiDocumentParser : IDocumentParser
             text = text.Replace($":{pair.Key}:", pair.Value, StringComparison.Ordinal);
         return text;
     }
+
+    private sealed record SemanticMetadata(
+        IReadOnlyDictionary<int, string> TableMetadataByHeaderLine,
+        IReadOnlyDictionary<int, string> FigureMetadataByImageLine,
+        IReadOnlySet<int> MetadataCommentLines);
 
     private static readonly IReadOnlyDictionary<string, string> Shortcodes = new Dictionary<string, string>(StringComparer.Ordinal)
     {

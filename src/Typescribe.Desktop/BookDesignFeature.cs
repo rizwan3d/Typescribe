@@ -2,6 +2,7 @@ using System.Collections;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Typescribe.Application.Services;
 using Typescribe.Desktop.ViewModels;
 
 namespace Typescribe.Desktop;
@@ -29,6 +30,11 @@ internal sealed class BookDesignFeature
     {
         LivePdfControlsFeature.Apply(window, viewModel);
         ContinuousPdfPreviewFeature.Apply(window, viewModel);
+
+        // Keep the publishing toolkit coupled to the book-design composition point so every
+        // desktop host that gets Book Design also gets table/figure/citation/index/style tools.
+        if (TrackingProjectRepository.ActiveInstance is { } repository)
+            PublishingToolkitFeature.Apply(window, viewModel, repository, new EmojiDocumentParser(new AdvancedDocumentParser()));
 
         var feature = new BookDesignFeature(window, viewModel);
         window.Opened += feature.OnOpened;

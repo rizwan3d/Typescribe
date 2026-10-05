@@ -6,6 +6,17 @@ public sealed record BookStyle
 
     public string Name { get; init; } = "Default";
 
+    // Reusable semantic styles. The scalar properties below remain as the compatibility
+    // bridge for older projects and the existing renderer while new figures/tables and
+    // future paragraph/character/page styling can reference named styles directly.
+    public NamedStyleCatalog NamedStyles { get; init; } = NamedStyleCatalog.Default;
+    public string DefaultParagraphStyleId { get; init; } = "paragraph.body";
+    public string DefaultCharacterStyleId { get; init; } = "character.default";
+    public string DefaultFigureStyleId { get; init; } = "figure.default";
+    public string DefaultTableStyleId { get; init; } = "table.default";
+    public string DefaultCellStyleId { get; init; } = "cell.body";
+    public string DefaultPageStyleId { get; init; } = "page.book";
+
     // Publishing identity. Project/book name remains in typescribe.yaml; these values
     // control what readers see in generated output and may intentionally differ from it.
     public string PublishedTitle { get; init; } = string.Empty;
@@ -94,7 +105,7 @@ public sealed record BookStyle
     public bool IncludeBackCover { get; init; }
     public string BackCoverText { get; init; } = string.Empty;
 
-    // Core typography.
+    // Core typography (legacy/default bridge; named paragraph/character styles can override).
     public string BodyFontFamily { get; init; } = "Latin Modern Roman";
     public string HeadingFontFamily { get; init; } = "Latin Modern Roman";
     public string MonospaceFontFamily { get; init; } = "Latin Modern Mono";
@@ -171,6 +182,14 @@ public sealed record BookStyle
         if (FrontMatterOrder.Length > 1000 || BackMatterOrder.Length > 1000)
             throw new InvalidOperationException("Matter order settings are too long.");
 
+        NamedStyles.Validate();
+        ValidateDefaultStyle(DefaultParagraphStyleId, NamedStyles.ResolveParagraph(DefaultParagraphStyleId), "paragraph");
+        ValidateDefaultStyle(DefaultCharacterStyleId, NamedStyles.ResolveCharacter(DefaultCharacterStyleId), "character");
+        ValidateDefaultStyle(DefaultFigureStyleId, NamedStyles.ResolveFigure(DefaultFigureStyleId), "figure");
+        ValidateDefaultStyle(DefaultTableStyleId, NamedStyles.ResolveTable(DefaultTableStyleId), "table");
+        ValidateDefaultStyle(DefaultCellStyleId, NamedStyles.ResolveCell(DefaultCellStyleId), "cell");
+        ValidateDefaultStyle(DefaultPageStyleId, NamedStyles.ResolvePage(DefaultPageStyleId), "page");
+
         ValidateFont(BodyFontFamily, "Body font");
         ValidateFont(HeadingFontFamily, "Heading font");
         ValidateFont(MonospaceFontFamily, "Monospace font");
@@ -197,6 +216,12 @@ public sealed record BookStyle
 
         if (string.IsNullOrWhiteSpace(DocumentClass)) throw new InvalidOperationException("LaTeX document class is required.");
         return this;
+    }
+
+    private static void ValidateDefaultStyle<T>(string id, T? resolved, string kind) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(id) || resolved is null)
+            throw new InvalidOperationException($"Default {kind} style '{id}' does not exist.");
     }
 
     private static void ValidateFont(string value, string name)

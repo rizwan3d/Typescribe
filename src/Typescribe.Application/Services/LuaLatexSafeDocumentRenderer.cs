@@ -35,6 +35,7 @@ public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
                                  string.Equals(title, "Typescribe exact source map", StringComparison.Ordinal);
         var coreStyle = style with { IncludeTableOfContents = false };
         var latex = _inner.RenderLatex(document, title, coreStyle);
+        latex = SemanticLayoutLatexPostProcessor.Apply(latex, document, style);
         if (!sourceMappingProbe)
             latex = BookMatterLatexPostProcessor.Apply(latex, title, style);
         latex = NormalizeUnicodeMathPreamble(latex);

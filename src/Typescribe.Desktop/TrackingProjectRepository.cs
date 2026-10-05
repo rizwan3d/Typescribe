@@ -1,15 +1,18 @@
 using Typescribe.Application.Abstractions;
 using Typescribe.Domain.Models;
+using Typescribe.Infrastructure.Services;
 
 namespace Typescribe.Desktop;
 
 /// <summary>
 /// Repository decorator that keeps the currently opened project available to
 /// desktop-only workspace features without leaking UI concerns into the core repository.
+/// It also rehydrates the reusable named-style sidecar into BookStyle for desktop publishing.
 /// </summary>
 internal sealed class TrackingProjectRepository : IProjectRepository
 {
     private readonly IProjectRepository _inner;
+    private readonly NamedStyleCatalogStore _namedStyles = new();
 
     public TrackingProjectRepository(IProjectRepository inner)
     {
@@ -23,12 +26,16 @@ internal sealed class TrackingProjectRepository : IProjectRepository
     public async Task<BookProject> CreateAsync(string rootPath, string title, CancellationToken cancellationToken = default)
     {
         CurrentProject = await _inner.CreateAsync(rootPath, title, cancellationToken);
+        var catalog = NamedStyleCatalog.Default.Validate();
+        await _namedStyles.SaveAsync(CurrentProject.RootPath, catalog, cancellationToken);
+        CurrentProject.Style = CurrentProject.Style with { NamedStyles = catalog };
         return CurrentProject;
     }
 
     public async Task<BookProject> OpenAsync(string rootPath, CancellationToken cancellationToken = default)
     {
         CurrentProject = await _inner.OpenAsync(rootPath, cancellationToken);
+        CurrentProject.Style = CurrentProject.Style with { NamedStyles = _namedStyles.Load(CurrentProject.RootPath) };
         return CurrentProject;
     }
 
@@ -102,8 +109,16 @@ internal sealed class TrackingProjectRepository : IProjectRepository
         CancellationToken cancellationToken = default)
         => _inner.DeleteSnapshotAsync(project, node, snapshot, cancellationToken);
 
-    public Task SaveStyleAsync(BookProject project, BookStyle style, CancellationToken cancellationToken = default)
-        => _inner.SaveStyleAsync(project, style, cancellationToken);
+    public async Task SaveStyleAsync(BookProject project, BookStyle style, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(style);
+        style.Validate();
+        await _namedStyles.SaveAsync(project.RootPath, style.NamedStyles, cancellationToken);
+        await _inner.SaveStyleAsync(project, style, cancellationToken);
+        project.Style = style;
+        if (ReferenceEquals(project, CurrentProject)) CurrentProject.Style = style;
+    }
 
     public IAsyncEnumerable<(ProjectNode Node, string Content)> EnumerateDocumentsAsync(
         BookProject project,

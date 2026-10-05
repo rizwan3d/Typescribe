@@ -31,12 +31,15 @@ public sealed record ThematicBreakBlock(int SourceLine) : AstBlock(SourceLine);
 /// <summary>
 /// A single semantic table grid cell. Merged regions are represented by one anchor cell
 /// carrying RowSpan/ColumnSpan and continuation cells marked IsSpanContinuation.
+/// StyleId and Properties are instance-level semantic formatting and survive canonical-text editing.
 /// </summary>
 public sealed record TableCell(
     IReadOnlyList<AstInline> Inlines,
     int RowSpan = 1,
     int ColumnSpan = 1,
-    bool IsSpanContinuation = false);
+    bool IsSpanContinuation = false,
+    string? StyleId = null,
+    TableCellProperties? Properties = null);
 
 public enum TableAlignment
 {
@@ -46,21 +49,36 @@ public enum TableAlignment
     Right
 }
 
-/// <summary>GitHub-flavoured Markdown style table, preserved as a first-class document structure.</summary>
+/// <summary>
+/// Markdown-compatible semantic table. Pipe rows remain the canonical editable text while
+/// richer layout/style information is carried in Typescribe table metadata.
+/// </summary>
 public sealed record TableBlock(
     int SourceLine,
     IReadOnlyList<TableCell> Header,
     IReadOnlyList<IReadOnlyList<TableCell>> Rows,
     IReadOnlyList<TableAlignment>? Alignments = null,
     string? Caption = null,
-    string? Identifier = null) : AstBlock(SourceLine);
+    string? Identifier = null,
+    string? StyleId = null,
+    IReadOnlyList<TableRowProperties>? RowProperties = null,
+    int RepeatHeaderRows = 1,
+    TableProperties? Properties = null) : AstBlock(SourceLine);
 
-/// <summary>A manuscript figure with an optional stable label for cross-reference workflows.</summary>
+/// <summary>
+/// Semantic manuscript figure. Source/caption/id remain Markdown-friendly while accessibility,
+/// reusable style, source kind, credit and layout are preserved as Typescribe metadata.
+/// </summary>
 public sealed record FigureBlock(
     int SourceLine,
     string Source,
     string Caption,
-    string? Identifier) : AstBlock(SourceLine);
+    string? Identifier,
+    string? AltText = null,
+    string? Credit = null,
+    string? StyleId = null,
+    FigureSourceKind SourceKind = FigureSourceKind.ProjectRelative,
+    FigureLayout? Layout = null) : AstBlock(SourceLine);
 
 /// <summary>Definition for a Markdown footnote reference such as [^note1].</summary>
 public sealed record FootnoteDefinitionBlock(
