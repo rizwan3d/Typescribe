@@ -8,6 +8,8 @@ using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Typescribe.Desktop.ViewModels;
+using AvaloniaTextBlock = Avalonia.Controls.TextBlock;
+using AvaloniaTextBox = Avalonia.Controls.TextBox;
 
 namespace Typescribe.Desktop.Editing;
 
@@ -37,14 +39,14 @@ internal sealed class LongFormEditorFeature
     private Control? _toolbar;
     private Control? _findPanel;
     private Control? _statusBar;
-    private TextBox? _findBox;
-    private TextBox? _replaceBox;
+    private AvaloniaTextBox? _findBox;
+    private AvaloniaTextBox? _replaceBox;
     private CheckBox? _matchCase;
     private CheckBox? _wholeWord;
-    private TextBlock? _findStatus;
-    private TextBlock? _contextText;
-    private TextBlock? _statsText;
-    private TextBlock? _zoomText;
+    private AvaloniaTextBlock? _findStatus;
+    private AvaloniaTextBlock? _contextText;
+    private AvaloniaTextBlock? _statsText;
+    private AvaloniaTextBlock? _zoomText;
     private int _currentMatch = -1;
     private bool _installed;
     private bool _menusInjected;
