@@ -68,12 +68,12 @@ if (!string.Equals(richParsed.Text, "اردو test", StringComparison.Ordinal) |
     richParsed.Spans.Count != 1 || richParsed.Spans[0].Start != 0 || richParsed.Spans[0].End != 4)
     throw new InvalidOperationException("Rich inline metadata was not projected to the clean logical BiDi line correctly.");
 
-// Typing at the end boundary of a formatted Urdu run should inherit that run's formatting.
-var insertedVisible = "اردو نئی test";
+// Typing exactly at the end boundary of a formatted Urdu run should inherit that run's formatting.
+var insertedVisible = "اردونئی test";
 var insertedSource = BidiMarkdownLineCodec.ApplyEdit(richParsed, insertedVisible);
 var insertedParsed = ParseRichLine(insertedSource);
 if (!string.Equals(insertedParsed.Text, insertedVisible, StringComparison.Ordinal) ||
-    insertedParsed.Spans.Count != 1 || insertedParsed.Spans[0].Start != 0 || insertedParsed.Spans[0].End != 8)
+    insertedParsed.Spans.Count != 1 || insertedParsed.Spans[0].Start != 0 || insertedParsed.Spans[0].End != 7)
     throw new InvalidOperationException("Rich formatting span did not survive insertion at the RTL run boundary.");
 
 // Replacing the complete formatted word must preserve the same formatting on the replacement.
