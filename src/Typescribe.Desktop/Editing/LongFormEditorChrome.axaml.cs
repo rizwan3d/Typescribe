@@ -17,19 +17,19 @@ public sealed partial class LongFormEditorChrome : Grid
         : this()
         => DataContext = commands ?? throw new ArgumentNullException(nameof(commands));
 
-    // Avalonia generates members for x:Name elements. These semantic aliases give the editor
-    // feature a small stable API without any visual-tree queries or generated-name collisions.
-    internal Border CommandBar => EditorCommandBar;
-    internal Border FindPanel => FindPanelElement;
-    internal Border StatusBar => EditorStatusBar;
-    internal TextBox FindBox => FindBoxElement;
-    internal TextBox ReplaceBox => ReplaceBoxElement;
-    internal CheckBox MatchCase => MatchCaseElement;
-    internal CheckBox WholeWord => WholeWordElement;
-    internal TextBlock FindStatus => FindStatusElement;
-    internal TextBlock ContextText => ContextTextElement;
-    internal TextBlock StatsText => StatsTextElement;
-    internal TextBlock ZoomText => ZoomTextElement;
+    // These are explicit named-component lookups, not visual-tree discovery. Keeping the small
+    // semantic API here avoids coupling LongFormEditorFeature to generated XAML member details.
+    internal Border CommandBar => Require<Border>("EditorCommandBar");
+    internal Border FindPanel => Require<Border>("FindPanelElement");
+    internal Border StatusBar => Require<Border>("EditorStatusBar");
+    internal TextBox FindBox => Require<TextBox>("FindBoxElement");
+    internal TextBox ReplaceBox => Require<TextBox>("ReplaceBoxElement");
+    internal CheckBox MatchCase => Require<CheckBox>("MatchCaseElement");
+    internal CheckBox WholeWord => Require<CheckBox>("WholeWordElement");
+    internal TextBlock FindStatus => Require<TextBlock>("FindStatusElement");
+    internal TextBlock ContextText => Require<TextBlock>("ContextTextElement");
+    internal TextBlock StatsText => Require<TextBlock>("StatsTextElement");
+    internal TextBlock ZoomText => Require<TextBlock>("ZoomTextElement");
 
     internal void SetEditor(ManuscriptEditor editor)
     {
@@ -43,6 +43,10 @@ public sealed partial class LongFormEditorChrome : Grid
         Grid.SetColumnSpan(editor, 1);
         Children.Add(editor);
     }
+
+    private T Require<T>(string name) where T : Control
+        => this.FindControl<T>(name)
+           ?? throw new InvalidOperationException($"Editor chrome element '{name}' is unavailable.");
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 }
