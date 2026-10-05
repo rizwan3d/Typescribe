@@ -19,6 +19,7 @@
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" />
     <PackageReference Include="Avalonia.AvaloniaEdit" />
     <PackageReference Include="PDFtoImage" />
   </ItemGroup>
