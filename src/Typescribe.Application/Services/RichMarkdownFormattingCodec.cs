@@ -70,6 +70,8 @@ public static class RichMarkdownFormattingCodec
     /// <summary>
     /// Returns the Markdown text without TypeScribe formatting comments. This is useful for
     /// clipboard/plain-text export; it intentionally leaves all non-TypeScribe HTML comments.
+    /// Block metadata occupies a dedicated line, so its line break is removed with the comment to
+    /// recover the exact authored Markdown rather than leaving formatting-only blank lines behind.
     /// </summary>
     public static string StripFormattingMetadata(string? markdown)
     {
@@ -102,7 +104,18 @@ public static class RichMarkdownFormattingCodec
                 result.Append(markdown, next, markdown.Length - next);
                 break;
             }
+
             index = end + CommentSuffix.Length;
+            if (next == nextBlock)
+            {
+                // Block metadata is always emitted as its own line immediately before the authored
+                // block. Consume that line terminator too so stripping metadata is lossless with
+                // respect to the original Markdown's blank-line structure.
+                if (index + 1 < markdown.Length && markdown[index] == '\r' && markdown[index + 1] == '\n')
+                    index += 2;
+                else if (index < markdown.Length && markdown[index] is '\r' or '\n')
+                    index++;
+            }
         }
         return result.ToString();
     }

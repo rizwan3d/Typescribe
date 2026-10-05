@@ -80,6 +80,7 @@ public sealed class App : AvaloniaApplication
             ManuscriptEditorUpgrade.Apply(window, viewModel);
             LongFormEditorFeature.Apply(window, viewModel);
             EditorToolbarPolishFeature.Apply(window);
+            SectionFontFeature.Apply(window, viewModel, repository, parser);
             EditorTitleAndExplorerHeadingFeature.Apply(window, viewModel, repository);
             ProfessionalEditorSuite.Apply(window, viewModel, repository);
             EditorDefaultStateFeature.Apply(window);
