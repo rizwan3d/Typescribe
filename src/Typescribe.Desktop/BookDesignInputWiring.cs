@@ -3,7 +3,6 @@ using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
-using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Typescribe.Desktop.ViewModels;
@@ -197,12 +196,11 @@ internal static class BookDesignInputWiring
 
     private static void EnsureColorPickerStyles()
     {
-        if (_colorPickerStylesInstalled || Application.Current is not { } app) return;
+        if (_colorPickerStylesInstalled || global::Avalonia.Application.Current is not { } app) return;
 
-        app.Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
-        {
-            Source = new Uri("avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml")
-        });
+        // Instantiate our compiled XAML wrapper rather than dynamically loading the external
+        // ColorPicker XAML at runtime. This keeps the theme safe for trimming and Native AOT.
+        app.Styles.Add(new Styles.ColorPickerTheme());
         _colorPickerStylesInstalled = true;
     }
 
