@@ -19,17 +19,17 @@ internal static class VisualBookDesignWindow
             SelectedIndex = 0,
             MinWidth = 220
         };
-        var bodySize = Slider(current.BodyFontSizePoints, 7, 20, 0.5);
-        var lineSpacing = Slider(current.LineSpacing, .85, 2, .05);
-        var paragraphIndent = Slider(current.ParagraphIndentEm, 0, 3, .1);
-        var paragraphSpace = Slider(current.ParagraphSpacingPoints, 0, 18, .5);
-        var topMargin = Slider(current.MarginTopInches, .25, 2, .05);
-        var bottomMargin = Slider(current.MarginBottomInches, .25, 2, .05);
-        var innerMargin = Slider(current.MarginInnerInches, .25, 2, .05);
-        var outerMargin = Slider(current.MarginOuterInches, .25, 2, .05);
-        var chapterSize = Slider(current.ChapterFontSizePoints, 12, 48, 1);
-        var sectionSize = Slider(current.SectionFontSizePoints, 9, 30, 1);
-        var captionSize = Slider(current.CaptionFontSizePoints, 6, 18, .5);
+        var bodySize = CreateSlider(current.BodyFontSizePoints, 7, 20, 0.5);
+        var lineSpacing = CreateSlider(current.LineSpacing, .85, 2, .05);
+        var paragraphIndent = CreateSlider(current.ParagraphIndentEm, 0, 3, .1);
+        var paragraphSpace = CreateSlider(current.ParagraphSpacingPoints, 0, 18, .5);
+        var topMargin = CreateSlider(current.MarginTopInches, .25, 2, .05);
+        var bottomMargin = CreateSlider(current.MarginBottomInches, .25, 2, .05);
+        var innerMargin = CreateSlider(current.MarginInnerInches, .25, 2, .05);
+        var outerMargin = CreateSlider(current.MarginOuterInches, .25, 2, .05);
+        var chapterSize = CreateSlider(current.ChapterFontSizePoints, 12, 48, 1);
+        var sectionSize = CreateSlider(current.SectionFontSizePoints, 9, 30, 1);
+        var captionSize = CreateSlider(current.CaptionFontSizePoints, 6, 18, .5);
         var justify = new CheckBox { Content = "Justified body text", IsChecked = current.JustifyBody };
         var microtype = new CheckBox { Content = "Microtypography", IsChecked = current.EnableMicrotype };
         var widows = new CheckBox { Content = "Avoid widows/orphans", IsChecked = current.AvoidWidowsAndOrphans };
@@ -213,7 +213,7 @@ internal static class VisualBookDesignWindow
 
         trim.SelectionChanged += (_, _) => ApplyPreset();
         foreach (var slider in new[] { bodySize, lineSpacing, paragraphIndent, paragraphSpace, topMargin, bottomMargin, innerMargin, outerMargin, chapterSize, sectionSize, captionSize })
-            slider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) RefreshPreview(); };
+            slider.PropertyChanged += (_, e) => { if (e.Property == Avalonia.Controls.Slider.ValueProperty) RefreshPreview(); };
         foreach (var box in new[] { bodyFont, headingFont, bodyColor, headingColor }) box.TextChanged += (_, _) => RefreshPreview();
         apply.Click += async (_, _) => await SaveAsync(false);
         saveClose.Click += async (_, _) => await SaveAsync(true);
@@ -223,14 +223,14 @@ internal static class VisualBookDesignWindow
         await dialog.ShowDialog<bool?>(owner);
     }
 
-    private static Slider Slider(double value, double min, double max, double tick)
-        => new() { Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max), TickFrequency = tick, IsSnapToTickEnabled = false };
+    private static Slider CreateSlider(double value, double min, double max, double tick)
+        => new() { Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max), TickFrequency = tick };
 
     private static Control SliderField(string label, Slider slider)
     {
         var value = new TextBlock { Width = 60, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         void Refresh() => value.Text = slider.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        slider.PropertyChanged += (_, e) => { if (e.Property == Slider.ValueProperty) Refresh(); };
+        slider.PropertyChanged += (_, e) => { if (e.Property == Avalonia.Controls.Slider.ValueProperty) Refresh(); };
         Refresh();
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("130,*,65"), ColumnSpacing = 8 };
         grid.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
