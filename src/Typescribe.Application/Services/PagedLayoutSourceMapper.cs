@@ -70,6 +70,162 @@ public static class PagedLayoutSourceMapper
                source[(span.StartOffset + span.Length)..];
     }
 
+    /// <summary>
+    /// Resolves an offset in the plain text consumed by <see cref="PagedLayoutEngine"/> back
+    /// to the corresponding canonical Markdown source offset. Markdown punctuation is skipped
+    /// while authored characters remain addressable, allowing page continuations inside one
+    /// paragraph to keep one global caret/selection model.
+    /// </summary>
+    public static int GetSourceOffsetForPlainText(
+        string source,
+        DocumentAst document,
+        int sourceBlockIndex,
+        int plainTextOffset)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(document);
+
+        var span = GetEditableSpan(source, document, sourceBlockIndex);
+        var block = document.Blocks[sourceBlockIndex];
+        var raw = span.Text;
+        var plain = PlainTextFor(block);
+        var target = Math.Clamp(plainTextOffset, 0, plain.Length);
+
+        if (target <= 0)
+            return span.StartOffset + ContentStart(raw, block);
+        if (target >= plain.Length)
+            return span.StartOffset + span.Length;
+
+        var rawStart = ContentStart(raw, block);
+
+        if (block is ListItemBlock item)
+        {
+            var prefix = item.Ordered
+                ? $"{item.Number ?? 1}. "
+                : "• ";
+            if (target < prefix.Length)
+                return span.StartOffset + rawStart;
+
+            target -= prefix.Length;
+            plain = item.Inlines.ToPlainText();
+            if (target <= 0)
+                return span.StartOffset + rawStart;
+            if (target >= plain.Length)
+                return span.StartOffset + span.Length;
+        }
+
+        var rawIndex = rawStart;
+        for (var plainIndex = 0; plainIndex < target && rawIndex < raw.Length; plainIndex++)
+        {
+            var found = FindEquivalent(raw, rawIndex, plain[plainIndex]);
+            if (found < 0)
+                return ProportionalFallback(span, target, Math.Max(1, plain.Length));
+            rawIndex = found + 1;
+        }
+
+        var targetIndex = target < plain.Length
+            ? FindEquivalent(raw, rawIndex, plain[target])
+            : raw.Length;
+        if (targetIndex < 0)
+            return ProportionalFallback(span, target, Math.Max(1, plain.Length));
+
+        return Math.Clamp(span.StartOffset + targetIndex, span.StartOffset, span.StartOffset + span.Length);
+    }
+
+    public static string PlainTextFor(AstBlock block)
+        => block switch
+        {
+            HeadingBlock heading => heading.Inlines.ToPlainText(),
+            ParagraphBlock paragraph => paragraph.Inlines.ToPlainText(),
+            QuoteBlock quote => quote.Inlines.ToPlainText(),
+            ListItemBlock item => (item.Ordered ? $"{item.Number ?? 1}. " : "• ") + item.Inlines.ToPlainText(),
+            CodeBlock code => code.Text,
+            DisplayMathBlock math => math.Text,
+            FigureBlock figure => figure.Caption,
+            _ => string.Empty
+        };
+
+    private static int FindEquivalent(string raw, int start, char expected)
+    {
+        var expectedWhitespace = char.IsWhiteSpace(expected);
+        for (var index = Math.Clamp(start, 0, raw.Length); index < raw.Length; index++)
+        {
+            var candidate = raw[index];
+            if (expectedWhitespace)
+            {
+                if (char.IsWhiteSpace(candidate)) return index;
+                continue;
+            }
+
+            if (candidate == expected) return index;
+        }
+
+        return -1;
+    }
+
+    private static int ContentStart(string raw, AstBlock block)
+    {
+        if (raw.Length == 0) return 0;
+
+        var index = 0;
+        while (index < raw.Length && char.IsWhiteSpace(raw[index]) && raw[index] is not '\r' and not '\n')
+            index++;
+
+        if (block is HeadingBlock)
+        {
+            while (index < raw.Length && raw[index] == '#') index++;
+            while (index < raw.Length && raw[index] is ' ' or '\t') index++;
+            return index;
+        }
+
+        if (block is QuoteBlock)
+        {
+            if (index < raw.Length && raw[index] == '>') index++;
+            while (index < raw.Length && raw[index] is ' ' or '\t') index++;
+            return index;
+        }
+
+        if (block is ListItemBlock)
+        {
+            if (index < raw.Length && raw[index] is '-' or '*' or '+')
+            {
+                index++;
+            }
+            else
+            {
+                while (index < raw.Length && char.IsDigit(raw[index])) index++;
+                if (index < raw.Length && raw[index] == '.') index++;
+            }
+            while (index < raw.Length && raw[index] is ' ' or '\t') index++;
+            return index;
+        }
+
+        if (block is CodeBlock && raw.AsSpan(index).StartsWith("```".AsSpan(), StringComparison.Ordinal))
+        {
+            var newline = raw.IndexOf('\n', index);
+            return newline >= 0 ? Math.Min(raw.Length, newline + 1) : index;
+        }
+
+        if (block is DisplayMathBlock && raw.AsSpan(index).StartsWith("$".AsSpan(), StringComparison.Ordinal))
+        {
+            index += 2;
+            while (index < raw.Length && raw[index] is ' ' or '\t') index++;
+            if (index < raw.Length && raw[index] is '\r' or '\n')
+            {
+                while (index < raw.Length && raw[index] is '\r' or '\n') index++;
+            }
+            return index;
+        }
+
+        return index;
+    }
+
+    private static int ProportionalFallback(EditableSpan span, int plainOffset, int plainLength)
+    {
+        var ratio = Math.Clamp((double)plainOffset / plainLength, 0, 1);
+        return span.StartOffset + (int)Math.Round(span.Length * ratio);
+    }
+
     private sealed class LineIndex
     {
         private readonly int[] _starts;
