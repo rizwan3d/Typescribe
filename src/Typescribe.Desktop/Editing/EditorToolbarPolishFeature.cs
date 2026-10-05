@@ -36,6 +36,10 @@ internal sealed class EditorToolbarPolishFeature
         // Canonical Markdown pipe tables are now edited as inline AvaloniaEdit objects.
         // The Markdown text remains the source of truth; no masking or detached overlay surface.
         InlineMarkdownTableEditorFeature.Apply(window);
+
+        // Character/paragraph typography uses hidden, Markdown-safe metadata rather than a
+        // parallel binary document model. System/project fonts and multilingual intent share it.
+        RichTypographyInspectorFeature.Apply(window);
     }
 
     private void WindowOpened(object? sender, EventArgs e) => QueueApply();
