@@ -15,7 +15,11 @@ public sealed class EmojiDocumentParser : IDocumentParser
 
     public EmojiDocumentParser(IDocumentParser inner)
     {
-        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        ArgumentNullException.ThrowIfNull(inner);
+        // Rich metadata is a semantic extension of Markdown, so every standard Emoji+Advanced
+        // parser composition gets it automatically without requiring dozens of desktop call sites
+        // to opt into a second document model.
+        _inner = inner is RichDocumentParser ? inner : new RichDocumentParser(inner);
     }
 
     public DocumentAst Parse(string source)
@@ -110,6 +114,9 @@ public sealed class EmojiDocumentParser : IDocumentParser
     private static AstInline RewriteInline(AstInline inline)
         => inline switch
         {
+            // RichSpanInline derives from TextInline for backward-compatible exporters, so this
+            // case must precede the general TextInline case to retain the rich semantics.
+            RichSpanInline rich => rich with { Children = RewriteInlines(rich.Children) },
             TextInline text => text with { Text = Expand(text.Text) },
             StrongInline strong => strong with { Children = RewriteInlines(strong.Children) },
             EmphasisInline emphasis => emphasis with { Children = RewriteInlines(emphasis.Children) },

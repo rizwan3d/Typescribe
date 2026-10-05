@@ -60,10 +60,16 @@ public sealed class ManuscriptPreflightService(
                     else issues.Add(Issue(PreflightSeverity.Error, "image.missing", $"Missing image: {figure.Source}", document.Node, figure.SourceLine));
                 }
 
+                if (block.Formatting?.Paragraph is { } paragraphFormatting)
+                    CheckParagraphFormatting(project, document, block, paragraphFormatting, issues);
+
                 foreach (var inline in EnumerateInlines(block))
                 {
                     switch (inline)
                     {
+                        case RichSpanInline rich:
+                            CheckCharacterFormatting(project, document, block, rich.Formatting, issues);
+                            break;
                         case CitationInline citation:
                             if (citationKeys.Contains(citation.Key)) citationsResolved++;
                             else issues.Add(Issue(PreflightSeverity.Error, "citation.unknown", $"Missing citation: {citation.Key}", document.Node, block.SourceLine));
@@ -104,6 +110,7 @@ public sealed class ManuscriptPreflightService(
             citationsResolved,
             unusedAssets,
             issues
+                .DistinctBy(static issue => new { issue.Code, issue.DocumentId, issue.Line, issue.Message })
                 .OrderByDescending(static issue => issue.Severity)
                 .ThenBy(static issue => issue.DocumentTitle, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(static issue => issue.Line)
@@ -175,6 +182,7 @@ public sealed class ManuscriptPreflightService(
     {
         IEnumerable<AstInline> children = inline switch
         {
+            RichSpanInline rich => rich.Children,
             StrongInline strong => strong.Children,
             EmphasisInline emphasis => emphasis.Children,
             LinkInline link => link.Label,
@@ -184,6 +192,69 @@ public sealed class ManuscriptPreflightService(
         {
             yield return child;
             foreach (var descendant in EnumerateChildren(child)) yield return descendant;
+        }
+    }
+
+    private static void CheckParagraphFormatting(
+        BookProject project,
+        DocumentState document,
+        AstBlock block,
+        ParagraphFormatting formatting,
+        ICollection<PreflightIssue> issues)
+    {
+        if (formatting.CharacterDefaults is { } character)
+            CheckCharacterFormatting(project, document, block, character, issues);
+
+        if (formatting.Script == ScriptMode.UrduNastaliq && formatting.CharacterDefaults?.Font is null)
+        {
+            issues.Add(Issue(
+                PreflightSeverity.Warning,
+                "font.nastaliq.unspecified",
+                "Urdu Nastaliq paragraph has no explicit font. Choose a Nastaliq-capable system or project font for predictable publishing.",
+                document.Node,
+                block.SourceLine));
+        }
+    }
+
+    private static void CheckCharacterFormatting(
+        BookProject project,
+        DocumentState document,
+        AstBlock block,
+        CharacterFormatting formatting,
+        ICollection<PreflightIssue> issues)
+    {
+        if (formatting.Script == ScriptMode.UrduNastaliq && formatting.Font is null)
+        {
+            issues.Add(Issue(
+                PreflightSeverity.Warning,
+                "font.nastaliq.unspecified",
+                "Urdu Nastaliq text has no explicit font. Choose a Nastaliq-capable system or project font for predictable publishing.",
+                document.Node,
+                block.SourceLine));
+        }
+
+        if (formatting.Font is not { Source: FontSourceKind.Project } font || string.IsNullOrWhiteSpace(font.ProjectPath))
+            return;
+
+        if (Path.IsPathRooted(font.ProjectPath))
+        {
+            issues.Add(Issue(
+                PreflightSeverity.Warning,
+                "font.nonportable",
+                $"Project font '{font.Family}' uses an absolute path. Copy it into the project and store a project-relative path before packaging.",
+                document.Node,
+                block.SourceLine));
+            return;
+        }
+
+        if (!TryResolveProjectPath(project.RootPath, font.ProjectPath, out var fontPath) || !File.Exists(fontPath))
+        {
+            issues.Add(Issue(
+                PreflightSeverity.Error,
+                "font.missing",
+                $"Missing project font: {font.ProjectPath}",
+                document.Node,
+                block.SourceLine));
         }
     }
 
