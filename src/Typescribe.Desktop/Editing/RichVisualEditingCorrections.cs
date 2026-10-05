@@ -3,8 +3,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Primitives.PopupPositioning;
-using Avalonia.Input;
-using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit.Rendering;
@@ -68,12 +66,7 @@ public sealed class RichVisualEditingCorrections : AvaloniaObject
 
         private void EditorAttached(object? sender, VisualTreeAttachmentEventArgs e) => QueueInstall();
         private void EditorLayoutUpdated(object? sender, EventArgs e) => QueueInstall();
-
-        private void EditorDetached(object? sender, VisualTreeAttachmentEventArgs e)
-        {
-            if (_editor.VisualRoot is null)
-                Dispose();
-        }
+        private void EditorDetached(object? sender, VisualTreeAttachmentEventArgs e) => Dispose();
 
         private void EditorTextChanged(object? sender, EventArgs e)
         {
@@ -151,9 +144,7 @@ public sealed class RichVisualEditingCorrections : AvaloniaObject
                 return;
 
             var textView = _editor.TextArea.TextView;
-            var offset = Math.Clamp(_editor.CaretOffset, 0, _editor.Document.TextLength);
-            var location = _editor.Document.GetLocation(offset);
-            var position = new TextViewPosition(location);
+            var position = _editor.TextArea.Caret.Position;
 
             try
             {
