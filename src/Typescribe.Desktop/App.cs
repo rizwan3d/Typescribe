@@ -32,6 +32,10 @@ public sealed class App : AvaloniaApplication
         {
             Source = new Uri("avares://Typescribe/Styles/StudioTheme.axaml")
         });
+        Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
+        {
+            Source = new Uri("avares://Typescribe/Styles/RichVisualEditorTheme.axaml")
+        });
     }
 
     public override void OnFrameworkInitializationCompleted()
@@ -83,6 +87,7 @@ public sealed class App : AvaloniaApplication
             SelectableEditorAnalysisFeature.Apply(window, viewModel, repository);
             EditorAnalysisDetailsFeature.Apply(window, viewModel);
             AdvancedTypesettingFeatures.Apply(window, viewModel);
+            RichVisualEditingFeature.Apply(window, viewModel);
             RichEditorInsertFeature.Apply(window, viewModel, parser);
             RichTableMenuFeature.Apply(window, viewModel, parser);
             BookDesignFeature.Apply(window, viewModel);
