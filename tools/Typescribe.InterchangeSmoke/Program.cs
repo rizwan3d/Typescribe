@@ -31,7 +31,7 @@ static string ReadZipEntry(string path, string entryPath)
     return reader.ReadToEnd();
 }
 
-var parser = new EmojiDocumentParser(new AdvancedDocumentParser());
+var parser = new MergedTableDocumentParser(new EmojiDocumentParser(new AdvancedDocumentParser()));
 var projectRoot = Path.Combine(Path.GetTempPath(), "typescribe-interchange-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(projectRoot);
 Directory.CreateDirectory(Path.Combine(projectRoot, "fonts"));
@@ -114,6 +114,20 @@ try
     var structuredUrduSource = "# بڑے عنوان\n\n- یہ فہرست ہے\n\n| بڑے عنوان |\n| --- |\n| یہ اردو ہے |";
     var structuredUrduLatex = latexRenderer.RenderLatex(parser.Parse(structuredUrduSource), "Structured Urdu", BookStyle.Default);
     Require(CountOccurrences(structuredUrduLatex, "\\foreignlanguage{urdu}{") >= 4, "Urdu headings, lists, or table cells were not auto-detected for publishing.");
+
+    var mergedTableSource = TableMarkupCodec.CreateMetadata(
+            identifier: null,
+            caption: null,
+            spans: [new TableMergeSpan(0, 0, 1, 2)])
+        + "\n| Left | Right |\n| --- | --- |\n| A | B |";
+    var mergedTable = parser.Parse(mergedTableSource).Blocks.OfType<TableBlock>().Single();
+    var mergedSpans = TableMarkupCodec.ExtractSpans(mergedTable);
+    Require(mergedSpans.Count == 1 && mergedSpans[0].ColumnSpan == 2, "Merged table metadata was not restored by the shared parser.");
+    var mergedLatex = new SourceMappedDocumentRenderer().RenderLatex(
+        new DocumentAst([mergedTable]),
+        "Merged table",
+        BookStyle.Default);
+    Require(mergedLatex.Contains("\\multicolumn{2}", StringComparison.Ordinal), "Merged table geometry was not emitted in LaTeX.");
 
     var plainEnglishLatex = latexRenderer.RenderLatex(parser.Parse("Plain English paragraph."), "Plain English", BookStyle.Default);
     Require(!plainEnglishLatex.Contains("\\usepackage[bidi=basic]{babel}", StringComparison.Ordinal), "Plain English unexpectedly enabled multilingual BiDi support.");
