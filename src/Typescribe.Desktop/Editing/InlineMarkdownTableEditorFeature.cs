@@ -218,8 +218,8 @@ internal sealed class InlineMarkdownTableEditorFeature
 
             Grid.SetColumn(editor, column);
             var span = TableEditCodec.CoveringSpan(merges, rowIndex, column);
-            if (span is { Row: var anchorRow, Column: var anchorColumn } &&
-                anchorRow == rowIndex && anchorColumn == column && span.ColumnSpan > 1)
+            if (span is { Row: var spanAnchorRow, Column: var spanAnchorColumn } &&
+                spanAnchorRow == rowIndex && spanAnchorColumn == column && span.ColumnSpan > 1)
             {
                 Grid.SetColumnSpan(editor, Math.Min(span.ColumnSpan, columns - column));
             }
