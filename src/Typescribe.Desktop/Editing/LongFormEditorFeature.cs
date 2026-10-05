@@ -249,6 +249,7 @@ internal sealed class LongFormEditorFeature
         panel.Children.Add(CommandButton("H2", "Heading 2", () => ApplyHeading(2)));
         panel.Children.Add(CommandButton("❯", "Block quote", () => PrefixSelectedLines("> ")));
         panel.Children.Add(CommandButton("•", "Bullet list", () => PrefixSelectedLines("- ")));
+        panel.Children.Add(CommandButton("1.", "Numbered list", () => PrefixSelectedLines("1. ")));
         panel.Children.Add(ToolbarSeparator());
         panel.Children.Add(CommandButton("⌕", "Find / Replace in document (Ctrl+H)", OpenFindPanel));
         panel.Children.Add(ToolbarSeparator());
@@ -804,12 +805,12 @@ internal sealed class LongFormEditorFeature
         if (primary && e.Key == Key.B)
         {
             e.Handled = true;
-            WrapSelection("**", "**");
+            RichFormattingEngine.ToggleBold(_editor);
         }
         else if (primary && e.Key == Key.I)
         {
             e.Handled = true;
-            WrapSelection("*", "*");
+            RichFormattingEngine.ToggleItalic(_editor);
         }
         else if (primary && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.M)
         {
@@ -828,42 +829,16 @@ internal sealed class LongFormEditorFeature
         var editor = _editor;
         if (editor is null || editor.IsReadOnly) return;
 
-        var start = editor.SelectionStart;
-        var length = editor.SelectionLength;
-        if (length > 0)
-        {
-            var selected = editor.Document.GetText(start, length);
-            editor.Document.Replace(start, length, prefix + selected + suffix);
-            editor.Select(start + prefix.Length, selected.Length);
-            editor.CaretOffset = start + prefix.Length + selected.Length;
-        }
-        else
-        {
-            var caret = editor.CaretOffset;
-            editor.Document.Insert(caret, prefix + suffix);
-            editor.CaretOffset = caret + prefix.Length;
-            editor.Select(editor.CaretOffset, 0);
-        }
+        if (prefix == "**" && suffix == "**") RichFormattingEngine.ToggleBold(editor);
+        else if (prefix == "*" && suffix == "*") RichFormattingEngine.ToggleItalic(editor);
+        else if (prefix == "`" && suffix == "`") RichFormattingEngine.ToggleCode(editor);
         editor.Focus();
     }
 
     private void ApplyHeading(int level)
     {
-        var editor = _editor;
-        if (editor is null || editor.IsReadOnly || editor.Document.LineCount == 0) return;
-
-        var line = editor.Document.GetLineByOffset(Math.Min(editor.CaretOffset, Math.Max(0, editor.Document.TextLength)));
-        var raw = editor.Document.GetText(line);
-        var content = raw.TrimStart();
-        var existing = 0;
-        while (existing < content.Length && existing < 6 && content[existing] == '#') existing++;
-        if (existing > 0 && existing < content.Length && content[existing] == ' ')
-            content = content[(existing + 1)..];
-
-        var replacement = new string('#', Math.Clamp(level, 1, 6)) + " " + content;
-        editor.Document.Replace(line.Offset, line.Length, replacement);
-        editor.CaretOffset = line.Offset + replacement.Length;
-        editor.Focus();
+        if (_editor is null) return;
+        RichFormattingEngine.ToggleHeading(_editor, level);
     }
 
     private void PrefixSelectedLines(string prefix)
@@ -871,18 +846,9 @@ internal sealed class LongFormEditorFeature
         var editor = _editor;
         if (editor is null || editor.IsReadOnly) return;
 
-        var text = editor.Text ?? string.Empty;
-        var start = Math.Clamp(editor.SelectionStart, 0, text.Length);
-        var end = Math.Clamp(editor.SelectionStart + editor.SelectionLength, start, text.Length);
-        var lineStart = start == 0 ? 0 : text.LastIndexOf('\n', Math.Max(0, start - 1)) + 1;
-        var lineEnd = text.IndexOf('\n', end);
-        if (lineEnd < 0) lineEnd = text.Length;
-        var block = text[lineStart..lineEnd];
-        var replacement = prefix + block.Replace("\n", "\n" + prefix, StringComparison.Ordinal);
-        editor.Document.Replace(lineStart, lineEnd - lineStart, replacement);
-        editor.Select(lineStart, replacement.Length);
-        editor.CaretOffset = lineStart + replacement.Length;
-        editor.Focus();
+        if (prefix == "> ") RichFormattingEngine.ToggleQuote(editor);
+        else if (prefix == "- ") RichFormattingEngine.ToggleBulletList(editor);
+        else if (prefix == "1. ") RichFormattingEngine.ToggleNumberedList(editor);
     }
 
     private void ChangeFontSize(double delta)
@@ -1024,6 +990,7 @@ internal sealed class LongFormEditorFeature
         items.Add(ContextAction("Heading 2", () => ApplyHeading(2)));
         items.Add(ContextAction("Block Quote", () => PrefixSelectedLines("> ")));
         items.Add(ContextAction("Bullet List", () => PrefixSelectedLines("- ")));
+        items.Add(ContextAction("Numbered List", () => PrefixSelectedLines("1. ")));
         menu.ItemsSource = items.ToArray();
     }
 
