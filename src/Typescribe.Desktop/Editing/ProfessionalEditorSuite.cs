@@ -1082,6 +1082,8 @@ internal sealed class ProfessionalEditorSuite
     private void WindowPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         if (_editor is null || !_viewModel.HasDocument) return;
+        if (EditorInputRouting.IsFromNativeInlineEditor(e, _editor)) return;
+
         var primary = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
         if (primary && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.E)
         {

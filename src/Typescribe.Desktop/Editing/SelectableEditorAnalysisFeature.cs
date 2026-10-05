@@ -744,6 +744,8 @@ internal sealed class SelectableEditorAnalysisFeature
     private void WindowPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         if (_editor is null || !_viewModel.HasDocument || e.Key != Key.F7) return;
+        if (EditorInputRouting.IsFromNativeInlineEditor(e, _editor)) return;
+
         if (!_grammarEnabled && !_styleEnabled && !_readabilityEnabled) return;
         e.Handled = true;
         NavigateIssue(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);

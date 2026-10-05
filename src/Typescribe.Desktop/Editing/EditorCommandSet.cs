@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 
 namespace Typescribe.Desktop.Editing;
 
@@ -31,7 +33,7 @@ public sealed class EditorCommandSet
 
         FindReplace = new EditorCommand("find-replace", "Find / Replace in Document", "Find / Replace", "Find and replace in this document", new EditorShortcut(Key.H, primary));
         FindPrevious = new EditorCommand("find-previous", "Find Previous in Document", "Previous", "Go to the previous document match", new EditorShortcut(Key.F3, KeyModifiers.Shift));
-        FindNext = new EditorCommand("find-next", "Find Next in Document", "Next", "Go to the next document match", new EditorShortcut(Key.F3));
+        FindNext = new EditorCommand("find-next", "Find Next in Document", "Next", "Go to the next document match", new EditorShortcut(Key.F3, KeyModifiers.None));
         ReplaceCurrent = new EditorCommand("replace-current", "Replace Current Match", "Replace", "Replace the current document match");
         ReplaceAll = new EditorCommand("replace-all", "Replace All Matches", "Replace All", "Replace all document matches");
         CloseFind = new EditorCommand("close-find", "Close Find / Replace", "Close", "Close find and replace");
@@ -87,6 +89,9 @@ public sealed class EditorCommandSet
 
     public bool TryExecuteShortcut(KeyEventArgs e, bool editorHasFocus)
     {
+        if (e.Source is TextBox source && source.GetVisualAncestors().OfType<ManuscriptEditor>().Any())
+            return false;
+
         foreach (var command in _shortcutCommands)
         {
             if (command.Shortcut?.Matches(e) != true) continue;
