@@ -176,6 +176,16 @@ Assert(first.Pages.Any(page => page.DisplayNumber == 10 && page.NumberStyle == P
     "Expected the later section to restart Arabic page numbers at 10.");
 Assert(first.Pages.Any(page => page.IsBlank), "Expected odd/even section starts to insert a recoverable blank page when needed.");
 
+var continuationFragments = first.Pages
+    .SelectMany(page => page.Columns)
+    .SelectMany(column => column.Fragments)
+    .Where(fragment => fragment.IsContinuation && fragment.SourceTextStart > 0)
+    .ToArray();
+Assert(continuationFragments.Length > 0,
+    "Text continued onto later columns/pages must retain its plain-text source offset.");
+Assert(continuationFragments.All(fragment => fragment.SourceTextLength >= 0),
+    "Continuation fragments must carry a valid source-text length.");
+
 var orderedSourceLines = first.Pages
     .SelectMany(page => page.Columns)
     .SelectMany(column => column.Fragments)
@@ -240,5 +250,29 @@ var replacedDocument = richParser.Parse(replacedBlock);
 Assert(replacedDocument.Blocks.OfType<ParagraphBlock>()
         .Any(paragraph => paragraph.Inlines.ToPlainText().Contains("Changed paragraph", StringComparison.Ordinal)),
     "Markdown edited through the page-source mapper must remain parseable by the canonical parser.");
+
+var formattedMarkdown = "## Heading\n\nAlpha **bravo** charlie [delta](https://example.test) echo.\n";
+var formattedDocument = richParser.Parse(formattedMarkdown);
+var formattedBlockIndex = formattedDocument.Blocks
+    .Select((block, index) => (block, index))
+    .First(item => item.block is ParagraphBlock)
+    .index;
+var formattedPlain = PagedLayoutSourceMapper.PlainTextFor(formattedDocument.Blocks[formattedBlockIndex]);
+var charlieOffset = formattedPlain.IndexOf("charlie", StringComparison.Ordinal);
+var mappedCharlie = PagedLayoutSourceMapper.GetSourceOffsetForPlainText(
+    formattedMarkdown,
+    formattedDocument,
+    formattedBlockIndex,
+    charlieOffset);
+Assert(formattedMarkdown.AsSpan(mappedCharlie).StartsWith("charlie".AsSpan(), StringComparison.Ordinal),
+    "Plain pagination offsets must map through Markdown emphasis/link punctuation to the authored source.");
+var deltaOffset = formattedPlain.IndexOf("delta", StringComparison.Ordinal);
+var mappedDelta = PagedLayoutSourceMapper.GetSourceOffsetForPlainText(
+    formattedMarkdown,
+    formattedDocument,
+    formattedBlockIndex,
+    deltaOffset);
+Assert(formattedMarkdown.AsSpan(mappedDelta).StartsWith("delta".AsSpan(), StringComparison.Ordinal),
+    "Plain pagination offsets must map to link labels rather than link destination syntax.");
 
 Console.WriteLine($"Paged layout smoke passed: {first.Pages.Count} pages, {first.Warnings.Count} warnings, deterministic fingerprint {Fingerprint(first).GetHashCode(StringComparison.Ordinal)}.");
