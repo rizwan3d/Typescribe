@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
@@ -67,7 +68,7 @@ internal sealed class RichClipboardFeature
         // Inline RTL paragraphs and inline table cells are native TextBox controls. Let their
         // platform-native clipboard handling own a selection that currently lives inside one of
         // those controls rather than stealing the routed key gesture at the outer manuscript.
-        if (e.Source is Avalonia.Controls.TextBox) return;
+        if (e.Source is TextBox) return;
 
         var command = OperatingSystem.IsMacOS()
             ? e.KeyModifiers.HasFlag(KeyModifiers.Meta)
