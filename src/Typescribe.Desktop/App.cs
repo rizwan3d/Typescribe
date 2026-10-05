@@ -101,6 +101,7 @@ public sealed class App : AvaloniaApplication
             // Install this last so later workspace enhancements cannot replace or hide the search row.
             InstallProjectSearch(window, viewModel);
             ReferenceTopChrome.Apply(window);
+            UnifiedVisualWorkspaceFeature.Apply(window, viewModel);
             if (startupProjectPath is not null)
             {
                 window.Opened += async (_, _) =>
