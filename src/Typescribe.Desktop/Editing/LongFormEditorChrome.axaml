@@ -3,7 +3,7 @@
       xmlns:editing="using:Typescribe.Desktop.Editing"
       x:Class="Typescribe.Desktop.Editing.LongFormEditorChrome"
       x:DataType="editing:EditorCommandSet"
-      x:CompileBindings="True"
+      x:CompileBindings="False"
       Classes="long-form-editor-host"
       RowDefinitions="Auto,Auto,*,Auto"
       HorizontalAlignment="Stretch"
