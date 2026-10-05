@@ -4,10 +4,11 @@ using Avalonia.Markup.Xaml;
 namespace Typescribe.Desktop.Editing;
 
 /// <summary>
-/// Stable editor chrome declared in XAML. The live ManuscriptEditor is hosted in the named
-/// content slot while commands are supplied through a shared <see cref="EditorCommandSet"/>.
+/// Stable editor chrome declared in XAML. The live ManuscriptEditor remains a direct child
+/// of this Grid so existing editor extensions keep a stable host contract while toolbar,
+/// find/replace and status UI are explicit named components.
 /// </summary>
-public sealed partial class LongFormEditorChrome : UserControl
+public sealed partial class LongFormEditorChrome : Grid
 {
     public LongFormEditorChrome()
         => InitializeComponent();
@@ -23,10 +24,6 @@ public sealed partial class LongFormEditorChrome : UserControl
     internal Border FindPanel
         => this.FindControl<Border>("FindPanel")
            ?? throw new InvalidOperationException("Editor find panel is unavailable.");
-
-    internal ContentControl EditorHost
-        => this.FindControl<ContentControl>("EditorHost")
-           ?? throw new InvalidOperationException("Editor host is unavailable.");
 
     internal Border StatusBar
         => this.FindControl<Border>("EditorStatusBar")
@@ -64,8 +61,18 @@ public sealed partial class LongFormEditorChrome : UserControl
         => this.FindControl<TextBlock>("ZoomText")
            ?? throw new InvalidOperationException("Editor zoom status is unavailable.");
 
-    internal void SetEditor(Control editor)
-        => EditorHost.Content = editor ?? throw new ArgumentNullException(nameof(editor));
+    internal void SetEditor(ManuscriptEditor editor)
+    {
+        ArgumentNullException.ThrowIfNull(editor);
+        if (editor.Parent is not null)
+            throw new InvalidOperationException("The manuscript editor must be detached before it is hosted.");
+
+        Grid.SetRow(editor, 2);
+        Grid.SetColumn(editor, 0);
+        Grid.SetRowSpan(editor, 1);
+        Grid.SetColumnSpan(editor, 1);
+        Children.Add(editor);
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 }
