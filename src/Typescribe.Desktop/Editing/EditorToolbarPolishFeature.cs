@@ -46,6 +46,10 @@ internal sealed class EditorToolbarPolishFeature
         // parallel binary document model. System/project fonts and multilingual intent share it.
         RichTypographyInspectorFeature.Apply(window);
         BidiInspectorStatusFeature.Apply(window);
+
+        // Ctrl/Cmd+C/X/V now exchanges TypeScribe rich Markdown together with HTML, RTF and
+        // plain Unicode so Word, LibreOffice, browsers and other TypeScribe windows interoperate.
+        RichClipboardFeature.Apply(window);
     }
 
     private void WindowOpened(object? sender, EventArgs e) => QueueApply();
