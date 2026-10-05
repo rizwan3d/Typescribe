@@ -2,11 +2,9 @@ using System.Collections;
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
-using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Typescribe.Desktop.ViewModels;
@@ -16,7 +14,7 @@ namespace Typescribe.Desktop.Editing;
 /// <summary>
 /// Professional long-form authoring chrome for the primary ManuscriptEditor.
 /// Keeps the AvaloniaEdit document as the source of editing behavior while adding
-/// persistent author preferences, document find/replace, formatting commands,
+/// persistent author preferences, document find/replace, shared editor commands,
 /// navigation context, zoom/page-width controls, and live manuscript statistics.
 /// </summary>
 internal sealed class LongFormEditorFeature
@@ -29,51 +27,27 @@ internal sealed class LongFormEditorFeature
 
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
+    private readonly EditorCommandSet _commands = new();
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _findTimer;
-
-    private readonly TextBox _findBox = new()
-    {
-        Watermark = "Find in document",
-        MinWidth = 190,
-        Height = 28,
-        VerticalContentAlignment = VerticalAlignment.Center,
-        Padding = new Thickness(7, 2)
-    };
-
-    private readonly TextBox _replaceBox = new()
-    {
-        Watermark = "Replace with",
-        MinWidth = 190,
-        Height = 28,
-        VerticalContentAlignment = VerticalAlignment.Center,
-        Padding = new Thickness(7, 2)
-    };
-
-    private readonly CheckBox _matchCase = new() { Content = "Case", VerticalAlignment = VerticalAlignment.Center };
-    private readonly CheckBox _wholeWord = new() { Content = "Whole word", VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock _findStatus = new() { VerticalAlignment = VerticalAlignment.Center, Opacity = 0.68, MinWidth = 64 };
-    private readonly TextBlock _contextText = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock _statsText = new() { VerticalAlignment = VerticalAlignment.Center, Opacity = 0.72 };
-    private readonly TextBlock _zoomText = new() { VerticalAlignment = VerticalAlignment.Center, MinWidth = 42, TextAlignment = TextAlignment.Center };
-
     private readonly List<DocumentMatch> _matches = [];
 
     private ManuscriptEditor? _editor;
-    private Grid? _host;
+    private LongFormEditorChrome? _host;
     private Control? _toolbar;
     private Control? _findPanel;
     private Control? _statusBar;
-    private ToggleButton? _focusToggle;
-    private ToggleButton? _typewriterToggle;
-    private ToggleButton? _markdownToggle;
-    private ToggleButton? _wrapToggle;
-    private ToggleButton? _lineNumbersToggle;
-    private ToggleButton? _pageWidthToggle;
+    private TextBox? _findBox;
+    private TextBox? _replaceBox;
+    private CheckBox? _matchCase;
+    private CheckBox? _wholeWord;
+    private TextBlock? _findStatus;
+    private TextBlock? _contextText;
+    private TextBlock? _statsText;
+    private TextBlock? _zoomText;
     private int _currentMatch = -1;
     private bool _installed;
-    private bool _menuInjected;
-    private bool _syncingPreferences;
+    private bool _menusInjected;
     private bool _disposed;
 
     private double _fontSize = DefaultFontSize;
@@ -120,18 +94,15 @@ internal sealed class LongFormEditorFeature
     private void OnOpened(object? sender, EventArgs e)
     {
         TryInstall();
-        InjectEditMenu();
+        InjectEditorMenus();
     }
 
     private void OnLayoutUpdated(object? sender, EventArgs e)
     {
         if (!_installed) TryInstall();
-        else
-        {
-            ConstrainHostToViewport();
-        }
+        else ConstrainHostToViewport();
 
-        if (!_menuInjected) InjectEditMenu();
+        if (!_menusInjected) InjectEditorMenus();
     }
 
     private void OnViewModelStateChanged(object? sender, EventArgs e)
@@ -166,34 +137,24 @@ internal sealed class LongFormEditorFeature
 
         parent.Children.RemoveAt(index);
 
-        _host = new Grid
+        _host = new LongFormEditorChrome(_commands)
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
             MinWidth = editor.MinWidth,
             MinHeight = editor.MinHeight
         };
-        _host.Classes.Add("long-form-editor-host");
+        _host.SetEditor(editor);
 
-        _toolbar = BuildToolbar();
-        _findPanel = BuildFindPanel();
-        _findPanel.IsVisible = false;
-        _statusBar = BuildStatusBar();
-
-        Grid.SetRow(_toolbar, 0);
-        _host.Children.Add(_toolbar);
-        Grid.SetRow(_findPanel, 1);
-        _host.Children.Add(_findPanel);
-
-        Grid.SetRow(editor, 2);
-        Grid.SetColumn(editor, 0);
-        Grid.SetRowSpan(editor, 1);
-        Grid.SetColumnSpan(editor, 1);
-        _host.Children.Add(editor);
-
-        Grid.SetRow(_statusBar, 3);
-        _host.Children.Add(_statusBar);
+        _toolbar = _host.CommandBar;
+        _findPanel = _host.FindPanel;
+        _statusBar = _host.StatusBar;
+        _findBox = _host.FindBox;
+        _replaceBox = _host.ReplaceBox;
+        _matchCase = _host.MatchCase;
+        _wholeWord = _host.WholeWord;
+        _findStatus = _host.FindStatus;
+        _contextText = _host.ContextText;
+        _statsText = _host.StatsText;
+        _zoomText = _host.ZoomText;
 
         parent.Children.Insert(index, _host);
         Grid.SetRow(_host, row);
@@ -202,8 +163,11 @@ internal sealed class LongFormEditorFeature
         Grid.SetColumnSpan(_host, columnSpan);
         ConstrainHostToViewport();
 
+        ConfigureCommands();
+        WireFindPanel();
         HookEditor();
         ExtendEditorContextMenu();
+        InjectEditorMenus();
         ApplyPreferences();
         UpdateEnabledState();
         UpdateStatus();
@@ -215,6 +179,86 @@ internal sealed class LongFormEditorFeature
             handledEventsToo: true);
 
         _installed = true;
+    }
+
+    private void ConfigureCommands()
+    {
+        bool HasDocument() => _editor is not null && _viewModel.HasDocument;
+        bool CanEdit() => HasDocument() && _editor?.IsReadOnly != true;
+
+        _commands.Bold.Bind(() => WrapSelection("**", "**"), CanEdit);
+        _commands.Italic.Bind(() => WrapSelection("*", "*"), CanEdit);
+        _commands.InlineCode.Bind(() => WrapSelection("`", "`"), CanEdit);
+        _commands.Heading1.Bind(() => ApplyHeading(1), CanEdit);
+        _commands.Heading2.Bind(() => ApplyHeading(2), CanEdit);
+        _commands.Heading3.Bind(() => ApplyHeading(3), CanEdit);
+        _commands.BlockQuote.Bind(() => PrefixSelectedLines("> "), CanEdit);
+        _commands.BulletList.Bind(() => PrefixSelectedLines("- "), CanEdit);
+        _commands.NumberedList.Bind(() => PrefixSelectedLines("1. "), CanEdit);
+
+        _commands.FindReplace.Bind(OpenFindPanel, HasDocument);
+        _commands.FindNext.Bind(() => ExecuteFindNavigation(1), HasDocument);
+        _commands.FindPrevious.Bind(() => ExecuteFindNavigation(-1), HasDocument);
+        _commands.ReplaceCurrent.Bind(ReplaceCurrent, HasDocument);
+        _commands.ReplaceAll.Bind(ReplaceAll, HasDocument);
+        _commands.CloseFind.Bind(CloseFindPanel, () => _findPanel?.IsVisible == true);
+
+        _commands.FocusMode.BindToggle(value =>
+        {
+            _focusMode = value;
+            if (_editor is not null) _editor.FocusCurrentParagraph = value;
+            SavePreferences();
+        }, HasDocument);
+        _commands.TypewriterMode.BindToggle(value =>
+        {
+            _typewriterMode = value;
+            if (_editor is not null) _editor.TypewriterScrolling = value;
+            SavePreferences();
+        }, HasDocument);
+        _commands.MarkdownMarks.BindToggle(value =>
+        {
+            _markdownMarks = value;
+            if (_editor is not null)
+            {
+                _editor.ShowMarkdownMarks = value;
+                _editor.TextArea.TextView.Redraw();
+            }
+            SavePreferences();
+        }, HasDocument);
+        _commands.WordWrap.BindToggle(value =>
+        {
+            _wordWrap = value;
+            if (_editor is not null) _editor.WordWrap = value;
+            SavePreferences();
+        }, HasDocument);
+        _commands.LineNumbers.BindToggle(value =>
+        {
+            _lineNumbers = value;
+            if (_editor is not null) _editor.ShowLineNumbers = value;
+            WorkspaceUxCompletionFeature.PublishManuscriptLineNumbersPreference(value);
+            SavePreferences();
+        }, HasDocument);
+        _commands.PageWidth.BindToggle(value =>
+        {
+            _pageWidth = value;
+            ApplyPageWidth();
+            SavePreferences();
+        }, HasDocument);
+
+        _commands.ZoomOut.Bind(() => ChangeFontSize(-1), HasDocument);
+        _commands.ZoomIn.Bind(() => ChangeFontSize(1), HasDocument);
+        _commands.ZoomReset.Bind(ResetFontSize, HasDocument);
+        _commands.RefreshCanExecute();
+    }
+
+    private void WireFindPanel()
+    {
+        if (_findBox is null || _replaceBox is null || _matchCase is null || _wholeWord is null) return;
+        _findBox.TextChanged += (_, _) => ScheduleFindRefresh();
+        _findBox.KeyDown += FindBoxKeyDown;
+        _replaceBox.KeyDown += ReplaceBoxKeyDown;
+        _matchCase.Click += (_, _) => RefreshMatches(preserveCurrent: false);
+        _wholeWord.Click += (_, _) => RefreshMatches(preserveCurrent: false);
     }
 
     private void ConstrainHostToViewport()
@@ -232,253 +276,6 @@ internal sealed class LongFormEditorFeature
         }
     }
 
-    private Control BuildToolbar()
-    {
-        var panel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Spacing = 2,
-            Margin = new Thickness(8, 4, 8, 3)
-        };
-
-        panel.Children.Add(CommandButton("B", "Bold (Ctrl+B)", () => WrapSelection("**", "**"), FontWeight.Bold));
-        panel.Children.Add(CommandButton("I", "Italic (Ctrl+I)", () => WrapSelection("*", "*"), FontWeight.Normal, FontStyle.Italic));
-        panel.Children.Add(CommandButton("`", "Inline code", () => WrapSelection("`", "`")));
-        panel.Children.Add(CommandButton("H1", "Heading 1", () => ApplyHeading(1)));
-        panel.Children.Add(CommandButton("H2", "Heading 2", () => ApplyHeading(2)));
-        panel.Children.Add(CommandButton("❯", "Block quote", () => PrefixSelectedLines("> ")));
-        panel.Children.Add(CommandButton("•", "Bullet list", () => PrefixSelectedLines("- ")));
-        panel.Children.Add(CommandButton("1.", "Numbered list", () => PrefixSelectedLines("1. ")));
-        panel.Children.Add(ToolbarSeparator());
-        panel.Children.Add(CommandButton("⌕", "Find / Replace in document (Ctrl+H)", OpenFindPanel));
-        panel.Children.Add(ToolbarSeparator());
-
-        _focusToggle = Toggle("Focus", "Dim everything outside the current paragraph", value =>
-        {
-            _focusMode = value;
-            if (_editor is not null) _editor.FocusCurrentParagraph = value;
-            SavePreferences();
-        });
-        _typewriterToggle = Toggle("Type", "Typewriter scrolling keeps the caret centered", value =>
-        {
-            _typewriterMode = value;
-            if (_editor is not null) _editor.TypewriterScrolling = value;
-            SavePreferences();
-        });
-        _markdownToggle = Toggle("MD", "Show Markdown punctuation", value =>
-        {
-            _markdownMarks = value;
-            if (_editor is not null)
-            {
-                _editor.ShowMarkdownMarks = value;
-                _editor.TextArea.TextView.Redraw();
-            }
-            SavePreferences();
-        });
-        _wrapToggle = Toggle("Wrap", "Toggle soft word wrapping", value =>
-        {
-            _wordWrap = value;
-            if (_editor is not null) _editor.WordWrap = value;
-            SavePreferences();
-        });
-        _lineNumbersToggle = Toggle("Ln", "Show line numbers", value =>
-        {
-            _lineNumbers = value;
-            if (_editor is not null) _editor.ShowLineNumbers = value;
-            WorkspaceUxCompletionFeature.PublishManuscriptLineNumbersPreference(value);
-            SavePreferences();
-        });
-        _pageWidthToggle = Toggle("Page", "Comfortable centered manuscript width", value =>
-        {
-            _pageWidth = value;
-            ApplyPageWidth();
-            SavePreferences();
-        });
-
-        panel.Children.Add(_focusToggle);
-        panel.Children.Add(_typewriterToggle);
-        panel.Children.Add(_markdownToggle);
-        panel.Children.Add(_wrapToggle);
-        panel.Children.Add(_lineNumbersToggle);
-        panel.Children.Add(_pageWidthToggle);
-        panel.Children.Add(ToolbarSeparator());
-        panel.Children.Add(CommandButton("−", "Decrease editor font size", () => ChangeFontSize(-1)));
-        panel.Children.Add(_zoomText);
-        panel.Children.Add(CommandButton("+", "Increase editor font size", () => ChangeFontSize(1)));
-        panel.Children.Add(CommandButton("↺", "Reset editor font size", ResetFontSize));
-
-        var scroll = new ScrollViewer
-        {
-            Content = panel,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
-        };
-
-        return new Border
-        {
-            Child = scroll,
-            BorderThickness = new Thickness(0, 0, 0, 1)
-        };
-    }
-
-    private Control BuildFindPanel()
-    {
-        var previous = SmallButton("↑", "Previous match (Shift+F3)", () => NavigateMatch(-1, focusEditor: false));
-        var next = SmallButton("↓", "Next match (F3)", () => NavigateMatch(1, focusEditor: false));
-        var replace = SmallButton("Replace", "Replace current match", ReplaceCurrent);
-        var replaceAll = SmallButton("All", "Replace all matches", ReplaceAll);
-        var close = SmallButton("×", "Close find / replace", CloseFindPanel);
-
-        var firstRow = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"),
-            ColumnSpacing = 5
-        };
-        firstRow.Children.Add(_findBox);
-        Grid.SetColumn(_findStatus, 1);
-        firstRow.Children.Add(_findStatus);
-        Grid.SetColumn(previous, 2);
-        firstRow.Children.Add(previous);
-        Grid.SetColumn(next, 3);
-        firstRow.Children.Add(next);
-        Grid.SetColumn(close, 4);
-        firstRow.Children.Add(close);
-
-        var secondRow = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"),
-            ColumnSpacing = 7,
-            Margin = new Thickness(0, 5, 0, 0)
-        };
-        secondRow.Children.Add(_replaceBox);
-        Grid.SetColumn(_matchCase, 1);
-        secondRow.Children.Add(_matchCase);
-        Grid.SetColumn(_wholeWord, 2);
-        secondRow.Children.Add(_wholeWord);
-        Grid.SetColumn(replace, 3);
-        secondRow.Children.Add(replace);
-        Grid.SetColumn(replaceAll, 4);
-        secondRow.Children.Add(replaceAll);
-
-        var content = new Grid
-        {
-            RowDefinitions = new RowDefinitions("Auto,Auto"),
-            Margin = new Thickness(10, 7, 10, 7)
-        };
-        content.Children.Add(firstRow);
-        Grid.SetRow(secondRow, 1);
-        content.Children.Add(secondRow);
-
-        _findBox.TextChanged += (_, _) => ScheduleFindRefresh();
-        _findBox.KeyDown += FindBoxKeyDown;
-        _replaceBox.KeyDown += ReplaceBoxKeyDown;
-        _matchCase.Click += (_, _) => RefreshMatches(preserveCurrent: false);
-        _wholeWord.Click += (_, _) => RefreshMatches(preserveCurrent: false);
-
-        return new Border
-        {
-            Child = content,
-            BorderThickness = new Thickness(0, 0, 0, 1)
-        };
-    }
-
-    private Control BuildStatusBar()
-    {
-        var status = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(10, 3, 10, 4),
-            MinHeight = 24
-        };
-        status.Children.Add(_contextText);
-        Grid.SetColumn(_statsText, 1);
-        _statsText.Margin = new Thickness(12, 0, 0, 0);
-        status.Children.Add(_statsText);
-        return status;
-    }
-
-    private Button CommandButton(
-        string text,
-        string toolTip,
-        Action action,
-        FontWeight? weight = null,
-        FontStyle? style = null)
-    {
-        var label = new TextBlock
-        {
-            Text = text,
-            FontWeight = weight ?? FontWeight.Normal,
-            FontStyle = style ?? FontStyle.Normal,
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center
-        };
-        var button = new Button
-        {
-            Content = label,
-            MinWidth = 30,
-            Height = 27,
-            MinHeight = 27,
-            Padding = new Thickness(6, 1),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        ToolTip.SetTip(button, toolTip);
-        button.Click += (_, _) =>
-        {
-            action();
-            if (_findPanel?.IsVisible != true) _editor?.Focus();
-        };
-        return button;
-    }
-
-    private static Border ToolbarSeparator()
-        => new()
-        {
-            Width = 1,
-            Margin = new Thickness(4, 4),
-            Opacity = 0.28,
-            Background = Avalonia.Media.Brushes.Gray
-        };
-
-    private ToggleButton Toggle(string text, string toolTip, Action<bool> changed)
-    {
-        var button = new ToggleButton
-        {
-            Content = text,
-            MinWidth = 36,
-            Height = 27,
-            MinHeight = 27,
-            Padding = new Thickness(6, 1),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        ToolTip.SetTip(button, toolTip);
-        button.IsCheckedChanged += (_, _) =>
-        {
-            if (_syncingPreferences) return;
-            changed(button.IsChecked == true);
-        };
-        return button;
-    }
-
-    private static Button SmallButton(string text, string toolTip, Action action)
-    {
-        var button = new Button
-        {
-            Content = text,
-            MinWidth = text.Length <= 1 ? 28 : 54,
-            Height = 28,
-            MinHeight = 28,
-            Padding = new Thickness(6, 1),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        ToolTip.SetTip(button, toolTip);
-        button.Click += (_, _) => action();
-        return button;
-    }
-
     private void HookEditor()
     {
         if (_editor is null) return;
@@ -493,10 +290,7 @@ internal sealed class LongFormEditorFeature
         if (_findPanel?.IsVisible == true) ScheduleFindRefresh();
     }
 
-    private void EditorCaretChanged(object? sender, EventArgs e)
-    {
-        UpdateStatus();
-    }
+    private void EditorCaretChanged(object? sender, EventArgs e) => UpdateStatus();
 
     private void EditorSelectionChanged(object? sender, EventArgs e) => UpdateStatus();
 
@@ -522,12 +316,13 @@ internal sealed class LongFormEditorFeature
         }
         if (_statusBar is not null) _statusBar.IsVisible = enabled;
         if (_findPanel is not null && !enabled) _findPanel.IsVisible = false;
+        _commands.RefreshCanExecute();
     }
 
     private void UpdateStatus()
     {
         var editor = _editor;
-        if (editor is null) return;
+        if (editor is null || _statsText is null || _contextText is null) return;
 
         var line = Math.Max(1, editor.TextArea.Caret.Line);
         var column = Math.Max(1, editor.TextArea.Caret.Column);
@@ -580,8 +375,9 @@ internal sealed class LongFormEditorFeature
 
     private void OpenFindPanel()
     {
-        if (_editor is null || _findPanel is null || !_viewModel.HasDocument) return;
+        if (_editor is null || _findPanel is null || _findBox is null || !_viewModel.HasDocument) return;
         _findPanel.IsVisible = true;
+        _commands.RefreshCanExecute();
 
         if (_editor.SelectionLength is > 0 and <= 160)
         {
@@ -600,19 +396,31 @@ internal sealed class LongFormEditorFeature
 
     private void CloseFindPanel()
     {
-        if (_findPanel is null) return;
+        if (_findPanel is null || _findStatus is null) return;
         _findPanel.IsVisible = false;
         _findTimer.Stop();
         _matches.Clear();
         _currentMatch = -1;
         _findStatus.Text = string.Empty;
+        _commands.RefreshCanExecute();
         _editor?.Focus();
+    }
+
+    private void ExecuteFindNavigation(int delta)
+    {
+        if (_findPanel?.IsVisible != true)
+        {
+            OpenFindPanel();
+            return;
+        }
+
+        NavigateMatch(delta, focusEditor: true);
     }
 
     private void RefreshMatches(bool preserveCurrent)
     {
         var editor = _editor;
-        if (editor is null) return;
+        if (editor is null || _findBox is null || _matchCase is null || _wholeWord is null || _findStatus is null) return;
 
         var query = _findBox.Text ?? string.Empty;
         var previousOffset = preserveCurrent && _currentMatch >= 0 && _currentMatch < _matches.Count
@@ -686,7 +494,7 @@ internal sealed class LongFormEditorFeature
     private void ReplaceCurrent()
     {
         var editor = _editor;
-        if (editor is null) return;
+        if (editor is null || _replaceBox is null) return;
         if (_matches.Count == 0) RefreshMatches(preserveCurrent: false);
         if (_matches.Count == 0 || _currentMatch < 0) return;
 
@@ -701,7 +509,7 @@ internal sealed class LongFormEditorFeature
     private void ReplaceAll()
     {
         var editor = _editor;
-        if (editor is null) return;
+        if (editor is null || _replaceBox is null || _findStatus is null) return;
         RefreshMatches(preserveCurrent: false);
         if (_matches.Count == 0) return;
 
@@ -727,6 +535,7 @@ internal sealed class LongFormEditorFeature
 
     private void UpdateFindStatus()
     {
+        if (_findStatus is null) return;
         if (_matches.Count == 0)
         {
             _findStatus.Text = "No matches";
@@ -761,7 +570,7 @@ internal sealed class LongFormEditorFeature
         e.Handled = true;
         RefreshMatches(preserveCurrent: true);
         NavigateMatch(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1, focusEditor: false);
-        _findBox.Focus();
+        _findBox?.Focus();
     }
 
     private void ReplaceBoxKeyDown(object? sender, KeyEventArgs e)
@@ -777,54 +586,14 @@ internal sealed class LongFormEditorFeature
         {
             e.Handled = true;
             ReplaceCurrent();
-            _replaceBox.Focus();
+            _replaceBox?.Focus();
         }
     }
 
     private void WindowPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         if (_editor is null || !_viewModel.HasDocument) return;
-        if (EditorInputRouting.IsFromNativeInlineEditor(e, _editor)) return;
-
-        var primary = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
-
-        if (primary && e.Key == Key.H)
-        {
-            e.Handled = true;
-            OpenFindPanel();
-            return;
-        }
-
-        if (e.Key == Key.F3)
-        {
-            e.Handled = true;
-            if (_findPanel?.IsVisible != true) OpenFindPanel();
-            else NavigateMatch(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1, focusEditor: true);
-            return;
-        }
-
-        if (!_editor.IsKeyboardFocusWithin) return;
-
-        if (primary && e.Key == Key.B)
-        {
-            e.Handled = true;
-            RichFormattingEngine.ToggleBold(_editor);
-        }
-        else if (primary && e.Key == Key.I)
-        {
-            e.Handled = true;
-            RichFormattingEngine.ToggleItalic(_editor);
-        }
-        else if (primary && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.M)
-        {
-            e.Handled = true;
-            _markdownToggle!.IsChecked = _markdownToggle.IsChecked != true;
-        }
-        else if (e.KeyModifiers.HasFlag(KeyModifiers.Alt) && e.Key == Key.Z)
-        {
-            e.Handled = true;
-            _wrapToggle!.IsChecked = _wrapToggle.IsChecked != true;
-        }
+        if (_commands.TryExecuteShortcut(e, _editor.IsKeyboardFocusWithin)) e.Handled = true;
     }
 
     private void WrapSelection(string prefix, string suffix)
@@ -879,6 +648,7 @@ internal sealed class LongFormEditorFeature
 
     private void UpdateZoomText()
     {
+        if (_zoomText is null) return;
         var percent = (int)Math.Round((_fontSize / DefaultFontSize) * 100, MidpointRounding.AwayFromZero);
         _zoomText.Text = $"{percent}%";
     }
@@ -887,31 +657,23 @@ internal sealed class LongFormEditorFeature
     {
         if (_editor is null) return;
 
-        _syncingPreferences = true;
-        try
-        {
-            _editor.FontSize = _fontSize;
-            _editor.FocusCurrentParagraph = _focusMode;
-            _editor.TypewriterScrolling = _typewriterMode;
-            _editor.ShowMarkdownMarks = _markdownMarks;
-            _editor.WordWrap = _wordWrap;
-            _editor.ShowLineNumbers = _lineNumbers;
-            WorkspaceUxCompletionFeature.PublishManuscriptLineNumbersPreference(_lineNumbers);
-            _editor.TextArea.TextView.Redraw();
-            ApplyPageWidth();
+        _editor.FontSize = _fontSize;
+        _editor.FocusCurrentParagraph = _focusMode;
+        _editor.TypewriterScrolling = _typewriterMode;
+        _editor.ShowMarkdownMarks = _markdownMarks;
+        _editor.WordWrap = _wordWrap;
+        _editor.ShowLineNumbers = _lineNumbers;
+        WorkspaceUxCompletionFeature.PublishManuscriptLineNumbersPreference(_lineNumbers);
+        _editor.TextArea.TextView.Redraw();
+        ApplyPageWidth();
 
-            if (_focusToggle is not null) _focusToggle.IsChecked = _focusMode;
-            if (_typewriterToggle is not null) _typewriterToggle.IsChecked = _typewriterMode;
-            if (_markdownToggle is not null) _markdownToggle.IsChecked = _markdownMarks;
-            if (_wrapToggle is not null) _wrapToggle.IsChecked = _wordWrap;
-            if (_lineNumbersToggle is not null) _lineNumbersToggle.IsChecked = _lineNumbers;
-            if (_pageWidthToggle is not null) _pageWidthToggle.IsChecked = _pageWidth;
-            UpdateZoomText();
-        }
-        finally
-        {
-            _syncingPreferences = false;
-        }
+        _commands.FocusMode.SetCheckedFromModel(_focusMode);
+        _commands.TypewriterMode.SetCheckedFromModel(_typewriterMode);
+        _commands.MarkdownMarks.SetCheckedFromModel(_markdownMarks);
+        _commands.WordWrap.SetCheckedFromModel(_wordWrap);
+        _commands.LineNumbers.SetCheckedFromModel(_lineNumbers);
+        _commands.PageWidth.SetCheckedFromModel(_pageWidth);
+        UpdateZoomText();
     }
 
     private void LoadPreferences()
@@ -948,7 +710,6 @@ internal sealed class LongFormEditorFeature
 
     private void SavePreferences()
     {
-        if (_syncingPreferences) return;
         try
         {
             var path = PreferencesPath();
@@ -982,36 +743,46 @@ internal sealed class LongFormEditorFeature
     {
         if (_editor?.ContextMenu is not { } menu) return;
         var items = MenuItems(menu.ItemsSource);
-        if (items.OfType<MenuItem>().Any(item => HeaderEquals(item, "Find / Replace in Document"))) return;
+        if (items.OfType<MenuItem>().Any(item => HeaderEquals(item, _commands.FindReplace.Label))) return;
 
         items.Add(new Separator());
-        items.Add(ContextAction("Find / Replace in Document", OpenFindPanel));
+        items.Add(CommandMenuItem(_commands.FindReplace.Label, _commands.FindReplace));
         items.Add(new Separator());
-        items.Add(ContextAction("Bold", () => WrapSelection("**", "**")));
-        items.Add(ContextAction("Italic", () => WrapSelection("*", "*")));
-        items.Add(ContextAction("Inline Code", () => WrapSelection("`", "`")));
-        items.Add(ContextAction("Heading 1", () => ApplyHeading(1)));
-        items.Add(ContextAction("Heading 2", () => ApplyHeading(2)));
-        items.Add(ContextAction("Block Quote", () => PrefixSelectedLines("> ")));
-        items.Add(ContextAction("Bullet List", () => PrefixSelectedLines("- ")));
-        items.Add(ContextAction("Numbered List", () => PrefixSelectedLines("1. ")));
+        items.Add(CommandMenuItem(_commands.Bold.Label, _commands.Bold));
+        items.Add(CommandMenuItem(_commands.Italic.Label, _commands.Italic));
+        items.Add(CommandMenuItem(_commands.InlineCode.Label, _commands.InlineCode));
+        items.Add(CommandMenuItem(_commands.Heading1.Label, _commands.Heading1));
+        items.Add(CommandMenuItem(_commands.Heading2.Label, _commands.Heading2));
+        items.Add(CommandMenuItem(_commands.BlockQuote.Label, _commands.BlockQuote));
+        items.Add(CommandMenuItem(_commands.BulletList.Label, _commands.BulletList));
+        items.Add(CommandMenuItem(_commands.NumberedList.Label, _commands.NumberedList));
         menu.ItemsSource = items.ToArray();
     }
 
-    private void InjectEditMenu()
+    private void InjectEditorMenus()
     {
-        if (_menuInjected) return;
+        if (_menusInjected) return;
         var menu = _window.GetVisualDescendants().OfType<Menu>().FirstOrDefault();
         if (menu?.ItemsSource is not IEnumerable source) return;
 
-        var edit = source.Cast<object?>().OfType<MenuItem>()
-            .FirstOrDefault(item => HeaderEquals(item, "Edit"));
-        if (edit is null) return;
+        var topLevel = source.Cast<object?>().OfType<MenuItem>().ToArray();
+        var edit = topLevel.FirstOrDefault(item => HeaderEquals(item, "Edit"));
+        var insert = topLevel.FirstOrDefault(item => HeaderEquals(item, "Insert"));
+        var format = topLevel.FirstOrDefault(item => HeaderEquals(item, "Format"));
+        if (edit is null || insert is null || format is null) return;
 
+        WireEditMenu(edit);
+        WireInsertMenu(insert);
+        WireFormatMenu(format);
+        _menusInjected = true;
+    }
+
+    private void WireEditMenu(MenuItem edit)
+    {
         var items = MenuItems(edit.ItemsSource);
-        if (items.OfType<MenuItem>().Any(item => HeaderEquals(item, "Find / Replace in Document")))
+        if (items.OfType<MenuItem>().Any(item => HeaderEquals(item, _commands.FindReplace.Label)))
         {
-            _menuInjected = true;
+            edit.ItemsSource = items.ToArray();
             return;
         }
 
@@ -1019,35 +790,54 @@ internal sealed class LongFormEditorFeature
         if (insertion < 0) insertion = items.Count;
         else insertion++;
 
-        items.Insert(insertion++, MenuAction(
-            "Find / Replace in _Document…",
-            OpenFindPanel,
-            new KeyGesture(Key.H, PrimaryModifier())));
-        items.Insert(insertion++, MenuAction(
-            "Find _Next in Document",
-            () => NavigateMatch(1, focusEditor: true),
-            new KeyGesture(Key.F3)));
-        items.Insert(insertion, MenuAction(
-            "Find _Previous in Document",
-            () => NavigateMatch(-1, focusEditor: true),
-            new KeyGesture(Key.F3, KeyModifiers.Shift)));
+        items.Insert(insertion++, CommandMenuItem("Find / Replace in _Document…", _commands.FindReplace));
+        items.Insert(insertion++, CommandMenuItem("Find _Next in Document", _commands.FindNext));
+        items.Insert(insertion, CommandMenuItem("Find _Previous in Document", _commands.FindPrevious));
         edit.ItemsSource = items.ToArray();
-        _menuInjected = true;
     }
 
-    private static MenuItem MenuAction(string header, Action action, KeyGesture? gesture = null)
+    private void WireInsertMenu(MenuItem insert)
     {
-        var item = new MenuItem { Header = header, InputGesture = gesture };
-        item.Click += (_, _) => action();
-        return item;
+        var items = MenuItems(insert.ItemsSource);
+        ReplaceMenuCommand(items, "Heading 1", _commands.Heading1);
+        ReplaceMenuCommand(items, "Heading 2", _commands.Heading2);
+        ReplaceMenuCommand(items, "Heading 3", _commands.Heading3);
+        insert.ItemsSource = items.ToArray();
     }
 
-    private static MenuItem ContextAction(string header, Action action)
+    private void WireFormatMenu(MenuItem format)
     {
-        var item = new MenuItem { Header = header };
-        item.Click += (_, _) => action();
-        return item;
+        var items = MenuItems(format.ItemsSource);
+        ReplaceMenuCommand(items, "Bold", _commands.Bold);
+        ReplaceMenuCommand(items, "Italic", _commands.Italic);
+        ReplaceMenuCommand(items, "Inline Code", _commands.InlineCode);
+        ReplaceMenuCommand(items, "Block Quote", _commands.BlockQuote);
+        ReplaceMenuCommand(items, "Bullet List", _commands.BulletList);
+
+        if (!items.OfType<MenuItem>().Any(item => HeaderEquals(item, _commands.NumberedList.Label)))
+        {
+            var bulletIndex = items.FindIndex(item => item is MenuItem menuItem && HeaderEquals(menuItem, "Bullet List"));
+            items.Insert(bulletIndex >= 0 ? bulletIndex + 1 : items.Count, CommandMenuItem("_Numbered List", _commands.NumberedList));
+        }
+
+        format.ItemsSource = items.ToArray();
     }
+
+    private static void ReplaceMenuCommand(List<object> items, string header, EditorCommand command)
+    {
+        var index = items.FindIndex(item => item is MenuItem menuItem && HeaderEquals(menuItem, header));
+        if (index < 0) return;
+        var current = (MenuItem)items[index];
+        items[index] = CommandMenuItem(current.Header?.ToString() ?? command.Label, command);
+    }
+
+    private static MenuItem CommandMenuItem(string header, EditorCommand command)
+        => new()
+        {
+            Header = header,
+            Command = command,
+            InputGesture = command.InputGesture
+        };
 
     private static List<object> MenuItems(object? source)
     {
@@ -1057,12 +847,12 @@ internal sealed class LongFormEditorFeature
 
     private static bool HeaderEquals(MenuItem item, string text)
         => string.Equals(
-            (item.Header?.ToString() ?? string.Empty).Replace("_", string.Empty, StringComparison.Ordinal).Replace("…", string.Empty, StringComparison.Ordinal).Trim(),
+            (item.Header?.ToString() ?? string.Empty)
+                .Replace("_", string.Empty, StringComparison.Ordinal)
+                .Replace("…", string.Empty, StringComparison.Ordinal)
+                .Trim(),
             text.Replace("…", string.Empty, StringComparison.Ordinal).Trim(),
             StringComparison.OrdinalIgnoreCase);
-
-    private static KeyModifiers PrimaryModifier()
-        => OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
 
     private static int CountWords(string text)
     {
@@ -1083,6 +873,7 @@ internal sealed class LongFormEditorFeature
         _statusTimer.Stop();
         _findTimer.Stop();
         SavePreferences();
+        _commands.UnbindAll();
 
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
