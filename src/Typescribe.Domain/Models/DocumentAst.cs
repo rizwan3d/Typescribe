@@ -2,7 +2,15 @@ namespace Typescribe.Domain.Models;
 
 public sealed record DocumentAst(IReadOnlyList<AstBlock> Blocks);
 
-public abstract record AstBlock(int SourceLine);
+public abstract record AstBlock(int SourceLine)
+{
+    /// <summary>
+    /// Optional Markdown-first rich formatting attached to this semantic block. The source stays
+    /// ordinary Markdown; AdvancedDocumentParser hydrates this value from a preceding
+    /// typescribe:block64 metadata comment.
+    /// </summary>
+    public RichBlockFormatting? Formatting { get; init; }
+}
 
 public sealed record HeadingBlock(
     int SourceLine,
@@ -103,6 +111,15 @@ public sealed record FootnoteReferenceInline(string Identifier) : AstInline;
 public sealed record CitationInline(string Key, string? Locator = null) : AstInline;
 public sealed record CrossReferenceInline(string Identifier) : AstInline;
 
+/// <summary>
+/// A character-formatted inline range decoded from TypeScribe's paired Markdown metadata
+/// comments. Children retain normal Markdown semantics (strong/emphasis/link/etc.) so exporters
+/// can apply typography without flattening the authored structure.
+/// </summary>
+public sealed record RichSpanInline(
+    IReadOnlyList<AstInline> Children,
+    CharacterFormatting Formatting) : AstInline;
+
 public static class AstInlineText
 {
     public static string ToPlainText(this IReadOnlyList<AstInline> inlines)
@@ -147,6 +164,9 @@ public static class AstInlineText
                     break;
                 case CrossReferenceInline reference:
                     writer.Append("[@ref:").Append(reference.Identifier).Append(']');
+                    break;
+                case RichSpanInline rich:
+                    AppendPlainText(writer, rich.Children);
                     break;
             }
         }
