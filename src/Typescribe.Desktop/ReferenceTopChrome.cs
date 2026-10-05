@@ -15,21 +15,22 @@ namespace Typescribe.Desktop;
 /// </summary>
 internal sealed class ReferenceTopChrome
 {
-    private static readonly SolidColorBrush ChromeBrush = Brush("#181818");
-    private static readonly SolidColorBrush MenuBrush = Brush("#181818");
-    private static readonly SolidColorBrush SurfaceBrush = Brush("#252526");
-    private static readonly SolidColorBrush SurfaceMutedBrush = Brush("#2D2D30");
-    private static readonly SolidColorBrush SurfaceHoverBrush = Brush("#2A2D2E");
-    private static readonly SolidColorBrush EditorBrush = Brush("#1E1E1E");
-    private static readonly SolidColorBrush BorderBrush = Brush("#3F3F46");
-    private static readonly SolidColorBrush SearchBrush = Brush("#1E1E1E");
-    private static readonly SolidColorBrush TextBrush = Brush("#CCCCCC");
-    private static readonly SolidColorBrush MutedTextBrush = Brush("#969696");
-    private static readonly SolidColorBrush AccentBrush = Brush("#007ACC");
-    private static readonly SolidColorBrush AccentHoverBrush = Brush("#1C97EA");
-    private static readonly SolidColorBrush AccentSoftBrush = Brush("#094771");
-    private static readonly SolidColorBrush DangerBrush = Brush("#F14C4C");
-    private static readonly SolidColorBrush CloseHoverBrush = Brush("#C42B1C");
+    private static readonly SolidColorBrush ChromeBrush = Brush("#F8F9FB");
+    private static readonly SolidColorBrush MenuBrush = Brush("#FFFFFF");
+    private static readonly SolidColorBrush SurfaceBrush = Brush("#FFFFFF");
+    private static readonly SolidColorBrush SurfaceMutedBrush = Brush("#F4F5F7");
+    private static readonly SolidColorBrush SurfaceHoverBrush = Brush("#EAF2FD");
+    private static readonly SolidColorBrush CanvasBrush = Brush("#E9EBEE");
+    private static readonly SolidColorBrush EditorBrush = Brush("#FFFFFF");
+    private static readonly SolidColorBrush BorderBrush = Brush("#D5D9E0");
+    private static readonly SolidColorBrush SearchBrush = Brush("#FFFFFF");
+    private static readonly SolidColorBrush TextBrush = Brush("#1E242C");
+    private static readonly SolidColorBrush MutedTextBrush = Brush("#697386");
+    private static readonly SolidColorBrush AccentBrush = Brush("#2F80ED");
+    private static readonly SolidColorBrush AccentHoverBrush = Brush("#1D6FD8");
+    private static readonly SolidColorBrush AccentSoftBrush = Brush("#E7F1FF");
+    private static readonly SolidColorBrush DangerBrush = Brush("#D92D20");
+    private static readonly SolidColorBrush CloseHoverBrush = Brush("#E5484D");
 
     private readonly StudioWorkspaceWindow _window;
     private readonly Grid _root;
@@ -77,10 +78,10 @@ internal sealed class ReferenceTopChrome
 
     private void Install()
     {
-        ApplyVisualStudioDarkPalette();
+        ApplyUnifiedLightPalette();
 
         _window.WindowDecorations = WindowDecorations.BorderOnly;
-        _window.Background = EditorBrush;
+        _window.Background = CanvasBrush;
 
         _root.RowDefinitions[0].Height = GridLength.Auto;
         if (_root.RowDefinitions.Count > 1)
@@ -115,12 +116,13 @@ internal sealed class ReferenceTopChrome
         Dispatcher.UIThread.Post(StyleWorkspaceTabs, DispatcherPriority.Background);
     }
 
-    private static void ApplyVisualStudioDarkPalette()
+    private static void ApplyUnifiedLightPalette()
     {
         if (Avalonia.Application.Current is not { } app) return;
 
-        app.RequestedThemeVariant = ThemeVariant.Dark;
-        app.Resources["TsAppBackgroundBrush"] = EditorBrush;
+        app.RequestedThemeVariant = ThemeVariant.Light;
+        app.Resources["TsAppBackgroundBrush"] = CanvasBrush;
+        app.Resources["TsCanvasBrush"] = CanvasBrush;
         app.Resources["TsSurfaceBrush"] = SurfaceBrush;
         app.Resources["TsSurfaceMutedBrush"] = SurfaceMutedBrush;
         app.Resources["TsSurfaceHoverBrush"] = SurfaceHoverBrush;
@@ -369,15 +371,15 @@ internal sealed class ReferenceTopChrome
             .FirstOrDefault(grid => Grid.GetRow(grid) == 2);
         if (workspace is null) return;
 
-        workspace.Background = EditorBrush;
+        workspace.Background = CanvasBrush;
         workspace.Margin = new Thickness(0);
 
         if (workspace.ColumnDefinitions.Count >= 5)
         {
-            workspace.ColumnDefinitions[0].Width = new GridLength(250);
+            workspace.ColumnDefinitions[0].Width = new GridLength(270);
             workspace.ColumnDefinitions[1].Width = new GridLength(4);
             workspace.ColumnDefinitions[3].Width = new GridLength(4);
-            workspace.ColumnDefinitions[4].Width = new GridLength(360);
+            workspace.ColumnDefinitions[4].Width = new GridLength(330);
         }
 
         foreach (var child in workspace.Children.OfType<Control>())
@@ -393,7 +395,7 @@ internal sealed class ReferenceTopChrome
             }
             else if (child is TabControl tabs)
             {
-                tabs.Background = EditorBrush;
+                tabs.Background = CanvasBrush;
                 StyleTabControl(tabs);
             }
         }
@@ -429,8 +431,8 @@ internal sealed class ReferenceTopChrome
         foreach (var item in TabItems(tabs))
         {
             var selected = ReferenceEquals(item, tabs.SelectedItem);
-            item.Background = selected ? EditorBrush : Brushes.Transparent;
-            item.Foreground = selected ? TextBrush : MutedTextBrush;
+            item.Background = selected ? AccentSoftBrush : Brushes.Transparent;
+            item.Foreground = selected ? AccentBrush : MutedTextBrush;
             item.BorderBrush = Brushes.Transparent;
             item.BorderThickness = new Thickness(0);
             item.FontWeight = FontWeight.Normal;
