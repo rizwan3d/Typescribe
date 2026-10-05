@@ -34,33 +34,28 @@ public sealed record NamedStyleCatalog(
         return this;
     }
 
-    public ParagraphStyleDefinition? ResolveParagraph(string? id)
-        => Resolve(ParagraphStyles, id, Merge);
-    public CharacterStyleDefinition? ResolveCharacter(string? id)
-        => Resolve(CharacterStyles, id, Merge);
-    public FigureStyleDefinition? ResolveFigure(string? id)
-        => Resolve(FigureStyles, id, Merge);
-    public TableStyleDefinition? ResolveTable(string? id)
-        => Resolve(TableStyles, id, Merge);
-    public CellStyleDefinition? ResolveCell(string? id)
-        => Resolve(CellStyles, id, Merge);
-    public PageStyleDefinition? ResolvePage(string? id)
-        => Resolve(PageStyles, id, Merge);
+    public ParagraphStyleDefinition? ResolveParagraph(string? id) => Resolve(ParagraphStyles, id, Merge);
+    public CharacterStyleDefinition? ResolveCharacter(string? id) => Resolve(CharacterStyles, id, Merge);
+    public FigureStyleDefinition? ResolveFigure(string? id) => Resolve(FigureStyles, id, Merge);
+    public TableStyleDefinition? ResolveTable(string? id) => Resolve(TableStyles, id, Merge);
+    public CellStyleDefinition? ResolveCell(string? id) => Resolve(CellStyles, id, Merge);
+    public PageStyleDefinition? ResolvePage(string? id) => Resolve(PageStyles, id, Merge);
 
     private static T? Resolve<T>(IReadOnlyList<T> styles, string? id, Func<T, T, T> merge)
-        where T : INamedStyleDefinition
+        where T : class, INamedStyleDefinition
     {
-        if (string.IsNullOrWhiteSpace(id)) return default;
+        if (string.IsNullOrWhiteSpace(id)) return null;
         var map = styles.ToDictionary(static style => style.Id, StringComparer.OrdinalIgnoreCase);
-        if (!map.TryGetValue(id.Trim(), out var current)) return default;
+        if (!map.TryGetValue(id.Trim(), out var current)) return null;
 
         var chain = new Stack<T>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        while (current is not null)
+        while (true)
         {
             if (!seen.Add(current.Id)) throw new InvalidOperationException($"Style inheritance cycle detected at '{current.Id}'.");
             chain.Push(current);
-            if (string.IsNullOrWhiteSpace(current.BasedOn) || !map.TryGetValue(current.BasedOn, out current!)) break;
+            if (string.IsNullOrWhiteSpace(current.BasedOn) || !map.TryGetValue(current.BasedOn, out var parent)) break;
+            current = parent;
         }
 
         var resolved = chain.Pop();
@@ -73,6 +68,7 @@ public sealed record NamedStyleCatalog(
         Func<T, string> id,
         Func<T, string?> basedOn,
         string kind)
+        where T : class
     {
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var style in styles)
