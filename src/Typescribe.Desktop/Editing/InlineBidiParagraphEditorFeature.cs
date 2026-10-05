@@ -140,22 +140,23 @@ internal sealed class InlineBidiParagraphEditorFeature
             if (inDisplayMath) continue;
 
             if (!IsEditableTextLine(trimmed)) continue;
+            if (!BidiMarkdownLineCodec.TryParse(source, out var editable)) continue;
 
             var paragraphFormatting = ReadParagraphFormatting(lineNumber);
             var requestedDirection = paragraphFormatting?.Direction
                 ?? paragraphFormatting?.CharacterDefaults?.Direction
                 ?? TextDirectionMode.Auto;
             var direction = requestedDirection == TextDirectionMode.Auto
-                ? UnicodeScriptClassifier.DetectDirection(source)
+                ? UnicodeScriptClassifier.DetectDirection(editable.Text)
                 : requestedDirection;
             if (direction != TextDirectionMode.RightToLeft) continue;
 
             var language = paragraphFormatting?.Language ?? paragraphFormatting?.CharacterDefaults?.Language;
             var script = paragraphFormatting?.Script
                 ?? paragraphFormatting?.CharacterDefaults?.Script
-                ?? UnicodeScriptClassifier.DetectScript(source, language);
+                ?? UnicodeScriptClassifier.DetectScript(editable.Text, language);
             if (script == ScriptMode.Auto)
-                script = UnicodeScriptClassifier.DetectScript(source, language);
+                script = UnicodeScriptClassifier.DetectScript(editable.Text, language);
 
             var character = paragraphFormatting?.CharacterDefaults;
             var fontFamily = character?.Font?.Family;
@@ -167,6 +168,7 @@ internal sealed class InlineBidiParagraphEditorFeature
                 line.Offset,
                 line.Length,
                 source,
+                editable,
                 language,
                 script,
                 fontFamily,
@@ -204,7 +206,7 @@ internal sealed class InlineBidiParagraphEditorFeature
     {
         var box = new TextBox
         {
-            Text = paragraph.Source,
+            Text = paragraph.Editable.Text,
             AcceptsReturn = false,
             AcceptsTab = true,
             TextWrapping = TextWrapping.Wrap,
@@ -232,7 +234,7 @@ internal sealed class InlineBidiParagraphEditorFeature
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
-                box.Text = paragraph.Source;
+                box.Text = paragraph.Editable.Text;
                 ReturnFocusToManuscript(paragraph.LineNumber, commit: false, box);
                 return;
             }
@@ -304,8 +306,8 @@ internal sealed class InlineBidiParagraphEditorFeature
     private void Commit(BidiParagraph paragraph, TextBox box)
     {
         if (_editor is null || _editor.IsReadOnly || _committing) return;
-        var next = box.Text ?? string.Empty;
-        if (string.Equals(next, paragraph.Source, StringComparison.Ordinal)) return;
+        var nextVisible = box.Text ?? string.Empty;
+        if (string.Equals(nextVisible, paragraph.Editable.Text, StringComparison.Ordinal)) return;
         if (paragraph.LineNumber < 1 || paragraph.LineNumber > _editor.Document.LineCount) return;
 
         var line = _editor.Document.GetLineByNumber(paragraph.LineNumber);
@@ -317,10 +319,11 @@ internal sealed class InlineBidiParagraphEditorFeature
             return;
         }
 
+        var rebuilt = BidiMarkdownLineCodec.ApplyEdit(paragraph.Editable, nextVisible);
         _committing = true;
         try
         {
-            _editor.Document.Replace(line.Offset, line.Length, next);
+            _editor.Document.Replace(line.Offset, line.Length, rebuilt);
         }
         finally
         {
@@ -420,6 +423,7 @@ internal sealed class InlineBidiParagraphEditorFeature
         int Offset,
         int Length,
         string Source,
+        BidiEditableLine Editable,
         string? Language,
         ScriptMode Script,
         string? FontFamily,
