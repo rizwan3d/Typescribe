@@ -122,6 +122,53 @@ try
     Require(explicitUrduLatex.Contains("NotoNastaliqUrdu.ttf", StringComparison.Ordinal), "Explicit project Urdu font was not preserved in LaTeX output.");
     Require(!explicitUrduLatex.Contains("\\IfFontExistsTF{Noto Nastaliq Urdu}", StringComparison.Ordinal), "Automatic Urdu font fallback overrode an explicit project font.");
 
+    // Section fonts: heading-defined sections can carry independent font choices without changing text.
+    const string sectionSource = "# First section\n\nAlpha body.\n\n# Second section\n\nBeta body.";
+    var firstFont = new FontReference("Section Serif A", FontSourceKind.System);
+    var secondFontPath = Path.Combine(projectRoot, "fonts", "SectionCustom.ttf");
+    var secondFont = new FontReference("Section Custom B", FontSourceKind.Project, secondFontPath);
+
+    var firstRange = SectionFontFormatter.ResolveSection(parser, sectionSource, 1);
+    Require(firstRange.Label == "First section", "Section font range did not resolve the current heading.");
+    Require(firstRange.TextBlockCount == 2, "Section font range should include its heading and body paragraph.");
+
+    var withFirstFont = SectionFontFormatter.Apply(parser, sectionSource, 1, firstFont, 12);
+    var firstPass = parser.Parse(withFirstFont);
+    var secondHeadingLine = firstPass.Blocks.OfType<HeadingBlock>()
+        .First(heading => heading.Inlines.ToPlainText() == "Second section").SourceLine;
+    var withBothFonts = SectionFontFormatter.Apply(parser, withFirstFont, secondHeadingLine, secondFont, 14);
+    var sectionAst = parser.Parse(withBothFonts);
+
+    var firstHeading = sectionAst.Blocks.OfType<HeadingBlock>()
+        .First(heading => heading.Inlines.ToPlainText() == "First section");
+    var alpha = sectionAst.Blocks.OfType<ParagraphBlock>()
+        .First(block => block.Inlines.ToPlainText() == "Alpha body.");
+    var secondHeading = sectionAst.Blocks.OfType<HeadingBlock>()
+        .First(heading => heading.Inlines.ToPlainText() == "Second section");
+    var beta = sectionAst.Blocks.OfType<ParagraphBlock>()
+        .First(block => block.Inlines.ToPlainText() == "Beta body.");
+
+    Require(firstHeading.Formatting?.Paragraph?.CharacterDefaults?.Font?.Family == "Section Serif A", "First section heading lost its font override.");
+    Require(alpha.Formatting?.Paragraph?.CharacterDefaults?.Font?.Family == "Section Serif A", "First section body lost its font override.");
+    Require(secondHeading.Formatting?.Paragraph?.CharacterDefaults?.Font?.Family == "Section Custom B", "Second section heading did not receive its independent font.");
+    Require(beta.Formatting?.Paragraph?.CharacterDefaults?.Font?.ProjectPath == secondFontPath, "Second section custom font path was not preserved.");
+    Require(RichMarkdownFormattingCodec.StripFormattingMetadata(withBothFonts).Trim() == sectionSource, "Applying section fonts changed authored Markdown text.");
+
+    var sectionLatex = latexRenderer.RenderLatex(sectionAst, "Section fonts", BookStyle.Default);
+    Require(sectionLatex.Contains("\\fontspec{Section Serif A}", StringComparison.Ordinal), "First section system font was not emitted to LaTeX.");
+    Require(sectionLatex.Contains("SectionCustom.ttf", StringComparison.Ordinal), "Second section custom font file was not emitted to LaTeX.");
+
+    var secondHeadingAfterApply = sectionAst.Blocks.OfType<HeadingBlock>()
+        .First(heading => heading.Inlines.ToPlainText() == "Second section").SourceLine;
+    var clearedSecond = SectionFontFormatter.Clear(parser, withBothFonts, secondHeadingAfterApply);
+    var clearedAst = parser.Parse(clearedSecond);
+    var clearedAlpha = clearedAst.Blocks.OfType<ParagraphBlock>()
+        .First(block => block.Inlines.ToPlainText() == "Alpha body.");
+    var clearedBeta = clearedAst.Blocks.OfType<ParagraphBlock>()
+        .First(block => block.Inlines.ToPlainText() == "Beta body.");
+    Require(clearedAlpha.Formatting?.Paragraph?.CharacterDefaults?.Font?.Family == "Section Serif A", "Clearing the second section font changed the first section.");
+    Require(clearedBeta.Formatting?.Paragraph?.CharacterDefaults?.Font is null, "Clearing the second section font did not remove its override.");
+
     // Clipboard: TypeScribe -> HTML/RTF/plain keeps logical Unicode order and rich semantics.
     var clipboard = RichClipboardCodec.Export(source, parser);
     Require(clipboard.PlainText.Contains("اردو English 123", StringComparison.Ordinal), "Clipboard plain text changed logical Unicode order.");
