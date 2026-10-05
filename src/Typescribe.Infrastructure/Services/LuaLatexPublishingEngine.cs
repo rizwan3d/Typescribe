@@ -5,7 +5,7 @@ using Typescribe.Application.Abstractions;
 
 namespace Typescribe.Infrastructure.Services;
 
-public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
+public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine, IDisposable
 {
     private const string TinyTexVersion = "2026.09";
     private const string ReleaseBaseUrl = "https://github.com/rstudio/tinytex-releases/releases/download";
@@ -13,10 +13,17 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
 
     private static readonly HttpClient HttpClient = CreateHttpClient();
     private readonly SemaphoreSlim _engineGate = new(1, 1);
+    private readonly SemaphoreSlim _packageInstallGate = new(1, 1);
     private string? _resolvedExecutable;
 
     public string Name => $"LuaLaTeX (TinyTeX {TinyTexVersion})";
     public bool IsAvailable => ResolveExistingExecutable() is not null;
+
+    public void Dispose()
+    {
+        _engineGate.Dispose();
+        _packageInstallGate.Dispose();
+    }
 
     public async Task EnsureAvailableAsync(CancellationToken cancellationToken = default)
     {
@@ -102,8 +109,14 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
 
         try
         {
+            var recoveredPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var pass = 0; pass < passes; pass++)
-                await RunLuaLatexPassAsync(executable, sourcePath, work, cancellationToken);
+                await RunLuaLatexPassWithPackageRecoveryAsync(
+                    executable,
+                    sourcePath,
+                    work,
+                    recoveredPackages,
+                    cancellationToken);
 
             var producedPdf = Path.Combine(work, "document.pdf");
             if (!File.Exists(producedPdf))
@@ -152,11 +165,44 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
         return null;
     }
 
-    private static async Task RunLuaLatexPassAsync(
+    private async Task RunLuaLatexPassWithPackageRecoveryAsync(
+        string executable,
+        string sourcePath,
+        string workingDirectory,
+        HashSet<string> recoveredPackages,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunLuaLatexPassAsync(executable, sourcePath, workingDirectory, cancellationToken);
+        if (result.ExitCode == 0) return;
+
+        var output = result.CombinedOutput;
+        if (TryGetMissingTexPackage(output, out var packageName) &&
+            recoveredPackages.Add(packageName) &&
+            await TryInstallTexPackageAsync(executable, packageName, cancellationToken))
+        {
+            result = await RunLuaLatexPassAsync(executable, sourcePath, workingDirectory, cancellationToken);
+            if (result.ExitCode == 0) return;
+            output = result.CombinedOutput;
+        }
+
+        var details = ExtractUsefulError(output);
+        throw new InvalidOperationException($"LuaLaTeX failed with exit code {result.ExitCode}:{Environment.NewLine}{details}");
+    }
+
+    private static async Task<ProcessResult> RunLuaLatexPassAsync(
         string executable,
         string sourcePath,
         string workingDirectory,
         CancellationToken cancellationToken)
+    {
+        var result = await RunProcessAsync(CreateLuaLatexStartInfo(executable, sourcePath, workingDirectory), cancellationToken);
+        return result;
+    }
+
+    private static ProcessStartInfo CreateLuaLatexStartInfo(
+        string executable,
+        string sourcePath,
+        string workingDirectory)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -173,41 +219,168 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
         startInfo.ArgumentList.Add("-no-shell-escape");
         startInfo.ArgumentList.Add($"-output-directory={workingDirectory}");
         startInfo.ArgumentList.Add(sourcePath);
+        AddEngineDirectoryToPath(startInfo, executable);
+        return startInfo;
+    }
 
+    private async Task<bool> TryInstallTexPackageAsync(
+        string executable,
+        string packageName,
+        CancellationToken cancellationToken)
+    {
         var engineDirectory = Path.GetDirectoryName(executable);
-        if (!string.IsNullOrWhiteSpace(engineDirectory))
+        if (string.IsNullOrWhiteSpace(engineDirectory)) return false;
+
+        var tlmgr = FindTlmgr(engineDirectory);
+        if (tlmgr is null) return false;
+
+        await _packageInstallGate.WaitAsync(cancellationToken);
+        try
         {
-            var path = startInfo.Environment.TryGetValue("PATH", out var currentPath)
-                ? currentPath
-                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            startInfo.Environment["PATH"] = engineDirectory + Path.PathSeparator + path;
+            var kpsewhich = FindKpsewhich(engineDirectory);
+            if (kpsewhich is not null &&
+                await TexFileExistsAsync(kpsewhich, packageName + ".sty", cancellationToken))
+                return true;
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = tlmgr,
+                WorkingDirectory = engineDirectory,
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("install");
+            startInfo.ArgumentList.Add(packageName);
+            AddEngineDirectoryToPath(startInfo, executable);
+
+            var result = await RunProcessAsync(startInfo, cancellationToken);
+            return result.ExitCode == 0;
+        }
+        finally
+        {
+            _packageInstallGate.Release();
+        }
+    }
+
+    private static async Task<bool> TexFileExistsAsync(
+        string kpsewhich,
+        string fileName,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = kpsewhich,
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add(fileName);
+
+        var result = await RunProcessAsync(startInfo, cancellationToken);
+        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput);
+    }
+
+    private static async Task<ProcessResult> RunProcessAsync(ProcessStartInfo startInfo, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Could not start {startInfo.FileName}.");
+            using var cancellationRegistration = cancellationToken.Register(static state =>
+            {
+                var runningProcess = (Process)state!;
+                try
+                {
+                    if (!runningProcess.HasExited) runningProcess.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }, process);
+
+            var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            var stdOut = await stdOutTask;
+            var stdErr = await stdErrTask;
+
+            return new ProcessResult(process.ExitCode, stdOut, stdErr);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return new ProcessResult(-1, string.Empty, $"Could not start {startInfo.FileName}.");
+        }
+    }
+
+    private static void AddEngineDirectoryToPath(ProcessStartInfo startInfo, string executable)
+    {
+        var engineDirectory = Path.GetDirectoryName(executable);
+        if (string.IsNullOrWhiteSpace(engineDirectory)) return;
+
+        var path = startInfo.Environment.TryGetValue("PATH", out var currentPath)
+            ? currentPath
+            : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        startInfo.Environment["PATH"] = engineDirectory + Path.PathSeparator + path;
+    }
+
+    private static string? FindTlmgr(string engineDirectory)
+    {
+        var candidates = OperatingSystem.IsWindows()
+            ? new[] { "tlmgr.bat", "tlmgr.exe", "tlmgr" }
+            : new[] { "tlmgr" };
+        return candidates
+            .Select(name => Path.Combine(engineDirectory, name))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static string? FindKpsewhich(string engineDirectory)
+    {
+        var candidates = OperatingSystem.IsWindows()
+            ? new[] { "kpsewhich.exe", "kpsewhich" }
+            : new[] { "kpsewhich" };
+        return candidates
+            .Select(name => Path.Combine(engineDirectory, name))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static bool TryGetMissingTexPackage(string output, out string packageName)
+    {
+        packageName = string.Empty;
+        var normalized = output.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        foreach (var line in normalized.Split('\n'))
+        {
+            if (!line.Contains("not found", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var start = line.IndexOf('`');
+            var end = start >= 0 ? line.IndexOf('\'', start + 1) : -1;
+            if (start < 0 || end <= start) continue;
+
+            var missingFile = line[(start + 1)..end].Trim();
+            if (!TryConvertMissingTexFileToPackage(missingFile, out packageName)) continue;
+            return true;
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start LuaLaTeX.");
-        using var cancellationRegistration = cancellationToken.Register(static state =>
-        {
-            var runningProcess = (Process)state!;
-            try
-            {
-                if (!runningProcess.HasExited) runningProcess.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        }, process);
+        return false;
+    }
 
-        var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        var stdOut = await stdOutTask;
-        var stdErr = await stdErrTask;
+    private static bool TryConvertMissingTexFileToPackage(string missingFile, out string packageName)
+    {
+        packageName = string.Empty;
+        var extension = Path.GetExtension(missingFile);
+        if (!extension.Equals(".sty", StringComparison.OrdinalIgnoreCase) &&
+            !extension.Equals(".cls", StringComparison.OrdinalIgnoreCase))
+            return false;
 
-        if (process.ExitCode != 0)
-        {
-            var details = ExtractUsefulError(stdErr + Environment.NewLine + stdOut);
-            throw new InvalidOperationException($"LuaLaTeX failed with exit code {process.ExitCode}:{Environment.NewLine}{details}");
-        }
+        var name = Path.GetFileNameWithoutExtension(missingFile);
+        if (string.IsNullOrWhiteSpace(name) ||
+            name.Any(ch => !(char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.')))
+            return false;
+
+        packageName = name;
+        return true;
     }
 
     private static async Task DownloadAndVerifyAsync(DownloadAsset asset, string archivePath, CancellationToken cancellationToken)
@@ -414,4 +587,9 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine
     }
 
     private sealed record DownloadAsset(string FileName, string Sha256, bool SelfExtractingWindowsArchive);
+
+    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError)
+    {
+        public string CombinedOutput => StandardError + Environment.NewLine + StandardOutput;
+    }
 }
