@@ -23,6 +23,7 @@ internal sealed class InlineMarkdownTableRenderFeature
     private readonly StudioWorkspaceWindow _window;
     private readonly IDocumentParser _parser = new EmojiDocumentParser(new AdvancedDocumentParser());
     private readonly DispatcherTimer _refreshTimer;
+    private readonly List<CollapsedLineSection> _collapsedTableSections = [];
 
     private ManuscriptEditor? _editor;
     private MarkdownTableElementGenerator? _generator;
@@ -100,10 +101,42 @@ internal sealed class InlineMarkdownTableRenderFeature
     private void RefreshTables()
     {
         if (_editor is null || _generator is null || _sourceTransformer is null || _disposed) return;
+
+        ClearCollapsedTableSections();
+
         var tables = TableEditingEngine.FindAll(_editor, _parser);
         _generator.SetTables(tables);
         _sourceTransformer.SetTables(tables);
+        CollapseTableSourceLines(tables);
         _editor.TextArea.TextView.Redraw();
+    }
+
+    private void CollapseTableSourceLines(IReadOnlyList<TableEditingContext> tables)
+    {
+        if (_editor is null || _editor.Document.TextLength == 0) return;
+
+        var document = _editor.Document;
+        var textView = _editor.TextArea.TextView;
+        foreach (var table in tables)
+        {
+            if (table.Length <= 0 || table.Offset < 0 || table.Offset >= document.TextLength) continue;
+
+            var anchorOffset = Math.Clamp(table.Offset, 0, document.TextLength - 1);
+            var endOffset = Math.Clamp(table.Offset + table.Length - 1, anchorOffset, document.TextLength - 1);
+            var anchorLine = document.GetLineByOffset(anchorOffset);
+            var endLine = document.GetLineByOffset(endOffset);
+            var firstHiddenLine = anchorLine.NextLine;
+            if (firstHiddenLine is null || firstHiddenLine.LineNumber > endLine.LineNumber) continue;
+
+            _collapsedTableSections.Add(textView.CollapseLines(firstHiddenLine, endLine));
+        }
+    }
+
+    private void ClearCollapsedTableSections()
+    {
+        foreach (var section in _collapsedTableSections)
+            section.Uncollapse();
+        _collapsedTableSections.Clear();
     }
 
     private Control BuildTableControl(TableEditingContext context, double availableWidth)
@@ -224,6 +257,7 @@ internal sealed class InlineMarkdownTableRenderFeature
         _window.Opened -= OnOpened;
         _window.LayoutUpdated -= OnLayoutUpdated;
         _window.Closed -= OnClosed;
+        ClearCollapsedTableSections();
         if (_editor is not null)
         {
             _editor.TextChanged -= EditorTextChanged;
@@ -258,10 +292,10 @@ internal sealed class InlineMarkdownTableRenderFeature
             var width = CurrentContext.TextView.Bounds.Width;
             var control = buildControl(table, width);
 
-            // Consume the complete Markdown table, including all internal line breaks, as one
-            // visual element. Using only the first source line leaves the remaining hidden rows
-            // in the TextView where they still contribute line height and create a large blank gap.
-            return new InlineObjectElement(table.Length, control);
+            // AvaloniaEdit visual elements may not consume uncollapsed document lines. Keep the
+            // inline object on the anchor line and collapse the remaining table source lines via
+            // TextView.CollapseLines in the owning feature.
+            return new InlineObjectElement(line.Length, control);
         }
     }
 
@@ -284,12 +318,8 @@ internal sealed class InlineMarkdownTableRenderFeature
                 var end = Math.Min(line.EndOffset, tableEnd);
                 if (end <= start) return;
 
-                var anchorLine = line.Offset == table.Offset;
-                ChangeLinePart(start, end, element =>
-                {
-                    element.TextRunProperties.SetForegroundBrush(Brushes.Transparent);
-                    if (!anchorLine) element.TextRunProperties.SetFontRenderingEmSize(1);
-                });
+                ChangeLinePart(start, end, static element =>
+                    element.TextRunProperties.SetForegroundBrush(Brushes.Transparent));
                 return;
             }
         }
