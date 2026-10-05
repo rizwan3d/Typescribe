@@ -557,36 +557,29 @@ internal sealed class RichTypographyInspectorFeature
         public override int GetFirstInterestedOffset(int startOffset)
         {
             _ = _version;
-            var text = editor.Document.Text;
-            if (startOffset >= text.Length) return -1;
-            var block = text.IndexOf(RichMarkdownFormattingCodec.BlockPrefix, startOffset, StringComparison.Ordinal);
-            var inline = text.IndexOf(RichMarkdownFormattingCodec.InlinePrefix, startOffset, StringComparison.Ordinal);
-            var close = text.IndexOf(RichMarkdownFormattingCodec.InlineClose, startOffset, StringComparison.Ordinal);
-            var table = text.IndexOf(TableMarkupCodec.MetadataPrefix, startOffset, StringComparison.Ordinal);
-            return Smallest(block, inline, close, table);
+            var document = CurrentContext.Document;
+            var text = document.Text;
+            var search = Math.Max(0, startOffset);
+            while (search < text.Length)
+            {
+                var block = text.IndexOf(RichMarkdownFormattingCodec.BlockPrefix, search, StringComparison.Ordinal);
+                var inline = text.IndexOf(RichMarkdownFormattingCodec.InlinePrefix, search, StringComparison.Ordinal);
+                var close = text.IndexOf(RichMarkdownFormattingCodec.InlineClose, search, StringComparison.Ordinal);
+                var table = text.IndexOf(TableMarkupCodec.MetadataPrefix, search, StringComparison.Ordinal);
+                var next = Smallest(block, inline, close, table);
+                if (next < 0) return -1;
+                if (TryGetHiddenTokenLength(document, text, next, out _)) return next;
+                search = next + 1;
+            }
+
+            return -1;
         }
 
         public override VisualLineElement? ConstructElement(int offset)
         {
-            var text = editor.Document.Text;
-            if (offset < 0 || offset >= text.Length) return null;
-            int length;
-            if (text.AsSpan(offset).StartsWith(RichMarkdownFormattingCodec.InlineClose.AsSpan(), StringComparison.Ordinal))
-            {
-                length = RichMarkdownFormattingCodec.InlineClose.Length;
-            }
-            else if (text.AsSpan(offset).StartsWith(RichMarkdownFormattingCodec.BlockPrefix.AsSpan(), StringComparison.Ordinal) ||
-                     text.AsSpan(offset).StartsWith(RichMarkdownFormattingCodec.InlinePrefix.AsSpan(), StringComparison.Ordinal) ||
-                     text.AsSpan(offset).StartsWith(TableMarkupCodec.MetadataPrefix.AsSpan(), StringComparison.Ordinal))
-            {
-                var end = text.IndexOf(CommentEnd, offset, StringComparison.Ordinal);
-                if (end < 0) return null;
-                length = end + CommentEnd.Length - offset;
-            }
-            else
-            {
+            var document = CurrentContext.Document;
+            if (!TryGetHiddenTokenLength(document, document.Text, offset, out var length))
                 return null;
-            }
 
             return new InlineObjectElement(length, new Border
             {
@@ -596,6 +589,31 @@ internal sealed class RichTypographyInspectorFeature
                 MinHeight = 0,
                 IsHitTestVisible = false
             });
+        }
+
+        private static bool TryGetHiddenTokenLength(TextDocument document, string text, int offset, out int length)
+        {
+            length = 0;
+            if (offset < 0 || offset >= text.Length) return false;
+            if (text.AsSpan(offset).StartsWith(RichMarkdownFormattingCodec.InlineClose.AsSpan(), StringComparison.Ordinal))
+            {
+                length = RichMarkdownFormattingCodec.InlineClose.Length;
+            }
+            else if (text.AsSpan(offset).StartsWith(RichMarkdownFormattingCodec.BlockPrefix.AsSpan(), StringComparison.Ordinal) ||
+                     text.AsSpan(offset).StartsWith(RichMarkdownFormattingCodec.InlinePrefix.AsSpan(), StringComparison.Ordinal) ||
+                     text.AsSpan(offset).StartsWith(TableMarkupCodec.MetadataPrefix.AsSpan(), StringComparison.Ordinal))
+            {
+                var end = text.IndexOf(CommentEnd, offset, StringComparison.Ordinal);
+                if (end < 0) return false;
+                length = end + CommentEnd.Length - offset;
+            }
+            else
+            {
+                return false;
+            }
+
+            var line = document.GetLineByOffset(offset);
+            return offset + length <= line.EndOffset;
         }
 
         private static int Smallest(params int[] values)

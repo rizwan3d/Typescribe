@@ -96,7 +96,9 @@ internal sealed class InlineMarkdownTableEditorFeature
 
     private void EditorTextChanged(object? sender, EventArgs e)
     {
-        if (!_committing) QueueRefresh();
+        if (_committing) return;
+        _generator?.SetRows([]);
+        QueueRefresh();
     }
 
     private void QueueRefresh()
@@ -414,9 +416,13 @@ internal sealed class InlineMarkdownTableEditorFeature
 
         public override int GetFirstInterestedOffset(int startOffset)
         {
+            var document = CurrentContext.Document;
             for (var index = 0; index < _rows.Count; index++)
-                if (_rows[index].Offset >= startOffset)
-                    return _rows[index].Offset;
+            {
+                var row = _rows[index];
+                if (row.Offset >= startOffset && IsCurrentLineSpan(document, row.Offset, row.Length))
+                    return row.Offset;
+            }
             return -1;
         }
 
@@ -424,6 +430,10 @@ internal sealed class InlineMarkdownTableEditorFeature
         {
             var row = _rows.FirstOrDefault(candidate => candidate.Offset == offset);
             if (row is null || row.Length <= 0) return null;
+            var document = CurrentContext.Document;
+            var line = document.GetLineByOffset(offset);
+            if (line.Offset != offset || offset + row.Length > line.EndOffset) return null;
+
             if (!_controls.TryGetValue(offset, out var control))
             {
                 control = owner.BuildControl(row);
@@ -431,6 +441,13 @@ internal sealed class InlineMarkdownTableEditorFeature
                 _controls[offset] = control;
             }
             return new InlineObjectElement(row.Length, control);
+        }
+
+        private static bool IsCurrentLineSpan(TextDocument document, int offset, int length)
+        {
+            if (length <= 0 || offset < 0 || offset >= document.TextLength) return false;
+            var line = document.GetLineByOffset(offset);
+            return line.Offset == offset && offset + length <= line.EndOffset;
         }
     }
 }

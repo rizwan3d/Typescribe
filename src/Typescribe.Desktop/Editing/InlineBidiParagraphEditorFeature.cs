@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
 using Typescribe.Application.Services;
 using Typescribe.Domain.Models;
@@ -92,7 +93,9 @@ internal sealed class InlineBidiParagraphEditorFeature
 
     private void EditorTextChanged(object? sender, EventArgs e)
     {
-        if (!_committing) QueueRefresh();
+        if (_committing) return;
+        _generator?.SetParagraphs([]);
+        QueueRefresh();
     }
 
     private void QueueRefresh()
@@ -455,9 +458,13 @@ internal sealed class InlineBidiParagraphEditorFeature
 
         public override int GetFirstInterestedOffset(int startOffset)
         {
+            var document = CurrentContext.Document;
             for (var index = 0; index < _paragraphs.Count; index++)
-                if (_paragraphs[index].Offset >= startOffset)
-                    return _paragraphs[index].Offset;
+            {
+                var paragraph = _paragraphs[index];
+                if (paragraph.Offset >= startOffset && IsCurrentLineSpan(document, paragraph.Offset, paragraph.Length))
+                    return paragraph.Offset;
+            }
             return -1;
         }
 
@@ -465,6 +472,10 @@ internal sealed class InlineBidiParagraphEditorFeature
         {
             var paragraph = _paragraphs.FirstOrDefault(candidate => candidate.Offset == offset);
             if (paragraph is null || paragraph.Length <= 0) return null;
+            var document = CurrentContext.Document;
+            var line = document.GetLineByOffset(offset);
+            if (line.Offset != offset || offset + paragraph.Length > line.EndOffset) return null;
+
             if (!_controls.TryGetValue(offset, out var control))
             {
                 control = owner.BuildControl(paragraph);
@@ -472,6 +483,13 @@ internal sealed class InlineBidiParagraphEditorFeature
                 _controls[offset] = control;
             }
             return new InlineObjectElement(paragraph.Length, control);
+        }
+
+        private static bool IsCurrentLineSpan(TextDocument document, int offset, int length)
+        {
+            if (length <= 0 || offset < 0 || offset >= document.TextLength) return false;
+            var line = document.GetLineByOffset(offset);
+            return line.Offset == offset && offset + length <= line.EndOffset;
         }
     }
 }

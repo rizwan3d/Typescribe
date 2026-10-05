@@ -84,7 +84,12 @@ internal sealed class InlineMarkdownTableRenderFeature
         QueueRefresh();
     }
 
-    private void EditorTextChanged(object? sender, EventArgs e) => QueueRefresh();
+    private void EditorTextChanged(object? sender, EventArgs e)
+    {
+        _generator?.SetTables([]);
+        _sourceTransformer?.SetTables([]);
+        QueueRefresh();
+    }
 
     private void EditorSizeChanged(object? sender, SizeChangedEventArgs e)
         => _editor?.TextArea.TextView.Redraw();
@@ -247,7 +252,8 @@ internal sealed class InlineMarkdownTableRenderFeature
         public override int GetFirstInterestedOffset(int startOffset)
         {
             foreach (var table in _tables)
-                if (table.Offset >= startOffset) return table.Offset;
+                if (table.Offset >= startOffset && IsCurrentTableSpan(CurrentContext.Document, table))
+                    return table.Offset;
             return -1;
         }
 
@@ -258,7 +264,7 @@ internal sealed class InlineMarkdownTableRenderFeature
 
             var document = CurrentContext.Document;
             var line = document.GetLineByOffset(offset);
-            if (line.Length <= 0 || table.Length <= 0) return null!;
+            if (line.Offset != offset || line.Length <= 0 || !IsCurrentTableSpan(document, table)) return null!;
 
             var lastTableOffset = Math.Clamp(
                 table.Offset + table.Length - 1,
@@ -271,7 +277,15 @@ internal sealed class InlineMarkdownTableRenderFeature
             var width = CurrentContext.TextView.Bounds.Width;
             var control = buildControl(table, width, hiddenSourceHeight);
 
-            return new InlineObjectElement(line.Length, control);
+            var length = Math.Min(table.Length, document.TextLength - offset);
+            return length > 0 ? new InlineObjectElement(length, control) : null!;
+        }
+
+        private static bool IsCurrentTableSpan(TextDocument document, TableEditingContext table)
+        {
+            if (table.Length <= 0 || table.Offset < 0 || table.Offset >= document.TextLength) return false;
+            var line = document.GetLineByOffset(table.Offset);
+            return line.Offset == table.Offset && table.Offset + table.Length <= document.TextLength;
         }
     }
 
