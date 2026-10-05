@@ -1,6 +1,8 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using Typescribe.Application.Abstractions;
 using Typescribe.Application.Services;
@@ -57,18 +59,41 @@ internal sealed class StructuredEditorFeature
     private void InstallToolbar()
     {
         var old = _window.GetVisualDescendants().OfType<Button>()
-            .Where(button => button.Content?.ToString() is "Table" or "Figure" or "Cite")
+            .Where(button => button.Content?.ToString() is "Footnote" or "Table" or "Figure" or "Cite")
             .ToArray();
         var host = old.FirstOrDefault()?.Parent as Panel;
         foreach (var button in old) button.IsVisible = false;
         if (host is null) return;
 
-        host.Children.Add(Button("Table", "Create or visually edit the table at the caret", EditTableAsync, "StructuredTableButton"));
-        host.Children.Add(Button("Figure", "Insert a figure from Project Assets", InsertFigureAsync, "StructuredFigureButton"));
+        host.Children.Add(IconButton("Footnote", "Insert a semantic footnote", InsertFootnoteAsync, "StructuredFootnoteButton", IconFootnote));
+        host.Children.Add(IconButton("Table", "Create or visually edit the table at the caret", EditTableAsync, "StructuredTableButton", IconTable));
+        host.Children.Add(IconButton("Figure", "Insert a figure from Project Assets", InsertFigureAsync, "StructuredFigureButton", IconFigure));
         host.Children.Add(Button("Cross-ref", "Insert a semantic cross-reference", InsertCrossReferenceAsync, "StructuredReferenceButton"));
-        host.Children.Add(Button("Cite", "Search project references and insert a citation", InsertCitationAsync, "StructuredCitationButton"));
+        host.Children.Add(IconButton("Cite", "Search project references and insert a citation", InsertCitationAsync, "StructuredCitationButton", IconCitation));
         host.Children.Add(Button("ID", "Assign an identifier to the current heading", AssignHeadingIdentifierAsync, "StructuredIdentifierButton"));
         host.Children.Add(Button("Equation", "Insert a labeled display equation", InsertEquationAsync, "StructuredEquationButton"));
+    }
+
+    private async Task InsertFootnoteAsync()
+    {
+        if (!_viewModel.HasDocument) return;
+        var selected = _editor.SelectionLength > 0
+            ? _editor.Document.GetText(_editor.SelectionStart, _editor.SelectionLength)
+            : string.Empty;
+        var text = await PromptAsync("Insert Footnote", "Footnote text", selected);
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var identifier = NextFootnoteIdentifier(_editor.Text ?? string.Empty);
+        var reference = $"[^{identifier}]";
+        if (_editor.SelectionLength > 0)
+            _editor.Document.Replace(_editor.SelectionStart, _editor.SelectionLength, reference);
+        else
+            _editor.Document.Insert(_editor.CaretIndex, reference);
+
+        var suffix = (_editor.Text ?? string.Empty).EndsWith("\n", StringComparison.Ordinal) ? "\n" : "\n\n";
+        _editor.Document.Insert(_editor.Document.TextLength, $"{suffix}[^{identifier}]: {text.Trim()}\n");
+        _editor.CaretIndex = Math.Min(_editor.Document.TextLength, _editor.CaretIndex + reference.Length);
+        _editor.Focus();
     }
 
     private async Task EditTableAsync()
@@ -374,8 +399,43 @@ internal sealed class StructuredEditorFeature
         return button;
     }
 
+    private static Button IconButton(string label, string tip, Func<Task> action, string name, string iconData)
+    {
+        var icon = new PathIcon
+        {
+            Data = StreamGeometry.Parse(iconData),
+            Width = 16,
+            Height = 16
+        };
+        var button = new Button
+        {
+            Name = name,
+            Content = icon,
+            Height = 27,
+            MinHeight = 27,
+            MinWidth = 32,
+            Padding = new Thickness(6, 1)
+        };
+        AutomationProperties.SetName(button, label);
+        ToolTip.SetTip(button, tip);
+        button.Click += async (_, _) => await action();
+        return button;
+    }
+
+    private static string NextFootnoteIdentifier(string text)
+    {
+        var number = 1;
+        while (text.Contains($"[^note{number}]", StringComparison.OrdinalIgnoreCase)) number++;
+        return "note" + number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     private static string EscapeCell(string value) => (value ?? string.Empty).Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
     private static string EscapeInline(string value) => value.Replace("]", "\\]", StringComparison.Ordinal);
+
+    private const string IconFootnote = "M4,3 L12,3 M8,3 L8,14 M5,14 L11,14 M13,7 L16,5 L16,14";
+    private const string IconTable = "M3,4 L17,4 L17,16 L3,16 Z M3,8 L17,8 M3,12 L17,12 M8,4 L8,16 M13,4 L13,16";
+    private const string IconFigure = "M3,5 L17,5 L17,15 L3,15 Z M5,13 L8.5,9.5 L11,12 L12.5,10 L15,13 M6,8 A1,1 0 1 0 8,8 A1,1 0 1 0 6,8";
+    private const string IconCitation = "M5,6 L9,6 L9,10 L7,14 L5,14 L7,10 L5,10 Z M11,6 L15,6 L15,10 L13,14 L11,14 L13,10 L11,10 Z";
 
     private static string? ExtractIdentifier(string heading)
     {

@@ -22,6 +22,11 @@ namespace Typescribe.Desktop;
 /// </summary>
 internal sealed class WorkspaceUxCompletionFeature
 {
+    internal static event Action<bool>? ManuscriptLineNumbersPreferenceChanged;
+
+    internal static void PublishManuscriptLineNumbersPreference(bool enabled)
+        => ManuscriptLineNumbersPreferenceChanged?.Invoke(enabled);
+
     private static readonly LabelColorChoice[] LabelColors =
     [
         new("Automatic", null),
@@ -125,6 +130,7 @@ internal sealed class WorkspaceUxCompletionFeature
         _window = window;
         _viewModel = viewModel;
         LoadSettings();
+        ManuscriptLineNumbersPreferenceChanged += ManuscriptLineNumbersPreferenceChangedHandler;
         _cardDialogTimer.Tick += (_, _) => PolishCardDialogs();
         _labelColor.SelectionChanged += (_, _) => UpdateLabelSwatch();
         _applyLabel.Click += async (_, _) => await ApplySelectedLabelAsync();
@@ -369,6 +375,14 @@ internal sealed class WorkspaceUxCompletionFeature
     {
         foreach (var editor in _window.GetVisualDescendants().OfType<ManuscriptEditor>())
             editor.ShowLineNumbers = _showLineNumbers;
+    }
+
+    private void ManuscriptLineNumbersPreferenceChangedHandler(bool enabled)
+    {
+        if (_disposed || _showLineNumbers == enabled) return;
+        _showLineNumbers = enabled;
+        SaveSettings();
+        ApplyEditorPreferences();
     }
 
     private async Task ShowSettingsAsync()
@@ -1019,6 +1033,7 @@ internal sealed class WorkspaceUxCompletionFeature
         _disposed = true;
         _cardDialogTimer.Stop();
         _viewModel.StateChanged -= ViewModelStateChanged;
+        ManuscriptLineNumbersPreferenceChanged -= ManuscriptLineNumbersPreferenceChangedHandler;
         _window.Opened -= WindowOpened;
         _window.LayoutUpdated -= WindowLayoutUpdated;
         _window.Closed -= WindowClosed;

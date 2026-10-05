@@ -286,6 +286,7 @@ internal sealed class LongFormEditorFeature
         {
             _lineNumbers = value;
             if (_editor is not null) _editor.ShowLineNumbers = value;
+            WorkspaceUxCompletionFeature.PublishManuscriptLineNumbersPreference(value);
             SavePreferences();
         });
         _pageWidthToggle = Toggle("Page", "Comfortable centered manuscript width", value =>
@@ -893,6 +894,7 @@ internal sealed class LongFormEditorFeature
             _editor.ShowMarkdownMarks = _markdownMarks;
             _editor.WordWrap = _wordWrap;
             _editor.ShowLineNumbers = _lineNumbers;
+            WorkspaceUxCompletionFeature.PublishManuscriptLineNumbersPreference(_lineNumbers);
             _editor.TextArea.TextView.Redraw();
             ApplyPageWidth();
 
