@@ -36,10 +36,7 @@ public sealed record PageLayoutRect(double XPoints, double YPoints, double Width
     public double BottomPoints => YPoints + HeightPoints;
 }
 
-public sealed record PageLayoutGuide(
-    PageLayoutGuideOrientation Orientation,
-    double PositionPoints,
-    string Kind);
+public sealed record PageLayoutGuide(PageLayoutGuideOrientation Orientation, double PositionPoints, string Kind);
 
 public sealed record PageLayoutFragment(
     string Id,
@@ -58,10 +55,7 @@ public sealed record PageLayoutFragment(
     int? TableRowIndex = null,
     int FrameColumns = 1);
 
-public sealed record PageLayoutColumn(
-    int Index,
-    PageLayoutRect Bounds,
-    IReadOnlyList<PageLayoutFragment> Fragments);
+public sealed record PageLayoutColumn(int Index, PageLayoutRect Bounds, IReadOnlyList<PageLayoutFragment> Fragments);
 
 public sealed record PageLayoutPage(
     int Index,
@@ -104,12 +98,6 @@ public sealed record PagedLayoutResult(
     public bool HasOverset => Warnings.Any(static warning => warning.Code == "overset");
 }
 
-/// <summary>
-/// Stable layout tuning values used by the Markdown-first pagination engine. The core engine does
-/// not depend on a UI text formatter; it deliberately uses deterministic point-based estimates.
-/// A page view may render the resulting boxes with the platform shaper while canonical ordering,
-/// page breaks, keep rules, frame threading and page-number state stay reproducible.
-/// </summary>
 public sealed record PagedLayoutOptions(
     double AverageGlyphWidthFactor = .52,
     int DefaultWidowLines = 2,
@@ -121,9 +109,8 @@ public sealed record PagedLayoutOptions(
     double MinimumLineHeightPoints = 8);
 
 /// <summary>
-/// Deterministic page-layout engine derived entirely from Markdown AST + styles + TypeScribe block
-/// metadata. It never mutates, reorders or duplicates authored text. Physical layout is a projection
-/// that can be discarded and recomputed at any time.
+/// Deterministic page-flow projection over the Markdown-first semantic AST. Coordinates are derived
+/// from source + styles and are never persisted as a second document representation.
 /// </summary>
 public sealed class PagedLayoutEngine
 {
@@ -132,16 +119,15 @@ public sealed class PagedLayoutEngine
     private readonly List<PageLayoutWarning> _warnings = [];
     private readonly Dictionary<string, FootnoteDefinitionBlock> _footnotes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TextFrameFormatting> _frames = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<int>> _frameSourceLines = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _usedFrameIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<int>> _frameLines = new(StringComparer.Ordinal);
     private readonly List<PageLayoutFrameThread> _frameThreads = [];
 
-    private BookStyle _style = BookStyle.Default;
     private DocumentAst _document = new([]);
+    private BookStyle _style = BookStyle.Default;
     private SectionFormatting _section = new();
     private int _columnIndex;
     private double _cursorY;
-    private int _nextDisplayPageNumber = 1;
+    private int _nextDisplayNumber = 1;
     private int _fragmentSerial;
 
     public PagedLayoutEngine(PagedLayoutOptions? options = null)
@@ -151,9 +137,8 @@ public sealed class PagedLayoutEngine
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(style);
-
         Reset(document, style);
-        PreScan(document);
+        ScanDefinitions();
 
         for (var index = 0; index < document.Blocks.Count; index++)
         {
@@ -168,7 +153,7 @@ public sealed class PagedLayoutEngine
 
             if (block.Formatting?.TextFrame is { } frame)
             {
-                LayoutTextBlock(block, index, PageLayoutFragmentKind.TextFrame, frame);
+                LayoutText(block, index, PageLayoutFragmentKind.TextFrame, frame);
                 continue;
             }
 
@@ -184,14 +169,29 @@ public sealed class PagedLayoutEngine
                     LayoutRule(block, index);
                     break;
                 default:
-                    LayoutTextBlock(block, index, KindFor(block), null);
+                    LayoutText(block, index, KindFor(block), null);
                     break;
             }
         }
 
         BuildFrameThreads();
-        var pages = _pages.Select(static page => page.Build()).ToArray();
-        return new PagedLayoutResult(pages, _frameThreads.ToArray(), _warnings.ToArray());
+        return new PagedLayoutResult(
+            _pages.Select(static page => page.Build()).ToArray(),
+            _frameThreads.ToArray(),
+            _warnings.ToArray());
+    }
+
+    public static string FormatPageNumber(int number, PageNumberStyle style)
+    {
+        number = Math.Max(1, number);
+        return style switch
+        {
+            PageNumberStyle.LowerRoman => ToRoman(number).ToLowerInvariant(),
+            PageNumberStyle.UpperRoman => ToRoman(number),
+            PageNumberStyle.LowerLetters => ToLetters(number).ToLowerInvariant(),
+            PageNumberStyle.UpperLetters => ToLetters(number),
+            _ => number.ToString(CultureInfo.InvariantCulture)
+        };
     }
 
     private void Reset(DocumentAst document, BookStyle style)
@@ -203,18 +203,17 @@ public sealed class PagedLayoutEngine
         _warnings.Clear();
         _footnotes.Clear();
         _frames.Clear();
-        _frameSourceLines.Clear();
-        _usedFrameIds.Clear();
+        _frameLines.Clear();
         _frameThreads.Clear();
         _columnIndex = 0;
         _cursorY = 0;
-        _nextDisplayPageNumber = 1;
+        _nextDisplayNumber = 1;
         _fragmentSerial = 0;
     }
 
-    private void PreScan(DocumentAst document)
+    private void ScanDefinitions()
     {
-        foreach (var block in document.Blocks)
+        foreach (var block in _document.Blocks)
         {
             if (block is FootnoteDefinitionBlock footnote)
                 _footnotes[footnote.Identifier] = footnote;
@@ -223,10 +222,10 @@ public sealed class PagedLayoutEngine
             if (!_frames.TryAdd(frame.Id, frame))
                 _warnings.Add(new PageLayoutWarning("duplicate-frame", $"Text frame '{frame.Id}' is declared more than once.", block.SourceLine));
 
-            if (!_frameSourceLines.TryGetValue(frame.Id, out var lines))
+            if (!_frameLines.TryGetValue(frame.Id, out var lines))
             {
                 lines = [];
-                _frameSourceLines[frame.Id] = lines;
+                _frameLines[frame.Id] = lines;
             }
             lines.Add(block.SourceLine);
         }
@@ -234,66 +233,58 @@ public sealed class PagedLayoutEngine
 
     private void ApplySection(SectionFormatting next)
     {
-        var geometryChanges = next.Columns != _section.Columns ||
-                              Math.Abs(next.ColumnGapPoints - _section.ColumnGapPoints) > .01 ||
+        var previous = _section;
+        var geometryChanged = next.Columns != previous.Columns ||
+                              Math.Abs(next.ColumnGapPoints - previous.ColumnGapPoints) > .001 ||
+                              next.FacingPages != previous.FacingPages ||
                               !string.Equals(next.PageStyleId ?? _style.DefaultPageStyleId,
-                                  _section.PageStyleId ?? _style.DefaultPageStyleId,
-                                  StringComparison.OrdinalIgnoreCase) ||
-                              next.FacingPages != _section.FacingPages;
-
-        var needsBoundary = next.Start != SectionStartMode.Continuous ||
-                            geometryChanges ||
-                            next.PageNumberStart is not null;
+                                  previous.PageStyleId ?? _style.DefaultPageStyleId,
+                                  StringComparison.OrdinalIgnoreCase);
 
         _section = next;
         if (next.PageNumberStart is { } restart)
-            _nextDisplayPageNumber = Math.Max(1, restart);
+            _nextDisplayNumber = Math.Max(1, restart);
 
         if (_pages.Count == 0) return;
-        if (!needsBoundary) return;
+        if (next.Start == SectionStartMode.Continuous && !geometryChanged && next.PageNumberStart is null) return;
 
-        if (next.Start == SectionStartMode.Continuous && !geometryChanges && next.PageNumberStart is null)
-            return;
+        StartPage();
+        if (next.Start is not (SectionStartMode.NextOddPage or SectionStartMode.NextEvenPage)) return;
 
-        StartNewPage();
-
-        if (next.Start is SectionStartMode.NextOddPage or SectionStartMode.NextEvenPage)
+        var wantOdd = next.Start == SectionStartMode.NextOddPage;
+        while (((CurrentPage.PhysicalNumber & 1) == 1) != wantOdd)
         {
-            var desiredOdd = next.Start == SectionStartMode.NextOddPage;
-            while (((CurrentPage.PhysicalNumber & 1) == 1) != desiredOdd)
-            {
-                CurrentPage.IsBlank = true;
-                StartNewPage();
-            }
+            CurrentPage.IsBlank = true;
+            StartPage();
         }
     }
 
     private void EnsurePage()
     {
-        if (_pages.Count == 0) StartNewPage();
+        if (_pages.Count == 0) StartPage();
     }
 
-    private void StartNewPage()
+    private void StartPage()
     {
         var physical = _pages.Count + 1;
         var geometry = ResolveGeometry(_section, physical);
         var page = new PageBuilder(
-            index: _pages.Count,
-            physicalNumber: physical,
-            displayNumber: _nextDisplayPageNumber,
-            numberStyle: _section.PageNumberStyle,
-            facingPages: geometry.FacingPages,
-            geometry: geometry,
-            section: _section);
-
+            _pages.Count,
+            physical,
+            _nextDisplayNumber,
+            _section.PageNumberStyle,
+            geometry,
+            _section);
         _pages.Add(page);
-        _nextDisplayPageNumber++;
+        _nextDisplayNumber++;
         _columnIndex = 0;
         _cursorY = page.Columns[0].Bounds.YPoints;
     }
 
     private PageBuilder CurrentPage => _pages[^1];
     private ColumnBuilder CurrentColumn => CurrentPage.Columns[_columnIndex];
+    private double BodyBottom => CurrentPage.BodyBottomPoints;
+    private double AvailableHeight => Math.Max(0, BodyBottom - _cursorY);
 
     private void AdvanceColumn()
     {
@@ -301,60 +292,47 @@ public sealed class PagedLayoutEngine
         {
             _columnIndex++;
             _cursorY = CurrentColumn.Bounds.YPoints;
-            return;
         }
-
-        StartNewPage();
+        else
+        {
+            StartPage();
+        }
     }
-
-    private double BodyBottom => CurrentPage.BodyBottomPoints;
-    private double AvailableHeight => Math.Max(0, BodyBottom - _cursorY);
 
     private void ReserveFootnotes(AstBlock block)
     {
-        var ids = FootnoteIds(block).Distinct(StringComparer.Ordinal).ToArray();
-        if (ids.Length == 0) return;
-
-        foreach (var id in ids)
+        foreach (var id in FootnoteIds(block).Distinct(StringComparer.Ordinal))
         {
             if (!_footnotes.TryGetValue(id, out var definition))
             {
                 _warnings.Add(new PageLayoutWarning("missing-footnote", $"Footnote '{id}' has no definition.", block.SourceLine));
                 continue;
             }
-
             if (CurrentPage.HasFootnote(id)) continue;
+
             var text = definition.Inlines.ToPlainText();
             var metrics = MeasureText(text, CurrentColumn.Bounds.WidthPoints, _style.FootnoteFontSizePoints, 1.05);
-            var height = metrics.LineHeightPoints * metrics.Lines.Count + _options.FootnoteGapPoints;
-
+            var height = metrics.Lines.Count * metrics.LineHeightPoints + _options.FootnoteGapPoints;
             if (AvailableHeight < height + _options.MinimumLineHeightPoints && CurrentColumn.Fragments.Count > 0)
                 AdvanceColumn();
-
-            CurrentPage.ReserveFootnote(id, definition.SourceLine, text, height, _style.FootnoteFontSizePoints);
+            CurrentPage.ReserveFootnote(id, definition.SourceLine, text, height);
         }
     }
 
-    private void LayoutTextBlock(
-        AstBlock block,
-        int blockIndex,
-        PageLayoutFragmentKind kind,
-        TextFrameFormatting? frame)
+    private void LayoutText(AstBlock block, int blockIndex, PageLayoutFragmentKind kind, TextFrameFormatting? frame)
     {
         var text = TextFor(block);
-        var paragraph = block.Formatting?.Paragraph;
         var metrics = MeasureBlock(block, text, CurrentColumn.Bounds.WidthPoints);
-        var keepWithNext = ResolveKeepWithNext(paragraph, block);
-        var keepTogether = ResolveKeepLinesTogether(paragraph, block) || kind == PageLayoutFragmentKind.Heading;
+        var paragraph = block.Formatting?.Paragraph;
+        var keepTogether = KeepTogether(paragraph, block) || kind == PageLayoutFragmentKind.Heading;
 
-        if (keepWithNext && blockIndex + 1 < _document.Blocks.Count)
+        if (KeepWithNext(paragraph, block) && blockIndex + 1 < _document.Blocks.Count)
         {
             var next = _document.Blocks.Skip(blockIndex + 1)
                 .FirstOrDefault(static candidate => candidate is not FootnoteDefinitionBlock and not BibliographyEntryBlock);
             if (next is not null)
             {
-                var nextHeight = EstimateBlockHeight(next, CurrentColumn.Bounds.WidthPoints);
-                var pairHeight = metrics.TotalHeightPoints + nextHeight;
+                var pairHeight = metrics.TotalHeightPoints + EstimateHeight(next, CurrentColumn.Bounds.WidthPoints);
                 if (pairHeight <= CurrentColumn.Bounds.HeightPoints && pairHeight > AvailableHeight)
                     AdvanceColumn();
             }
@@ -363,108 +341,90 @@ public sealed class PagedLayoutEngine
         if (keepTogether && metrics.TotalHeightPoints <= CurrentColumn.Bounds.HeightPoints && metrics.TotalHeightPoints > AvailableHeight)
             AdvanceColumn();
 
-        var lines = metrics.Lines;
-        var lineOffset = 0;
-        var fragmentIndex = 0;
-        var frameId = frame?.Id;
         var frameChain = frame is null ? Array.Empty<string>() : FollowFrameChain(frame.Id).ToArray();
         var frameSlot = 0;
+        var lineOffset = 0;
+        var fragmentIndex = 0;
 
-        while (lineOffset < lines.Count)
+        while (lineOffset < metrics.Lines.Count)
         {
-            EnsurePage();
+            if (frame is not null && frameSlot >= frameChain.Length)
+            {
+                AddOverset(block, blockIndex, frame.Id, metrics.Lines.Skip(lineOffset));
+                return;
+            }
+
             var before = fragmentIndex == 0 ? metrics.SpaceBeforePoints : 0;
             var available = AvailableHeight - before;
             if (available < metrics.LineHeightPoints)
             {
                 AdvanceColumn();
+                if (frame is not null) frameSlot++;
                 continue;
             }
 
-            var fit = Math.Max(1, (int)Math.Floor(available / metrics.LineHeightPoints));
-            var remaining = lines.Count - lineOffset;
-            fit = Math.Min(fit, remaining);
-
+            var fit = Math.Min(
+                metrics.Lines.Count - lineOffset,
+                Math.Max(1, (int)Math.Floor(available / metrics.LineHeightPoints)));
+            var remaining = metrics.Lines.Count - lineOffset;
             if (fit < remaining)
             {
                 if (keepTogether && metrics.TotalHeightPoints > CurrentColumn.Bounds.HeightPoints)
-                    _warnings.Add(new PageLayoutWarning("forced-split", "A keep-lines-together block is taller than a full column and had to split.", block.SourceLine));
+                    _warnings.Add(new PageLayoutWarning("forced-split", "A keep-lines-together block exceeded a full column and had to split.", block.SourceLine));
 
-                var firstMinimum = ResolveKeepFirstLines(paragraph);
-                var lastMinimum = ResolveKeepLastLines(paragraph);
+                var firstMinimum = KeepFirstLines(paragraph);
+                var lastMinimum = KeepLastLines(paragraph);
                 if (lineOffset == 0 && fit < firstMinimum)
                 {
                     AdvanceColumn();
+                    if (frame is not null) frameSlot++;
                     continue;
                 }
-
-                var leftover = remaining - fit;
-                if (leftover < lastMinimum)
+                if (remaining - fit < lastMinimum)
                 {
                     var adjusted = remaining - lastMinimum;
                     if (adjusted >= (lineOffset == 0 ? firstMinimum : 1)) fit = adjusted;
-                    else
-                    {
-                        AdvanceColumn();
-                        continue;
-                    }
                 }
             }
 
-            if (frame is not null)
-            {
-                if (frameSlot >= frameChain.Length)
-                {
-                    AddOverset(block, blockIndex, frameId ?? frame.Id, lines.Skip(lineOffset));
-                    return;
-                }
-                frameId = frameChain[frameSlot];
-                _usedFrameIds.Add(frameId);
-            }
-
-            var isLast = lineOffset + fit >= lines.Count;
-            var after = isLast ? metrics.SpaceAfterPoints : 0;
+            var last = lineOffset + fit >= metrics.Lines.Count;
+            var after = last ? metrics.SpaceAfterPoints : 0;
             var height = before + fit * metrics.LineHeightPoints + after;
-            var bounds = new PageLayoutRect(
-                CurrentColumn.Bounds.XPoints,
-                _cursorY,
-                CurrentColumn.Bounds.WidthPoints,
-                height);
-            var fragmentText = string.Join('\n', lines.Skip(lineOffset).Take(fit));
+            var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, height);
+            var frameId = frame is null ? null : frameChain[frameSlot];
             CurrentColumn.Fragments.Add(new PageLayoutFragment(
-                NextFragmentId(),
+                NextId(),
                 kind,
                 block.SourceLine,
                 blockIndex,
                 bounds,
-                fragmentText,
-                fragmentIndex,
-                fragmentIndex > 0,
+                string.Join('\n', metrics.Lines.Skip(lineOffset).Take(fit)),
+                FragmentIndex: fragmentIndex,
+                IsContinuation: fragmentIndex > 0,
                 FrameId: frameId,
                 FrameColumns: Math.Max(1, frame?.Columns ?? 1)));
             _cursorY += height;
             lineOffset += fit;
             fragmentIndex++;
 
-            if (lineOffset < lines.Count)
+            if (lineOffset < metrics.Lines.Count)
             {
-                if (frame is not null) frameSlot++;
                 AdvanceColumn();
+                if (frame is not null) frameSlot++;
             }
         }
     }
 
-    private void AddOverset(AstBlock block, int blockIndex, string frameId, IEnumerable<string> remainingLines)
+    private void AddOverset(AstBlock block, int blockIndex, string frameId, IEnumerable<string> remaining)
     {
-        var markerHeight = Math.Min(_options.OversetIndicatorHeightPoints, Math.Max(4, AvailableHeight));
-        var y = Math.Min(_cursorY, Math.Max(CurrentColumn.Bounds.YPoints, BodyBottom - markerHeight));
+        var size = Math.Min(_options.OversetIndicatorHeightPoints, Math.Max(4, AvailableHeight));
         var bounds = new PageLayoutRect(
-            CurrentColumn.Bounds.RightPoints - markerHeight,
-            y,
-            markerHeight,
-            markerHeight);
+            Math.Max(CurrentColumn.Bounds.XPoints, CurrentColumn.Bounds.RightPoints - size),
+            Math.Min(_cursorY, Math.Max(CurrentColumn.Bounds.YPoints, BodyBottom - size)),
+            size,
+            size);
         CurrentColumn.Fragments.Add(new PageLayoutFragment(
-            NextFragmentId(),
+            NextId(),
             PageLayoutFragmentKind.OversetIndicator,
             block.SourceLine,
             blockIndex,
@@ -474,7 +434,7 @@ public sealed class PagedLayoutEngine
             FrameId: frameId));
         _warnings.Add(new PageLayoutWarning(
             "overset",
-            $"Text frame '{frameId}' has overset text ({remainingLines.Sum(static line => line.Length)} characters remain).",
+            $"Text frame '{frameId}' has overset text ({remaining.Sum(static line => line.Length)} characters remain).",
             block.SourceLine));
     }
 
@@ -484,64 +444,40 @@ public sealed class PagedLayoutEngine
         if (AvailableHeight < height) AdvanceColumn();
         var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, height);
         CurrentColumn.Fragments.Add(new PageLayoutFragment(
-            NextFragmentId(), PageLayoutFragmentKind.ThematicBreak, block.SourceLine, blockIndex, bounds, "—"));
+            NextId(), PageLayoutFragmentKind.ThematicBreak, block.SourceLine, blockIndex, bounds, "—"));
         _cursorY += height;
     }
 
     private void LayoutFigure(FigureBlock figure, int blockIndex)
     {
         var anchored = figure.Formatting?.AnchoredObject;
-        var figureStyle = _style.NamedStyles.ResolveFigure(figure.StyleId ?? _style.DefaultFigureStyleId);
-        var widthPercent = figure.Layout?.WidthPercent ?? figureStyle?.MaxWidthPercent ?? 90;
-        widthPercent = Math.Clamp(widthPercent, 10, 100);
+        var named = _style.NamedStyles.ResolveFigure(figure.StyleId ?? _style.DefaultFigureStyleId);
+        var widthPercent = Math.Clamp(figure.Layout?.WidthPercent ?? named?.MaxWidthPercent ?? 90, 10, 100);
         var width = CurrentColumn.Bounds.WidthPoints * widthPercent / 100d;
         var height = figure.Layout?.HeightInches is { } inches
             ? Math.Max(_options.MinimumFigureHeightPoints, inches * 72d)
             : Math.Max(_options.MinimumFigureHeightPoints, width * _options.DefaultFigureAspectRatio);
         if (!string.IsNullOrWhiteSpace(figure.Caption)) height += _style.CaptionFontSizePoints * 1.3;
 
-        var placement = anchored?.Placement ?? ToFloatPlacement(figure.Layout?.Placement ?? figureStyle?.Placement);
-        var wrap = anchored?.Wrap ?? TextWrapMode.None;
-        var x = CurrentColumn.Bounds.XPoints + (CurrentColumn.Bounds.WidthPoints - width) / 2d;
-        var y = _cursorY;
-
-        if (placement == FloatPlacementMode.Page)
-        {
-            if (CurrentColumn.Fragments.Count > 0) AdvanceColumn();
-            x = CurrentColumn.Bounds.XPoints + (CurrentColumn.Bounds.WidthPoints - width) / 2d;
-            y = CurrentColumn.Bounds.YPoints + Math.Max(0, (CurrentColumn.Bounds.HeightPoints - height) / 2d);
-        }
-        else if (placement == FloatPlacementMode.Top)
-        {
-            if (CurrentColumn.Fragments.Count > 0) AdvanceColumn();
-            y = CurrentColumn.Bounds.YPoints;
-        }
-        else if (placement == FloatPlacementMode.Bottom)
-        {
-            if (AvailableHeight < height && CurrentColumn.Fragments.Count > 0) AdvanceColumn();
-            y = Math.Max(_cursorY, BodyBottom - height);
-        }
-        else if (placement == FloatPlacementMode.Margin)
-        {
-            var marginWidth = Math.Max(54, (CurrentPage.Geometry.WidthPoints - CurrentPage.Geometry.ContentBounds.WidthPoints) * .8);
-            var onLeft = CurrentPage.IsLeftPage;
-            x = onLeft
-                ? Math.Max(0, CurrentPage.Geometry.ContentBounds.XPoints - marginWidth - 6)
-                : Math.Min(CurrentPage.Geometry.WidthPoints - marginWidth, CurrentPage.Geometry.ContentBounds.RightPoints + 6);
-            width = marginWidth;
-            height = Math.Min(height, CurrentPage.Geometry.ContentBounds.HeightPoints / 2d);
-        }
-        else if (AvailableHeight < height && CurrentColumn.Fragments.Count > 0)
-        {
+        var placement = anchored?.Placement ?? ToFloatPlacement(figure.Layout?.Placement ?? named?.Placement);
+        if (placement is FloatPlacementMode.Top or FloatPlacementMode.Page && CurrentColumn.Fragments.Count > 0)
             AdvanceColumn();
-            x = CurrentColumn.Bounds.XPoints + (CurrentColumn.Bounds.WidthPoints - width) / 2d;
-            y = _cursorY;
-        }
+        if (placement is not FloatPlacementMode.Margin && AvailableHeight < height && CurrentColumn.Fragments.Count > 0)
+            AdvanceColumn();
 
-        if (height > CurrentColumn.Bounds.HeightPoints)
+        height = Math.Min(height, CurrentColumn.Bounds.HeightPoints);
+        var x = CurrentColumn.Bounds.XPoints + (CurrentColumn.Bounds.WidthPoints - width) / 2;
+        var y = _cursorY;
+        if (placement == FloatPlacementMode.Bottom) y = Math.Max(_cursorY, BodyBottom - height);
+        if (placement == FloatPlacementMode.Page) y = CurrentColumn.Bounds.YPoints + Math.Max(0, (CurrentColumn.Bounds.HeightPoints - height) / 2);
+        if (placement == FloatPlacementMode.Margin)
         {
-            height = CurrentColumn.Bounds.HeightPoints;
-            _warnings.Add(new PageLayoutWarning("figure-clipped", "Figure height exceeded the page body and was clipped in page layout.", figure.SourceLine));
+            var margin = Math.Max(54, (CurrentPage.Geometry.WidthPoints - CurrentPage.Geometry.ContentBounds.WidthPoints) * .8);
+            width = margin;
+            height = Math.Min(height, CurrentPage.Geometry.ContentBounds.HeightPoints / 2);
+            x = CurrentPage.IsLeftPage
+                ? Math.Max(0, CurrentPage.Geometry.ContentBounds.XPoints - margin - 6)
+                : Math.Min(CurrentPage.Geometry.WidthPoints - margin, CurrentPage.Geometry.ContentBounds.RightPoints + 6);
         }
 
         var bounds = new PageLayoutRect(
@@ -549,20 +485,21 @@ public sealed class PagedLayoutEngine
             y + (anchored?.OffsetYPoints ?? 0),
             width,
             height);
-        var kind = placement == FloatPlacementMode.Margin
-            ? PageLayoutFragmentKind.MarginNote
-            : placement == FloatPlacementMode.Inline
-                ? PageLayoutFragmentKind.Figure
-                : PageLayoutFragmentKind.FloatingObject;
+        var kind = placement switch
+        {
+            FloatPlacementMode.Margin => PageLayoutFragmentKind.MarginNote,
+            FloatPlacementMode.Inline or FloatPlacementMode.Here => PageLayoutFragmentKind.Figure,
+            _ => PageLayoutFragmentKind.FloatingObject
+        };
         var fragment = new PageLayoutFragment(
-            NextFragmentId(),
+            NextId(),
             kind,
             figure.SourceLine,
             blockIndex,
             bounds,
             string.IsNullOrWhiteSpace(figure.Caption) ? figure.Source : figure.Caption,
             AnchorId: anchored?.Id,
-            Wrap: wrap,
+            Wrap: anchored?.Wrap ?? TextWrapMode.None,
             Placement: placement);
 
         if (kind is PageLayoutFragmentKind.FloatingObject or PageLayoutFragmentKind.MarginNote)
@@ -570,104 +507,67 @@ public sealed class PagedLayoutEngine
         else
             CurrentColumn.Fragments.Add(fragment);
 
-        if (placement is FloatPlacementMode.Inline or FloatPlacementMode.Here or FloatPlacementMode.Top or FloatPlacementMode.Bottom or FloatPlacementMode.Page)
-            _cursorY = Math.Max(_cursorY, bounds.BottomPoints + (wrap == TextWrapMode.None ? 0 : Math.Max(anchored?.WrapBottomPoints ?? 0, 4)));
+        if (placement is not FloatPlacementMode.Margin)
+            _cursorY = Math.Max(_cursorY, bounds.BottomPoints);
     }
 
     private void LayoutTable(TableBlock table, int blockIndex)
     {
-        var tableStyle = _style.NamedStyles.ResolveTable(table.StyleId ?? _style.DefaultTableStyleId);
-        var keepTable = table.Properties?.KeepTogether ?? tableStyle?.KeepTogether ?? false;
-        var headerRows = BuildHeaderRows(table);
-        var bodyRows = BuildBodyRows(table, headerRows.BodyHeaderCount);
-        var totalHeight = headerRows.Rows.Sum(row => MeasureTableRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties).HeightPoints) +
-                          bodyRows.Sum(row => MeasureTableRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties).HeightPoints) +
-                          (string.IsNullOrWhiteSpace(table.Caption) ? 0 : _style.CaptionFontSizePoints * 1.4);
-
-        if (keepTable && totalHeight <= CurrentColumn.Bounds.HeightPoints && totalHeight > AvailableHeight)
+        var headers = HeaderRows(table);
+        var body = BodyRows(table, headers.BodyHeaderCount);
+        var allHeight = headers.Rows.Sum(row => MeasureRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties).HeightPoints) +
+                        body.Sum(row => MeasureRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties).HeightPoints);
+        if (table.Properties?.KeepTogether == true && allHeight <= CurrentColumn.Bounds.HeightPoints && allHeight > AvailableHeight)
             AdvanceColumn();
 
         if (!string.IsNullOrWhiteSpace(table.Caption))
         {
-            var height = _style.CaptionFontSizePoints * 1.4;
-            if (AvailableHeight < height) AdvanceColumn();
-            var captionBounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, height);
+            var captionHeight = _style.CaptionFontSizePoints * 1.4;
+            if (AvailableHeight < captionHeight) AdvanceColumn();
+            var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, captionHeight);
             CurrentColumn.Fragments.Add(new PageLayoutFragment(
-                NextFragmentId(), PageLayoutFragmentKind.TableCaption, table.SourceLine, blockIndex, captionBounds, table.Caption!));
-            _cursorY += height;
+                NextId(), PageLayoutFragmentKind.TableCaption, table.SourceLine, blockIndex, bounds, table.Caption!));
+            _cursorY += captionHeight;
         }
 
-        var headerRenderedOnColumn = false;
-        foreach (var row in bodyRows.PrependRange(headerRows.Rows))
-        {
-            var isHeader = row.IsHeader;
-            if (!isHeader && !headerRenderedOnColumn)
-            {
-                RenderRepeatedHeaders(table, blockIndex, headerRows.Rows);
-                headerRenderedOnColumn = true;
-            }
+        foreach (var header in headers.Rows)
+            RenderRow(table, blockIndex, header, repeated: false);
 
-            var rowMetrics = MeasureTableRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties);
-            if (rowMetrics.HeightPoints > AvailableHeight)
+        foreach (var row in body)
+        {
+            var measured = MeasureRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties);
+            if (measured.HeightPoints > AvailableHeight)
             {
                 AdvanceColumn();
-                headerRenderedOnColumn = false;
-                if (!isHeader)
-                {
-                    RenderRepeatedHeaders(table, blockIndex, headerRows.Rows);
-                    headerRenderedOnColumn = true;
-                }
+                foreach (var header in headers.Rows)
+                    RenderRow(table, blockIndex, header, repeated: true);
             }
-
-            if (rowMetrics.HeightPoints > CurrentColumn.Bounds.HeightPoints)
-            {
-                _warnings.Add(new PageLayoutWarning(
-                    "table-row-overset",
-                    $"Table row {row.RowIndex + 1} is taller than a full column.",
-                    table.SourceLine));
-            }
-
-            var rowHeight = Math.Min(rowMetrics.HeightPoints, CurrentColumn.Bounds.HeightPoints);
-            var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, rowHeight);
-            CurrentColumn.Fragments.Add(new PageLayoutFragment(
-                NextFragmentId(),
-                isHeader ? PageLayoutFragmentKind.TableHeader : PageLayoutFragmentKind.TableRow,
-                table.SourceLine,
-                blockIndex,
-                bounds,
-                rowMetrics.Text,
-                IsRepeatedHeader: false,
-                TableRowIndex: row.RowIndex));
-            _cursorY += rowHeight;
-            if (isHeader) headerRenderedOnColumn = true;
+            RenderRow(table, blockIndex, row, repeated: false);
         }
     }
 
-    private void RenderRepeatedHeaders(TableBlock table, int blockIndex, IReadOnlyList<TableRowLayout> headers)
+    private void RenderRow(TableBlock table, int blockIndex, TableRowLayout row, bool repeated)
     {
-        if (headers.Count == 0) return;
-        if (CurrentColumn.Fragments.Count == 0 && Math.Abs(_cursorY - CurrentColumn.Bounds.YPoints) < .01)
-        {
-            foreach (var header in headers)
-            {
-                var metrics = MeasureTableRow(header.Cells, CurrentColumn.Bounds.WidthPoints, header.Properties);
-                if (metrics.HeightPoints > AvailableHeight) break;
-                var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, metrics.HeightPoints);
-                CurrentColumn.Fragments.Add(new PageLayoutFragment(
-                    NextFragmentId(),
-                    PageLayoutFragmentKind.TableHeader,
-                    table.SourceLine,
-                    blockIndex,
-                    bounds,
-                    metrics.Text,
-                    IsRepeatedHeader: true,
-                    TableRowIndex: header.RowIndex));
-                _cursorY += metrics.HeightPoints;
-            }
-        }
+        var measured = MeasureRow(row.Cells, CurrentColumn.Bounds.WidthPoints, row.Properties);
+        if (measured.HeightPoints > AvailableHeight && CurrentColumn.Fragments.Count > 0)
+            AdvanceColumn();
+        var height = Math.Min(measured.HeightPoints, CurrentColumn.Bounds.HeightPoints);
+        if (measured.HeightPoints > CurrentColumn.Bounds.HeightPoints)
+            _warnings.Add(new PageLayoutWarning("table-row-overset", $"Table row {row.RowIndex + 1} exceeds a full column.", table.SourceLine));
+        var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, height);
+        CurrentColumn.Fragments.Add(new PageLayoutFragment(
+            NextId(),
+            row.IsHeader ? PageLayoutFragmentKind.TableHeader : PageLayoutFragmentKind.TableRow,
+            table.SourceLine,
+            blockIndex,
+            bounds,
+            measured.Text,
+            IsRepeatedHeader: repeated,
+            TableRowIndex: row.RowIndex));
+        _cursorY += height;
     }
 
-    private (IReadOnlyList<TableRowLayout> Rows, int BodyHeaderCount) BuildHeaderRows(TableBlock table)
+    private (IReadOnlyList<TableRowLayout> Rows, int BodyHeaderCount) HeaderRows(TableBlock table)
     {
         var rows = new List<TableRowLayout>
         {
@@ -676,137 +576,107 @@ public sealed class PagedLayoutEngine
         var bodyHeaderCount = Math.Max(0, table.RepeatHeaderRows - 1);
         for (var index = 0; index < table.Rows.Count; index++)
         {
-            var properties = GetRowProperties(table, index);
+            var properties = RowProperties(table, index);
             if (index < bodyHeaderCount || properties.RepeatAsHeader)
                 rows.Add(new TableRowLayout(index, table.Rows[index], properties, true));
         }
         return (rows, bodyHeaderCount);
     }
 
-    private IReadOnlyList<TableRowLayout> BuildBodyRows(TableBlock table, int bodyHeaderCount)
+    private IReadOnlyList<TableRowLayout> BodyRows(TableBlock table, int bodyHeaderCount)
     {
         var rows = new List<TableRowLayout>();
         for (var index = 0; index < table.Rows.Count; index++)
         {
-            var properties = GetRowProperties(table, index);
+            var properties = RowProperties(table, index);
             if (index < bodyHeaderCount || properties.RepeatAsHeader) continue;
             rows.Add(new TableRowLayout(index, table.Rows[index], properties, false));
         }
         return rows;
     }
 
-    private static TableRowProperties GetRowProperties(TableBlock table, int index)
+    private static TableRowProperties RowProperties(TableBlock table, int index)
         => table.RowProperties is { Count: > 0 } && index < table.RowProperties.Count
             ? table.RowProperties[index]
             : new TableRowProperties();
 
-    private TableRowMetrics MeasureTableRow(
-        IReadOnlyList<TableCell> cells,
-        double widthPoints,
-        TableRowProperties properties)
+    private TableRowMetrics MeasureRow(IReadOnlyList<TableCell> cells, double width, TableRowProperties properties)
     {
-        var count = Math.Max(1, cells.Count);
-        var cellWidth = widthPoints / count;
-        var maxLines = 1;
+        var cellWidth = width / Math.Max(1, cells.Count);
+        var lines = 1;
         var values = new List<string>(cells.Count);
         foreach (var cell in cells)
         {
             var text = cell.Inlines.ToPlainText();
             values.Add(text);
-            var metrics = MeasureText(text, Math.Max(12, cellWidth - 8), _style.BodyFontSizePoints, _style.LineSpacing);
-            maxLines = Math.Max(maxLines, metrics.Lines.Count);
+            lines = Math.Max(lines, MeasureText(text, Math.Max(12, cellWidth - 8), _style.BodyFontSizePoints, _style.LineSpacing).Lines.Count);
         }
-
-        var height = maxLines * Math.Max(_options.MinimumLineHeightPoints, _style.BodyFontSizePoints * _style.LineSpacing) + 8;
+        var height = lines * Math.Max(_options.MinimumLineHeightPoints, _style.BodyFontSizePoints * _style.LineSpacing) + 8;
         if (properties.MinimumHeightPoints is { } minimum) height = Math.Max(height, minimum);
         return new TableRowMetrics(height, string.Join(" | ", values));
     }
 
-    private BlockMetrics MeasureBlock(AstBlock block, string text, double widthPoints)
+    private BlockMetrics MeasureBlock(AstBlock block, string text, double width)
     {
         var paragraph = block.Formatting?.Paragraph;
-        var explicitStyle = !string.IsNullOrWhiteSpace(paragraph?.StyleId)
+        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId)
             ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId)
-            : block is HeadingBlock
-                ? null
-                : _style.NamedStyles.ResolveParagraph(_style.DefaultParagraphStyleId);
-
-        var fontSize = paragraph?.CharacterDefaults?.FontSizePoints ?? explicitStyle?.FontSizePoints ?? FontSizeFor(block);
-        var lineSpacing = paragraph?.LineSpacing ?? explicitStyle?.LineSpacing ?? _style.LineSpacing;
-        var before = paragraph?.SpaceBeforePoints ?? explicitStyle?.SpaceBeforePoints ?? SpaceBeforeFor(block);
-        var after = paragraph?.SpaceAfterPoints ?? explicitStyle?.SpaceAfterPoints ?? SpaceAfterFor(block);
-        var textMetrics = MeasureText(text, widthPoints, fontSize, lineSpacing);
-        if (paragraph?.Rules is { Count: > 0 })
-        {
-            before += paragraph.Rules.Count(rule => rule.Position == ParagraphRulePosition.Above) * 2;
-            after += paragraph.Rules.Count(rule => rule.Position == ParagraphRulePosition.Below) * 2;
-        }
-        return new BlockMetrics(textMetrics.Lines, textMetrics.LineHeightPoints, before, after);
+            : block is HeadingBlock ? null : _style.NamedStyles.ResolveParagraph(_style.DefaultParagraphStyleId);
+        var fontSize = paragraph?.CharacterDefaults?.FontSizePoints ?? named?.FontSizePoints ?? FontSize(block);
+        var lineSpacing = paragraph?.LineSpacing ?? named?.LineSpacing ?? _style.LineSpacing;
+        var before = paragraph?.SpaceBeforePoints ?? named?.SpaceBeforePoints ?? SpaceBefore(block);
+        var after = paragraph?.SpaceAfterPoints ?? named?.SpaceAfterPoints ?? SpaceAfter(block);
+        var measured = MeasureText(text, width, fontSize, lineSpacing);
+        return new BlockMetrics(measured.Lines, measured.LineHeightPoints, before, after);
     }
 
-    private double EstimateBlockHeight(AstBlock block, double widthPoints)
+    private double EstimateHeight(AstBlock block, double width)
+        => block switch
+        {
+            ThematicBreakBlock => 12,
+            FigureBlock figure => Math.Max(_options.MinimumFigureHeightPoints,
+                width * Math.Clamp(figure.Layout?.WidthPercent ?? 90, 10, 100) / 100 * _options.DefaultFigureAspectRatio),
+            TableBlock table => HeaderRows(table).Rows.Sum(row => MeasureRow(row.Cells, width, row.Properties).HeightPoints) +
+                                BodyRows(table, Math.Max(0, table.RepeatHeaderRows - 1)).Sum(row => MeasureRow(row.Cells, width, row.Properties).HeightPoints),
+            _ => MeasureBlock(block, TextFor(block), width).TotalHeightPoints
+        };
+
+    private TextMetrics MeasureText(string text, double width, double fontSize, double lineSpacing)
     {
-        if (block is TableBlock table)
-        {
-            var headers = BuildHeaderRows(table);
-            var rows = BuildBodyRows(table, headers.BodyHeaderCount);
-            return headers.Rows.Sum(row => MeasureTableRow(row.Cells, widthPoints, row.Properties).HeightPoints) +
-                   rows.Sum(row => MeasureTableRow(row.Cells, widthPoints, row.Properties).HeightPoints);
-        }
-        if (block is FigureBlock figure)
-        {
-            var width = widthPoints * Math.Clamp(figure.Layout?.WidthPercent ?? 90, 10, 100) / 100d;
-            return figure.Layout?.HeightInches is { } inches
-                ? inches * 72d
-                : Math.Max(_options.MinimumFigureHeightPoints, width * _options.DefaultFigureAspectRatio);
-        }
-        if (block is ThematicBreakBlock) return 12;
-        return MeasureBlock(block, TextFor(block), widthPoints).TotalHeightPoints;
+        var glyphWidth = Math.Max(2.5, fontSize * _options.AverageGlyphWidthFactor);
+        var capacity = Math.Max(4, (int)Math.Floor(width / glyphWidth));
+        return new TextMetrics(Wrap(text, capacity), Math.Max(_options.MinimumLineHeightPoints, fontSize * Math.Max(.8, lineSpacing)));
     }
 
-    private TextMetrics MeasureText(string text, double widthPoints, double fontSizePoints, double lineSpacing)
-    {
-        var glyph = Math.Max(2.5, fontSizePoints * _options.AverageGlyphWidthFactor);
-        var capacity = Math.Max(4, (int)Math.Floor(widthPoints / glyph));
-        var lines = WrapText(text, capacity);
-        var lineHeight = Math.Max(_options.MinimumLineHeightPoints, fontSizePoints * Math.Max(.8, lineSpacing));
-        return new TextMetrics(lines, lineHeight);
-    }
-
-    private static IReadOnlyList<string> WrapText(string text, int capacity)
+    private static IReadOnlyList<string> Wrap(string text, int capacity)
     {
         if (string.IsNullOrEmpty(text)) return [string.Empty];
-        var lines = new List<string>();
+        var output = new List<string>();
         foreach (var logical in text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
         {
-            var current = new StringBuilder();
-            var units = 0;
+            var builder = new StringBuilder();
+            var used = 0;
             foreach (var rune in logical.EnumerateRunes())
             {
                 var width = RuneWidth(rune);
-                if (units > 0 && units + width > capacity)
+                if (used > 0 && used + width > capacity)
                 {
-                    lines.Add(current.ToString());
-                    current.Clear();
-                    units = 0;
+                    output.Add(builder.ToString());
+                    builder.Clear();
+                    used = 0;
                 }
-                current.Append(rune.ToString());
-                units += width;
+                builder.Append(rune.ToString());
+                used += width;
             }
-            lines.Add(current.ToString());
+            output.Add(builder.ToString());
         }
-        return lines.Count == 0 ? [string.Empty] : lines;
+        return output.Count == 0 ? [string.Empty] : output;
     }
 
     private static int RuneWidth(Rune rune)
-    {
-        if (rune.Value == '\t') return 4;
-        if (rune.Value is >= 0x1100 and <= 0x11FF or >= 0x2E80 and <= 0xA4CF or >= 0x1F000)
-            return 2;
-        return 1;
-    }
+        => rune.Value == '\t' ? 4 : rune.Value is >= 0x1100 and <= 0x11FF or >= 0x2E80 and <= 0xA4CF or >= 0x1F000 ? 2 : 1;
 
-    private double FontSizeFor(AstBlock block)
+    private double FontSize(AstBlock block)
         => block switch
         {
             HeadingBlock { Level: 1 } => _style.ChapterFontSizePoints,
@@ -818,7 +688,7 @@ public sealed class PagedLayoutEngine
             _ => _style.BodyFontSizePoints
         };
 
-    private double SpaceBeforeFor(AstBlock block)
+    private double SpaceBefore(AstBlock block)
         => block switch
         {
             HeadingBlock { Level: 1 } => _style.ChapterBeforeSpacingPoints,
@@ -826,7 +696,7 @@ public sealed class PagedLayoutEngine
             _ => 0
         };
 
-    private double SpaceAfterFor(AstBlock block)
+    private double SpaceAfter(AstBlock block)
         => block switch
         {
             HeadingBlock { Level: 1 } => _style.ChapterAfterSpacingPoints,
@@ -835,91 +705,34 @@ public sealed class PagedLayoutEngine
             _ => 0
         };
 
-    private bool ResolveKeepWithNext(ParagraphFormatting? paragraph, AstBlock block)
+    private bool KeepWithNext(ParagraphFormatting? paragraph, AstBlock block)
     {
         if (paragraph?.KeepWithNext is { } direct) return direct;
-        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId)
-            ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId)
-            : null;
-        if (named?.KeepWithNext is { } styleValue) return styleValue;
-        return block is HeadingBlock;
+        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId) ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId) : null;
+        return named?.KeepWithNext ?? block is HeadingBlock;
     }
 
-    private bool ResolveKeepLinesTogether(ParagraphFormatting? paragraph, AstBlock block)
+    private bool KeepTogether(ParagraphFormatting? paragraph, AstBlock block)
     {
         if (paragraph?.KeepLinesTogether is { } direct) return direct;
-        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId)
-            ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId)
-            : null;
-        if (named?.KeepLinesTogether is { } styleValue) return styleValue;
-        return block is HeadingBlock;
+        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId) ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId) : null;
+        return named?.KeepLinesTogether ?? block is HeadingBlock;
     }
 
-    private int ResolveKeepFirstLines(ParagraphFormatting? paragraph)
+    private int KeepFirstLines(ParagraphFormatting? paragraph)
     {
         if (paragraph?.KeepFirstLines is { } direct) return Math.Max(1, direct);
-        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId)
-            ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId)
-            : null;
-        if (named?.KeepFirstLines is { } styleValue) return Math.Max(1, styleValue);
+        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId) ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId) : null;
+        if (named?.KeepFirstLines is { } inherited) return Math.Max(1, inherited);
         return _style.AvoidWidowsAndOrphans ? Math.Max(1, _options.DefaultOrphanLines) : 1;
     }
 
-    private int ResolveKeepLastLines(ParagraphFormatting? paragraph)
+    private int KeepLastLines(ParagraphFormatting? paragraph)
     {
         if (paragraph?.KeepLastLines is { } direct) return Math.Max(1, direct);
-        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId)
-            ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId)
-            : null;
-        if (named?.KeepLastLines is { } styleValue) return Math.Max(1, styleValue);
+        var named = !string.IsNullOrWhiteSpace(paragraph?.StyleId) ? _style.NamedStyles.ResolveParagraph(paragraph!.StyleId) : null;
+        if (named?.KeepLastLines is { } inherited) return Math.Max(1, inherited);
         return _style.AvoidWidowsAndOrphans ? Math.Max(1, _options.DefaultWidowLines) : 1;
-    }
-
-    private void BuildFrameThreads()
-    {
-        var referenced = _frames.Values
-            .Select(static frame => frame.NextFrameId)
-            .Where(static id => !string.IsNullOrWhiteSpace(id))
-            .Cast<string>()
-            .ToHashSet(StringComparer.Ordinal);
-        var roots = _frames.Keys.Where(id => !referenced.Contains(id)).OrderBy(static id => id, StringComparer.Ordinal).ToList();
-        foreach (var id in _frames.Keys.OrderBy(static id => id, StringComparer.Ordinal))
-            if (!roots.Contains(id, StringComparer.Ordinal)) roots.Add(id);
-
-        var emitted = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var root in roots)
-        {
-            if (emitted.Contains(root)) continue;
-            var ids = new List<string>();
-            var lines = new List<int>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var current = root;
-            var overset = false;
-            while (!string.IsNullOrWhiteSpace(current) && _frames.TryGetValue(current, out var frame))
-            {
-                if (!seen.Add(current))
-                {
-                    _warnings.Add(new PageLayoutWarning("frame-cycle", $"Text frame thread contains a cycle at '{current}'."));
-                    overset = true;
-                    break;
-                }
-                emitted.Add(current);
-                ids.Add(current);
-                if (_frameSourceLines.TryGetValue(current, out var sourceLines)) lines.AddRange(sourceLines);
-                current = frame.NextFrameId ?? string.Empty;
-            }
-
-            if (!string.IsNullOrWhiteSpace(current) && !_frames.ContainsKey(current))
-            {
-                _warnings.Add(new PageLayoutWarning("missing-frame", $"Text frame thread references missing frame '{current}'."));
-                overset = true;
-            }
-
-            overset |= _warnings.Any(warning => warning.Code == "overset" &&
-                                                lines.Count > 0 &&
-                                                warning.SourceLine is { } line && lines.Contains(line));
-            _frameThreads.Add(new PageLayoutFrameThread(root, ids, lines.Order().ToArray(), overset));
-        }
     }
 
     private IEnumerable<string> FollowFrameChain(string root)
@@ -940,48 +753,69 @@ public sealed class PagedLayoutEngine
             _warnings.Add(new PageLayoutWarning("missing-frame", $"Text frame thread references missing frame '{current}'."));
     }
 
+    private void BuildFrameThreads()
+    {
+        var referenced = _frames.Values.Select(static frame => frame.NextFrameId)
+            .Where(static id => !string.IsNullOrWhiteSpace(id)).Cast<string>().ToHashSet(StringComparer.Ordinal);
+        var candidates = _frames.Keys.Where(id => !referenced.Contains(id))
+            .Concat(_frames.Keys).Distinct(StringComparer.Ordinal).OrderBy(static id => id, StringComparer.Ordinal);
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in candidates)
+        {
+            if (emitted.Contains(root)) continue;
+            var ids = new List<string>();
+            var lines = new List<int>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var current = root;
+            var overset = false;
+            while (!string.IsNullOrWhiteSpace(current) && _frames.TryGetValue(current, out var frame))
+            {
+                if (!seen.Add(current))
+                {
+                    overset = true;
+                    break;
+                }
+                emitted.Add(current);
+                ids.Add(current);
+                if (_frameLines.TryGetValue(current, out var frameSourceLines)) lines.AddRange(frameSourceLines);
+                current = frame.NextFrameId ?? string.Empty;
+            }
+            if (!string.IsNullOrWhiteSpace(current)) overset = true;
+            overset |= _warnings.Any(warning => warning.Code == "overset" && warning.SourceLine is { } line && lines.Contains(line));
+            _frameThreads.Add(new PageLayoutFrameThread(root, ids, lines.Order().ToArray(), overset));
+        }
+    }
+
     private ResolvedPageGeometry ResolveGeometry(SectionFormatting section, int physicalNumber)
     {
         var pageStyleId = section.PageStyleId ?? _style.DefaultPageStyleId;
-        var pageStyle = _style.NamedStyles.ResolvePage(pageStyleId);
-        var width = (pageStyle?.WidthInches ?? _style.PageWidthInches) * 72d;
-        var height = (pageStyle?.HeightInches ?? _style.PageHeightInches) * 72d;
-        if (pageStyle?.Landscape == true) (width, height) = (height, width);
-
-        var facing = section.FacingPages || pageStyle?.FacingPages == true;
-        var isLeft = facing && physicalNumber % 2 == 0;
-        var inner = (pageStyle?.MarginInnerInches ?? _style.MarginInnerInches) * 72d;
-        var outer = (pageStyle?.MarginOuterInches ?? _style.MarginOuterInches) * 72d;
-        var left = facing ? (isLeft ? outer : inner) : inner;
-        var right = facing ? (isLeft ? inner : outer) : outer;
-        var top = (pageStyle?.MarginTopInches ?? _style.MarginTopInches) * 72d;
-        var bottom = (pageStyle?.MarginBottomInches ?? _style.MarginBottomInches) * 72d;
-        var content = new PageLayoutRect(
-            left,
-            top,
-            Math.Max(36, width - left - right),
-            Math.Max(36, height - top - bottom));
-
-        var bleedTop = section.BleedTopPoints > 0 ? section.BleedTopPoints : (pageStyle?.BleedTopInches ?? 0) * 72d;
-        var bleedBottom = section.BleedBottomPoints > 0 ? section.BleedBottomPoints : (pageStyle?.BleedBottomInches ?? 0) * 72d;
-        var bleedInside = section.BleedInsidePoints > 0 ? section.BleedInsidePoints : (pageStyle?.BleedInsideInches ?? 0) * 72d;
-        var bleedOutside = section.BleedOutsidePoints > 0 ? section.BleedOutsidePoints : (pageStyle?.BleedOutsideInches ?? 0) * 72d;
-        var slug = section.SlugPoints > 0 ? section.SlugPoints : (pageStyle?.SlugInches ?? 0) * 72d;
-
+        var page = _style.NamedStyles.ResolvePage(pageStyleId);
+        var width = (page?.WidthInches ?? _style.PageWidthInches) * 72;
+        var height = (page?.HeightInches ?? _style.PageHeightInches) * 72;
+        if (page?.Landscape == true) (width, height) = (height, width);
+        var facing = section.FacingPages || page?.FacingPages == true;
+        var leftPage = facing && physicalNumber % 2 == 0;
+        var inner = (page?.MarginInnerInches ?? _style.MarginInnerInches) * 72;
+        var outer = (page?.MarginOuterInches ?? _style.MarginOuterInches) * 72;
+        var left = facing ? (leftPage ? outer : inner) : inner;
+        var right = facing ? (leftPage ? inner : outer) : outer;
+        var top = (page?.MarginTopInches ?? _style.MarginTopInches) * 72;
+        var bottom = (page?.MarginBottomInches ?? _style.MarginBottomInches) * 72;
+        var content = new PageLayoutRect(left, top, Math.Max(36, width - left - right), Math.Max(36, height - top - bottom));
         return new ResolvedPageGeometry(
             width,
             height,
             content,
             facing,
-            isLeft,
+            leftPage,
             pageStyleId,
-            section.BaselineGrid ?? pageStyle?.BaselineGrid,
-            section.CropMarks || pageStyle?.CropMarks == true,
-            bleedTop,
-            bleedBottom,
-            bleedInside,
-            bleedOutside,
-            slug);
+            section.BaselineGrid ?? page?.BaselineGrid,
+            section.CropMarks || page?.CropMarks == true,
+            section.BleedTopPoints > 0 ? section.BleedTopPoints : (page?.BleedTopInches ?? 0) * 72,
+            section.BleedBottomPoints > 0 ? section.BleedBottomPoints : (page?.BleedBottomInches ?? 0) * 72,
+            section.BleedInsidePoints > 0 ? section.BleedInsidePoints : (page?.BleedInsideInches ?? 0) * 72,
+            section.BleedOutsidePoints > 0 ? section.BleedOutsidePoints : (page?.BleedOutsideInches ?? 0) * 72,
+            section.SlugPoints > 0 ? section.SlugPoints : (page?.SlugInches ?? 0) * 72);
     }
 
     private static PageLayoutFragmentKind KindFor(AstBlock block)
@@ -1058,52 +892,38 @@ public sealed class PagedLayoutEngine
             _ => FloatPlacementMode.Here
         };
 
-    public static string FormatPageNumber(int number, PageNumberStyle style)
-    {
-        number = Math.Max(1, number);
-        return style switch
-        {
-            PageNumberStyle.LowerRoman => ToRoman(number).ToLowerInvariant(),
-            PageNumberStyle.UpperRoman => ToRoman(number),
-            PageNumberStyle.LowerLetters => ToLetters(number).ToLowerInvariant(),
-            PageNumberStyle.UpperLetters => ToLetters(number),
-            _ => number.ToString(CultureInfo.InvariantCulture)
-        };
-    }
-
     private static string ToRoman(int number)
     {
         var values = new (int Value, string Token)[]
         {
-            (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
-            (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
-            (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")
+            (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+            (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")
         };
-        var writer = new StringBuilder();
+        var result = new StringBuilder();
         foreach (var (value, token) in values)
         {
             while (number >= value)
             {
-                writer.Append(token);
+                result.Append(token);
                 number -= value;
             }
         }
-        return writer.ToString();
+        return result.ToString();
     }
 
     private static string ToLetters(int number)
     {
-        var writer = new StringBuilder();
+        var result = new StringBuilder();
         while (number > 0)
         {
             number--;
-            writer.Insert(0, (char)('A' + number % 26));
+            result.Insert(0, (char)('A' + number % 26));
             number /= 26;
         }
-        return writer.ToString();
+        return result.ToString();
     }
 
-    private string NextFragmentId() => $"layout-{_fragmentSerial++:D6}";
+    private string NextId() => $"layout-{_fragmentSerial++:D6}";
 
     private sealed record TextMetrics(IReadOnlyList<string> Lines, double LineHeightPoints);
 
@@ -1145,14 +965,12 @@ public sealed class PagedLayoutEngine
     private sealed class PageBuilder
     {
         private readonly Dictionary<string, FootnoteReservation> _footnotes = new(StringComparer.Ordinal);
-        private readonly SectionFormatting _section;
 
         public PageBuilder(
             int index,
             int physicalNumber,
             int displayNumber,
             PageNumberStyle numberStyle,
-            bool facingPages,
             ResolvedPageGeometry geometry,
             SectionFormatting section)
         {
@@ -1160,34 +978,28 @@ public sealed class PagedLayoutEngine
             PhysicalNumber = physicalNumber;
             DisplayNumber = displayNumber;
             NumberStyle = numberStyle;
-            FacingPages = facingPages;
             Geometry = geometry;
-            _section = section;
-
             var count = Math.Max(1, section.Columns);
             var gap = Math.Max(0, section.ColumnGapPoints);
             var width = Math.Max(12, (geometry.ContentBounds.WidthPoints - gap * (count - 1)) / count);
-            var columns = new List<ColumnBuilder>(count);
-            for (var column = 0; column < count; column++)
-            {
-                var x = geometry.ContentBounds.XPoints + column * (width + gap);
-                columns.Add(new ColumnBuilder(column, new PageLayoutRect(
-                    x,
-                    geometry.ContentBounds.YPoints,
-                    width,
-                    geometry.ContentBounds.HeightPoints)));
-            }
-            Columns = columns;
+            Columns = Enumerable.Range(0, count)
+                .Select(column => new ColumnBuilder(
+                    column,
+                    new PageLayoutRect(
+                        geometry.ContentBounds.XPoints + column * (width + gap),
+                        geometry.ContentBounds.YPoints,
+                        width,
+                        geometry.ContentBounds.HeightPoints)))
+                .ToList();
         }
 
         public int Index { get; }
         public int PhysicalNumber { get; }
         public int DisplayNumber { get; }
         public PageNumberStyle NumberStyle { get; }
-        public bool FacingPages { get; }
+        public ResolvedPageGeometry Geometry { get; }
         public bool IsLeftPage => Geometry.IsLeftPage;
         public bool IsBlank { get; set; }
-        public ResolvedPageGeometry Geometry { get; }
         public List<ColumnBuilder> Columns { get; }
         public List<PageLayoutFragment> FloatingObjects { get; } = [];
         public double ReservedFootnoteHeightPoints { get; private set; }
@@ -1195,26 +1007,22 @@ public sealed class PagedLayoutEngine
 
         public bool HasFootnote(string id) => _footnotes.ContainsKey(id);
 
-        public void ReserveFootnote(string id, int sourceLine, string text, double heightPoints, double fontSizePoints)
+        public void ReserveFootnote(string id, int sourceLine, string text, double height)
         {
             if (_footnotes.ContainsKey(id)) return;
-            _footnotes[id] = new FootnoteReservation(id, sourceLine, text, heightPoints, fontSizePoints);
-            ReservedFootnoteHeightPoints += heightPoints;
+            _footnotes[id] = new FootnoteReservation(sourceLine, text, height);
+            ReservedFootnoteHeightPoints += height;
         }
 
         public PageLayoutPage Build()
         {
-            var footnoteFragments = new List<PageLayoutFragment>(_footnotes.Count);
+            var footnotes = new List<PageLayoutFragment>();
             var y = Geometry.ContentBounds.BottomPoints - ReservedFootnoteHeightPoints;
             var serial = 0;
             foreach (var reservation in _footnotes.Values)
             {
-                var bounds = new PageLayoutRect(
-                    Geometry.ContentBounds.XPoints,
-                    y,
-                    Geometry.ContentBounds.WidthPoints,
-                    reservation.HeightPoints);
-                footnoteFragments.Add(new PageLayoutFragment(
+                var bounds = new PageLayoutRect(Geometry.ContentBounds.XPoints, y, Geometry.ContentBounds.WidthPoints, reservation.HeightPoints);
+                footnotes.Add(new PageLayoutFragment(
                     $"footnote-{Index:D4}-{serial++:D3}",
                     PageLayoutFragmentKind.Footnote,
                     reservation.SourceLine,
@@ -1224,30 +1032,30 @@ public sealed class PagedLayoutEngine
                 y += reservation.HeightPoints;
             }
 
-            var guides = BuildGuides();
             return new PageLayoutPage(
-                Index,
-                PhysicalNumber,
-                DisplayNumber,
-                FormatPageNumber(DisplayNumber, NumberStyle),
-                Geometry.IsLeftPage,
-                IsBlank,
-                FacingPages,
-                Geometry.WidthPoints,
-                Geometry.HeightPoints,
-                Geometry.ContentBounds,
-                Columns.Select(static column => column.Build()).ToArray(),
-                FloatingObjects.ToArray(),
-                footnoteFragments,
-                guides,
-                Geometry.BaselineGrid,
-                Geometry.PageStyleId,
-                Geometry.CropMarks,
-                Geometry.BleedTopPoints,
-                Geometry.BleedBottomPoints,
-                Geometry.BleedInsidePoints,
-                Geometry.BleedOutsidePoints,
-                Geometry.SlugPoints);
+                Index: Index,
+                PhysicalNumber: PhysicalNumber,
+                DisplayNumber: DisplayNumber,
+                DisplayNumberText: FormatPageNumber(DisplayNumber, NumberStyle),
+                NumberStyle: NumberStyle,
+                IsLeftPage: Geometry.IsLeftPage,
+                IsBlank: IsBlank,
+                FacingPages: Geometry.FacingPages,
+                WidthPoints: Geometry.WidthPoints,
+                HeightPoints: Geometry.HeightPoints,
+                ContentBounds: Geometry.ContentBounds,
+                Columns: Columns.Select(static column => column.Build()).ToArray(),
+                FloatingObjects: FloatingObjects.ToArray(),
+                Footnotes: footnotes,
+                Guides: BuildGuides(),
+                BaselineGrid: Geometry.BaselineGrid,
+                PageStyleId: Geometry.PageStyleId,
+                CropMarks: Geometry.CropMarks,
+                BleedTopPoints: Geometry.BleedTopPoints,
+                BleedBottomPoints: Geometry.BleedBottomPoints,
+                BleedInsidePoints: Geometry.BleedInsidePoints,
+                BleedOutsidePoints: Geometry.BleedOutsidePoints,
+                SlugPoints: Geometry.SlugPoints);
         }
 
         private IReadOnlyList<PageLayoutGuide> BuildGuides()
@@ -1267,20 +1075,6 @@ public sealed class PagedLayoutEngine
             return guides;
         }
 
-        private sealed record FootnoteReservation(
-            string Id,
-            int SourceLine,
-            string Text,
-            double HeightPoints,
-            double FontSizePoints);
-    }
-}
-
-internal static class PagedLayoutEnumerableExtensions
-{
-    public static IEnumerable<T> PrependRange<T>(this IEnumerable<T> tail, IEnumerable<T> head)
-    {
-        foreach (var item in head) yield return item;
-        foreach (var item in tail) yield return item;
+        private sealed record FootnoteReservation(int SourceLine, string Text, double HeightPoints);
     }
 }
