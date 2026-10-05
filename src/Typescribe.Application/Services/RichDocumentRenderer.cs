@@ -310,16 +310,14 @@ public sealed class RichDocumentRenderer : IDocumentRenderer
                 "Noto Naskh Arabic",
                 "Vazirmatn",
                 "Amiri",
-                "Noto Sans Arabic",
-                "Segoe UI"
+                "Noto Sans Arabic"
             ],
             ScriptMode.Arabic =>
             [
                 "Noto Naskh Arabic",
                 "Amiri",
                 "Scheherazade New",
-                "Noto Sans Arabic",
-                "Segoe UI"
+                "Noto Sans Arabic"
             ],
             _ => []
         };
@@ -330,7 +328,15 @@ public sealed class RichDocumentRenderer : IDocumentRenderer
         {
             var escaped = EscapeFontSpecValue(candidate);
             output.Append("\\IfFontExistsTF{").Append(escaped).Append("}{")
-                .Append("\\fontspec[Renderer=HarfBuzz,Script=Arabic]{").Append(escaped).Append("} ")
+                .Append("\\fontspec[Renderer=HarfBuzz,Script=Arabic,BoldFont={")
+                .Append(escaped)
+                .Append("},ItalicFont={")
+                .Append(escaped)
+                .Append("},BoldItalicFont={")
+                .Append(escaped)
+                .Append("}]{")
+                .Append(escaped)
+                .Append("} ")
                 .Append("}{");
         }
 

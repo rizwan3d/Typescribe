@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Typescribe.Application.Abstractions;
 using Typescribe.Domain.Models;
 
@@ -7,6 +8,10 @@ namespace Typescribe.Application.Services;
 
 public sealed class DocumentRenderer : IDocumentRenderer
 {
+    private static readonly Regex RendererToken = new(
+        @"TYPESCRIBE(?:RICHRENDER(?:OPEN|CLOSE)|SEMANTICTOKEN)\d{6}",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     public string RenderPreview(DocumentAst document)
     {
         var output = new StringBuilder();
@@ -70,15 +75,7 @@ public sealed class DocumentRenderer : IDocumentRenderer
             switch (block)
             {
                 case HeadingBlock heading:
-                    output.AppendLine(heading.Level switch
-                    {
-                        1 => $"\\chapter{{{RenderLatexInlines(heading.Inlines)}}}",
-                        2 => $"\\section{{{RenderLatexInlines(heading.Inlines)}}}",
-                        3 => $"\\subsection{{{RenderLatexInlines(heading.Inlines)}}}",
-                        4 => $"\\subsubsection{{{RenderLatexInlines(heading.Inlines)}}}",
-                        5 => $"\\paragraph{{{RenderLatexInlines(heading.Inlines)}}}",
-                        _ => $"\\subparagraph{{{RenderLatexInlines(heading.Inlines)}}}"
-                    });
+                    output.AppendLine(RenderHeadingLatex(heading));
                     break;
                 case ParagraphBlock paragraph:
                     output.AppendLine(RenderLatexInlines(paragraph.Inlines));
@@ -315,6 +312,31 @@ public sealed class DocumentRenderer : IDocumentRenderer
             "r" => "R",
             _ => string.Empty
         };
+    }
+
+    private static string RenderHeadingLatex(HeadingBlock heading)
+    {
+        var command = heading.Level switch
+        {
+            1 => "chapter",
+            2 => "section",
+            3 => "subsection",
+            4 => "subsubsection",
+            5 => "paragraph",
+            _ => "subparagraph"
+        };
+        var body = RenderLatexInlines(heading.Inlines);
+        var movingTitle = RenderMovingTitle(heading.Inlines);
+        return string.IsNullOrWhiteSpace(movingTitle)
+            ? $"\\{command}{{{body}}}"
+            : $"\\{command}[{movingTitle}]{{{body}}}";
+    }
+
+    private static string RenderMovingTitle(IReadOnlyList<AstInline> inlines)
+    {
+        var plain = RendererToken.Replace(inlines.ToPlainText(), string.Empty).Trim();
+        if (plain.Length == 0) return string.Empty;
+        return EscapeLatex(plain).Replace("]", "{]}", StringComparison.Ordinal);
     }
 
     private static void AppendExtraPackages(StringBuilder output, string packages)

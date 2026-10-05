@@ -159,7 +159,11 @@ public sealed class AdvancedDocumentRenderer : IDocumentRenderer
                     if (latex && !string.IsNullOrWhiteSpace(heading.Identifier))
                     {
                         advanced = true;
-                        inlines.Add(new TextInline(Token("\\label{" + SanitizeLabel(heading.Identifier!) + "}")));
+                        blocks.Add(heading with { Inlines = inlines });
+                        blocks.Add(new ParagraphBlock(
+                            heading.SourceLine,
+                            [new TextInline(Token("\\label{" + SanitizeLabel(heading.Identifier!) + "}"))]));
+                        break;
                     }
                     blocks.Add(heading with { Inlines = inlines });
                     break;

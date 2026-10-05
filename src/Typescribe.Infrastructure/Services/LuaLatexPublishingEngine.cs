@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using Typescribe.Application.Abstractions;
 
 namespace Typescribe.Infrastructure.Services;
@@ -11,6 +13,8 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine, IDisposable
     private const string ReleaseBaseUrl = "https://github.com/rstudio/tinytex-releases/releases/download";
     private const string PathMarkerFile = ".typescribe-lualatex-path";
 
+    private static readonly Regex FileLine = new(@"document\.tex:(?<line>\d+):", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex LatexLine = new(@"(?:^|\s)l\.(?<line>\d+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
     private static readonly HttpClient HttpClient = CreateHttpClient();
     private readonly SemaphoreSlim _engineGate = new(1, 1);
     private readonly SemaphoreSlim _packageInstallGate = new(1, 1);
@@ -110,13 +114,24 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine, IDisposable
         try
         {
             var recoveredPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (var pass = 0; pass < passes; pass++)
-                await RunLuaLatexPassWithPackageRecoveryAsync(
-                    executable,
-                    sourcePath,
-                    work,
-                    recoveredPackages,
-                    cancellationToken);
+            try
+            {
+                for (var pass = 0; pass < passes; pass++)
+                    await RunLuaLatexPassWithPackageRecoveryAsync(
+                        executable,
+                        sourcePath,
+                        work,
+                        recoveredPackages,
+                        cancellationToken);
+            }
+            catch (InvalidOperationException ex)
+            {
+                var diagnosticDirectory = PreserveFailedBuild(work);
+                var suffix = diagnosticDirectory is null
+                    ? string.Empty
+                    : $"{Environment.NewLine}{Environment.NewLine}Failed LuaLaTeX inputs saved to: {diagnosticDirectory}";
+                throw new InvalidOperationException(ex.Message + suffix, ex);
+            }
 
             var producedPdf = Path.Combine(work, "document.pdf");
             if (!File.Exists(producedPdf))
@@ -186,6 +201,12 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine, IDisposable
         }
 
         var details = ExtractUsefulError(output);
+        if (TryExtractGeneratedLine(output, out var generatedLine))
+        {
+            var context = ReadGeneratedSourceContext(sourcePath, generatedLine);
+            if (!string.IsNullOrWhiteSpace(context))
+                details += $"{Environment.NewLine}{Environment.NewLine}Generated LaTeX near document.tex:{generatedLine}:{Environment.NewLine}{context}";
+        }
         throw new InvalidOperationException($"LuaLaTeX failed with exit code {result.ExitCode}:{Environment.NewLine}{details}");
     }
 
@@ -559,7 +580,10 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine, IDisposable
     {
         var normalized = value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         var lines = normalized.Split('\n');
-        var errorIndex = Array.FindIndex(lines, static line => line.StartsWith("!", StringComparison.Ordinal) || line.Contains("LaTeX Error:", StringComparison.Ordinal));
+        var errorIndex = Array.FindIndex(lines, static line =>
+            line.StartsWith("!", StringComparison.Ordinal) ||
+            line.Contains("LaTeX Error:", StringComparison.Ordinal) ||
+            line.Contains("document.tex:", StringComparison.Ordinal));
         if (errorIndex >= 0)
         {
             var start = Math.Max(0, errorIndex - 4);
@@ -571,6 +595,74 @@ public sealed class LuaLatexPublishingEngine : IPdfPublishingEngine, IDisposable
 
     private static string Tail(string value, int maxLength)
         => value.Length <= maxLength ? value : value[^maxLength..];
+
+    private static bool TryExtractGeneratedLine(string output, out int line)
+    {
+        var match = FileLine.Match(output);
+        if (!match.Success) match = LatexLine.Match(output);
+        return int.TryParse(match.Success ? match.Groups["line"].Value : string.Empty, out line);
+    }
+
+    private static string ReadGeneratedSourceContext(string sourcePath, int line)
+    {
+        try
+        {
+            if (!File.Exists(sourcePath)) return string.Empty;
+
+            var lines = File.ReadAllLines(sourcePath);
+            if (lines.Length == 0) return string.Empty;
+
+            var start = Math.Max(1, line - 5);
+            var end = Math.Min(lines.Length, line + 5);
+            var output = new StringBuilder();
+            for (var current = start; current <= end; current++)
+            {
+                var marker = current == line ? ">" : " ";
+                output.Append(marker)
+                    .Append(' ')
+                    .Append(current.ToString("D5", System.Globalization.CultureInfo.InvariantCulture))
+                    .Append(": ")
+                    .AppendLine(lines[current - 1]);
+            }
+            return output.ToString().TrimEnd();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string? PreserveFailedBuild(string work)
+    {
+        try
+        {
+            if (!Directory.Exists(work)) return null;
+
+            var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrWhiteSpace(root)) root = Path.GetTempPath();
+
+            var destination = Path.Combine(
+                root,
+                "Typescribe",
+                "diagnostics",
+                "lualatex",
+                DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(destination);
+
+            foreach (var file in Directory.EnumerateFiles(work))
+            {
+                var name = Path.GetFileName(file);
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                File.Copy(file, Path.Combine(destination, name), overwrite: true);
+            }
+
+            return destination;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
 
     private static void TryDeleteDirectory(string path)
     {

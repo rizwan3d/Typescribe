@@ -242,7 +242,7 @@ internal sealed class StructuredPublishingFeature
             var mapped = MapSourceProblem(compilation.Segments, ex);
             SetProblems(_problemRows.Select(static row => row.Problem).Append(mapped).ToArray());
             SelectProblemsTab();
-            await ShowMessageAsync("PDF build failed", mapped.Message + (mapped.DocumentTitle is null ? string.Empty : $"\n\n{mapped.DocumentTitle}:{mapped.SourceLine}"));
+            await ShowMessageAsync("PDF build failed", BuildPublishingFailureMessage(mapped, ex));
         }
     }
 
@@ -374,6 +374,30 @@ internal sealed class StructuredPublishingFeature
             return new CompilerProblem(PreflightSeverity.Error, exception.Message, null, null, sourceLine, exception.GeneratedLine);
         var local = sourceLine - segment.StartLine + 1;
         return new CompilerProblem(PreflightSeverity.Error, exception.Message, segment.DocumentId, segment.DocumentTitle, local, exception.GeneratedLine);
+    }
+
+    private static string BuildPublishingFailureMessage(CompilerProblem problem, PublishingDiagnosticException exception)
+    {
+        var builder = new StringBuilder(problem.Message);
+        if (problem.DocumentTitle is not null)
+            builder.AppendLine().AppendLine($"{problem.DocumentTitle}:{problem.SourceLine}");
+        if (exception.GeneratedLine is int generatedLine)
+            builder.AppendLine().Append($"Generated LaTeX line: {generatedLine}");
+
+        var details = TrimFailureDetails(exception.Details);
+        if (!string.IsNullOrWhiteSpace(details))
+            builder.AppendLine().AppendLine().Append(details);
+
+        return builder.ToString();
+    }
+
+    private static string TrimFailureDetails(string details)
+    {
+        var normalized = (details ?? string.Empty).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Trim();
+        if (normalized.Length == 0) return string.Empty;
+
+        const int maxLength = 2_400;
+        return normalized.Length <= maxLength ? normalized : normalized[^maxLength..];
     }
 
     private void SetProblems(IEnumerable<CompilerProblem> problems)

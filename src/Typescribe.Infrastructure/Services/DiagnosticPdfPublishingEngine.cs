@@ -58,9 +58,16 @@ public sealed class DiagnosticPdfPublishingEngine(IPdfPublishingEngine inner) : 
     private static string ExtractPrimaryMessage(string details)
     {
         var normalized = details.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        var line = normalized.Split('\n')
+        var lines = normalized.Split('\n')
             .Select(static value => value.Trim())
-            .FirstOrDefault(static value => value.StartsWith("!", StringComparison.Ordinal) || value.Contains("LaTeX Error:", StringComparison.Ordinal) || value.Contains("Error", StringComparison.OrdinalIgnoreCase));
+            .Where(static value => value.Length > 0)
+            .ToArray();
+        var line = lines.FirstOrDefault(static value => value.Contains("LaTeX Error:", StringComparison.Ordinal)) ??
+                   lines.FirstOrDefault(static value => value.StartsWith("!", StringComparison.Ordinal)) ??
+                   lines.FirstOrDefault(static value => value.Contains("document.tex:", StringComparison.Ordinal)) ??
+                   lines.FirstOrDefault(static value =>
+                       value.Contains("Error", StringComparison.OrdinalIgnoreCase) &&
+                       !value.Contains("Fatal error occurred", StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrWhiteSpace(line)) return "LuaLaTeX build failed.";
         return line.TrimStart('!', ' ');
     }
