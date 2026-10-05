@@ -53,7 +53,9 @@ public sealed record PageLayoutFragment(
     TextWrapMode Wrap = TextWrapMode.None,
     FloatPlacementMode Placement = FloatPlacementMode.Inline,
     int? TableRowIndex = null,
-    int FrameColumns = 1);
+    int FrameColumns = 1,
+    int SourceTextStart = 0,
+    int SourceTextLength = 0);
 
 public sealed record PageLayoutColumn(int Index, PageLayoutRect Bounds, IReadOnlyList<PageLayoutFragment> Fragments);
 
@@ -392,17 +394,25 @@ public sealed class PagedLayoutEngine
             var height = before + fit * metrics.LineHeightPoints + after;
             var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, height);
             var frameId = frame is null ? null : frameChain[frameSlot];
+            var firstWrappedLine = metrics.Lines[lineOffset];
+            var lastWrappedLine = metrics.Lines[lineOffset + fit - 1];
+            var sourceTextStart = firstWrappedLine.Start;
+            var sourceTextLength = Math.Max(
+                0,
+                lastWrappedLine.Start + lastWrappedLine.Length - sourceTextStart);
             CurrentColumn.Fragments.Add(new PageLayoutFragment(
                 NextId(),
                 kind,
                 block.SourceLine,
                 blockIndex,
                 bounds,
-                string.Join('\n', metrics.Lines.Skip(lineOffset).Take(fit)),
+                string.Join('\n', metrics.Lines.Skip(lineOffset).Take(fit).Select(static line => line.Text)),
                 FragmentIndex: fragmentIndex,
                 IsContinuation: fragmentIndex > 0,
                 FrameId: frameId,
-                FrameColumns: Math.Max(1, frame?.Columns ?? 1)));
+                FrameColumns: Math.Max(1, frame?.Columns ?? 1),
+                SourceTextStart: sourceTextStart,
+                SourceTextLength: sourceTextLength));
             _cursorY += height;
             lineOffset += fit;
             fragmentIndex++;
@@ -415,7 +425,7 @@ public sealed class PagedLayoutEngine
         }
     }
 
-    private void AddOverset(AstBlock block, int blockIndex, string frameId, IEnumerable<string> remaining)
+    private void AddOverset(AstBlock block, int blockIndex, string frameId, IEnumerable<WrappedLine> remaining)
     {
         var size = Math.Min(_options.OversetIndicatorHeightPoints, Math.Max(4, AvailableHeight));
         var bounds = new PageLayoutRect(
@@ -434,7 +444,7 @@ public sealed class PagedLayoutEngine
             FrameId: frameId));
         _warnings.Add(new PageLayoutWarning(
             "overset",
-            $"Text frame '{frameId}' has overset text ({remaining.Sum(static line => line.Length)} characters remain).",
+            $"Text frame '{frameId}' has overset text ({remaining.Sum(static line => line.Text.Length)} characters remain).",
             block.SourceLine));
     }
 
@@ -648,29 +658,61 @@ public sealed class PagedLayoutEngine
         return new TextMetrics(Wrap(text, capacity), Math.Max(_options.MinimumLineHeightPoints, fontSize * Math.Max(.8, lineSpacing)));
     }
 
-    private static IReadOnlyList<string> Wrap(string text, int capacity)
+    private static IReadOnlyList<WrappedLine> Wrap(string text, int capacity)
     {
-        if (string.IsNullOrEmpty(text)) return [string.Empty];
-        var output = new List<string>();
-        foreach (var logical in text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+        if (string.IsNullOrEmpty(text)) return [new WrappedLine(string.Empty, 0, 0)];
+
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var output = new List<WrappedLine>();
+        var logicalStart = 0;
+
+        while (logicalStart <= normalized.Length)
         {
+            var newline = normalized.IndexOf('\n', logicalStart);
+            var logicalEnd = newline >= 0 ? newline : normalized.Length;
+            var logical = normalized.AsSpan(logicalStart, logicalEnd - logicalStart);
+
             var builder = new StringBuilder();
             var used = 0;
-            foreach (var rune in logical.EnumerateRunes())
+            var localOffset = 0;
+            var pieceStart = 0;
+
+            while (localOffset < logical.Length)
             {
+                var status = Rune.DecodeFromUtf16(logical[localOffset..], out var rune, out var consumed);
+                if (status != System.Buffers.OperationStatus.Done || consumed <= 0)
+                {
+                    rune = new Rune(logical[localOffset]);
+                    consumed = 1;
+                }
+
                 var width = RuneWidth(rune);
                 if (used > 0 && used + width > capacity)
                 {
-                    output.Add(builder.ToString());
+                    output.Add(new WrappedLine(
+                        builder.ToString(),
+                        logicalStart + pieceStart,
+                        localOffset - pieceStart));
                     builder.Clear();
                     used = 0;
+                    pieceStart = localOffset;
                 }
+
                 builder.Append(rune.ToString());
                 used += width;
+                localOffset += consumed;
             }
-            output.Add(builder.ToString());
+
+            output.Add(new WrappedLine(
+                builder.ToString(),
+                logicalStart + pieceStart,
+                logical.Length - pieceStart));
+
+            if (newline < 0) break;
+            logicalStart = newline + 1;
         }
-        return output.Count == 0 ? [string.Empty] : output;
+
+        return output.Count == 0 ? [new WrappedLine(string.Empty, 0, 0)] : output;
     }
 
     private static int RuneWidth(Rune rune)
@@ -925,7 +967,8 @@ public sealed class PagedLayoutEngine
 
     private string NextId() => $"layout-{_fragmentSerial++:D6}";
 
-    private sealed record TextMetrics(IReadOnlyList<string> Lines, double LineHeightPoints);
+    private sealed record WrappedLine(string Text, int Start, int Length);
+    private sealed record TextMetrics(IReadOnlyList<WrappedLine> Lines, double LineHeightPoints);
 
     private sealed record BlockMetrics(
         IReadOnlyList<string> Lines,
