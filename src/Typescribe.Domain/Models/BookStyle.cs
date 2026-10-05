@@ -6,6 +6,17 @@ public sealed record BookStyle
 
     public string Name { get; init; } = "Default";
 
+    // Publishing identity. Project/book name remains in typescribe.yaml; these values
+    // control what readers see in generated output and may intentionally differ from it.
+    public string PublishedTitle { get; init; } = string.Empty;
+    public string Subtitle { get; init; } = string.Empty;
+    public string DisplayAuthor { get; init; } = string.Empty;
+    public string SeriesTitle { get; init; } = string.Empty;
+    public string VolumeLabel { get; init; } = string.Empty;
+    public string Edition { get; init; } = string.Empty;
+    public string Publisher { get; init; } = string.Empty;
+    public string Isbn { get; init; } = string.Empty;
+
     // Page and document structure.
     public string DocumentClass { get; init; } = "book";
     public string DocumentClassOptions { get; init; } = "11pt,openany";
@@ -19,6 +30,31 @@ public sealed record BookStyle
     public int TableOfContentsDepth { get; init; } = 3;
     public int SectionNumberDepth { get; init; } = 3;
     public bool OpenChaptersOnRight { get; init; }
+
+    // Flexible matter ordering. Checkboxes decide whether an item is included; these lists
+    // only decide where enabled items appear. Unknown tokens are ignored and missing known
+    // tokens are appended safely, so older/custom projects cannot accidentally lose content.
+    public string FrontMatterOrder { get; init; } =
+        "front-cover,spine,front-blanks,title-page,copyright,dedication,toc,foreword,preface,introduction";
+    public string BackMatterOrder { get; init; } =
+        "conclusion,epilogue,acknowledgments,appendix,glossary,references,index,about-author,end-blanks,back-cover";
+    public bool UseRomanFrontMatterPageNumbers { get; init; } = true;
+    public bool ResetBodyPageNumbers { get; init; } = true;
+    public bool GeneratedMatterInTableOfContents { get; init; } = true;
+    public bool StartGeneratedMatterOnRight { get; init; } = true;
+
+    // Custom reader-facing labels for generated matter.
+    public string PrefaceHeading { get; init; } = "Preface";
+    public string ForewordHeading { get; init; } = "Foreword";
+    public string IntroductionHeading { get; init; } = "Introduction";
+    public string ConclusionHeading { get; init; } = "Conclusion";
+    public string EpilogueHeading { get; init; } = "Epilogue";
+    public string AcknowledgmentsHeading { get; init; } = "Acknowledgments";
+    public string AppendixHeading { get; init; } = "Appendix";
+    public string GlossaryHeading { get; init; } = "Glossary";
+    public string ReferencesHeading { get; init; } = "Bibliography";
+    public string IndexHeading { get; init; } = "Index";
+    public string AboutAuthorHeading { get; init; } = "About the Author";
 
     // Generated front matter / cover proof pages.
     public bool IncludeFrontCover { get; init; }
@@ -130,6 +166,10 @@ public sealed record BookStyle
         if (LineSpacing is < 0.8 or > 3) throw new InvalidOperationException("Line spacing must be between 0.8 and 3.0.");
         if (TableOfContentsDepth is < 0 or > 6 || SectionNumberDepth is < -1 or > 6)
             throw new InvalidOperationException("TOC and section numbering depth are out of range.");
+        if (PublishedTitle.Length > 500 || Subtitle.Length > 500 || DisplayAuthor.Length > 500)
+            throw new InvalidOperationException("Book title, subtitle and display author must each be 500 characters or fewer.");
+        if (FrontMatterOrder.Length > 1000 || BackMatterOrder.Length > 1000)
+            throw new InvalidOperationException("Matter order settings are too long.");
 
         ValidateFont(BodyFontFamily, "Body font");
         ValidateFont(HeadingFontFamily, "Heading font");
