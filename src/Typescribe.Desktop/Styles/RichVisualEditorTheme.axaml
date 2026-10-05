@@ -1,0 +1,114 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Typescribe.Desktop.Editing">
+
+  <!-- Writing canvas -->
+  <Style Selector="local|ManuscriptEditor.rich-manuscript-editor">
+    <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="42,34,42,72" />
+    <Setter Property="FontSize" Value="16" />
+  </Style>
+
+  <!-- Primary formatting toolbar -->
+  <Style Selector="Window.typescribe-studio Button.rich-toolbar-control">
+    <Setter Property="MinHeight" Value="27" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio Button.rich-toolbar-control:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ToggleButton.rich-toolbar-control">
+    <Setter Property="MinHeight" Value="27" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ToggleButton.rich-toolbar-control:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ToggleButton.rich-toolbar-control:checked">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio Button.rich-format-button.active-format">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio ToggleButton.rich-format-button.active-format">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio Border.rich-format-group">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <!-- Popups use their own visual roots, so these selectors intentionally do not depend on Window ancestry. -->
+  <Style Selector="Border.rich-selection-toolbar">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-selection-toolbar Button.rich-floating-format-button">
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-selection-toolbar Button.rich-floating-format-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-selection-toolbar Button.rich-floating-format-button.active-format">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-quick-insert-palette">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-quick-insert-palette TextBox">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-quick-insert-palette ListBox">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="Border.rich-quick-insert-palette ListBoxItem">
+    <Setter Property="Padding" Value="10,8" />
+    <Setter Property="Margin" Value="2,1" />
+  </Style>
+
+  <Style Selector="Border.rich-quick-insert-palette ListBoxItem:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-quick-insert-palette ListBoxItem:selected">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+</Styles>
