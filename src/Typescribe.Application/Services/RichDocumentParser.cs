@@ -147,6 +147,11 @@ public sealed class RichDocumentParser : IDocumentParser
         {
             switch (inline)
             {
+                // RichSpanInline derives from TextInline as a fail-safe for older exporters, so it
+                // must be matched before the general TextInline case in rich-aware code.
+                case RichSpanInline rich:
+                    expanded.Add(rich with { Children = RewriteInlines(rich.Children, formatting) });
+                    break;
                 case TextInline text:
                     SplitMarkers(text.Text, expanded);
                     break;
@@ -158,9 +163,6 @@ public sealed class RichDocumentParser : IDocumentParser
                     break;
                 case LinkInline link:
                     expanded.Add(link with { Label = RewriteInlines(link.Label, formatting) });
-                    break;
-                case RichSpanInline rich:
-                    expanded.Add(rich with { Children = RewriteInlines(rich.Children, formatting) });
                     break;
                 default:
                     expanded.Add(inline);
