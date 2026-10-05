@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Typescribe.Domain/Typescribe.Domain.csproj" />
+    <ProjectReference Include="../../src/Typescribe.Application/Typescribe.Application.csproj" />
   </ItemGroup>
 </Project>
