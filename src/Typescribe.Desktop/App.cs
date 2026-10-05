@@ -22,7 +22,7 @@ public sealed class App : AvaloniaApplication
 {
     public override void Initialize()
     {
-        RequestedThemeVariant = ThemeVariant.Default;
+        RequestedThemeVariant = ThemeVariant.Dark;
         Styles.Add(new FluentTheme());
         Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
         {
