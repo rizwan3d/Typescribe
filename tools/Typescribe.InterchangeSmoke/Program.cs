@@ -11,6 +11,18 @@ static void Require(bool condition, string message)
     if (!condition) throw new InvalidOperationException(message);
 }
 
+static int CountOccurrences(string text, string value)
+{
+    var count = 0;
+    var offset = 0;
+    while ((offset = text.IndexOf(value, offset, StringComparison.Ordinal)) >= 0)
+    {
+        count++;
+        offset += value.Length;
+    }
+    return count;
+}
+
 static string ReadZipEntry(string path, string entryPath)
 {
     using var archive = ZipFile.OpenRead(path);
@@ -74,6 +86,41 @@ try
         + Environment.NewLine
         + RichMarkdownFormattingCodec.WrapInline("اردو", characters)
         + " English 123";
+
+    // LuaLaTeX: plain Unicode Arabic-script Markdown must not require rich metadata to publish.
+    var latexRenderer = new RichDocumentRenderer();
+
+    const string plainUrduText = "یہ ایک اردو کتاب ہے۔";
+    var plainUrduLatex = latexRenderer.RenderLatex(parser.Parse(plainUrduText), "Plain Urdu", BookStyle.Default);
+    Require(plainUrduLatex.Contains("\\usepackage[bidi=basic]{babel}", StringComparison.Ordinal), "Plain Urdu did not enable Babel BiDi support.");
+    Require(plainUrduLatex.Contains("\\babelprovide[import]{urdu}", StringComparison.Ordinal), "Plain Urdu did not import the Babel Urdu locale.");
+    Require(plainUrduLatex.Contains("\\foreignlanguage{urdu}{", StringComparison.Ordinal), "Plain Urdu was not wrapped as Urdu for LuaLaTeX.");
+    Require(plainUrduLatex.Contains("\\IfFontExistsTF{Noto Nastaliq Urdu}", StringComparison.Ordinal), "Plain Urdu did not emit the Nastaliq font fallback chain.");
+    Require(plainUrduLatex.Contains("Renderer=HarfBuzz,Script=Arabic", StringComparison.Ordinal), "Plain Urdu did not request HarfBuzz Arabic shaping.");
+    Require(plainUrduLatex.Contains(plainUrduText, StringComparison.Ordinal), "Plain Urdu logical Unicode text changed during LaTeX rendering.");
+
+    const string plainArabicText = "هذا كتاب عربي.";
+    var plainArabicLatex = latexRenderer.RenderLatex(parser.Parse(plainArabicText), "Plain Arabic", BookStyle.Default);
+    Require(plainArabicLatex.Contains("\\babelprovide[import]{arabic}", StringComparison.Ordinal), "Plain Arabic did not import the Babel Arabic locale.");
+    Require(plainArabicLatex.Contains("\\foreignlanguage{arabic}{", StringComparison.Ordinal), "Plain Arabic was not wrapped as Arabic for LuaLaTeX.");
+    Require(plainArabicLatex.Contains("\\IfFontExistsTF{Noto Naskh Arabic}", StringComparison.Ordinal), "Plain Arabic did not emit the Arabic font fallback chain.");
+    Require(plainArabicLatex.Contains(plainArabicText, StringComparison.Ordinal), "Plain Arabic logical Unicode text changed during LaTeX rendering.");
+
+    const string mixedUrduText = "یہ 2026 English ہے";
+    var mixedUrduLatex = latexRenderer.RenderLatex(parser.Parse(mixedUrduText), "Mixed Urdu", BookStyle.Default);
+    Require(mixedUrduLatex.Contains("\\foreignlanguage{urdu}{", StringComparison.Ordinal), "Mixed Urdu/English text did not keep an Urdu RTL base language.");
+    Require(mixedUrduLatex.Contains(mixedUrduText, StringComparison.Ordinal), "Mixed Urdu/English logical Unicode order changed during LaTeX rendering.");
+
+    var structuredUrduSource = "# بڑے عنوان\n\n- یہ فہرست ہے\n\n| بڑے عنوان |\n| --- |\n| یہ اردو ہے |";
+    var structuredUrduLatex = latexRenderer.RenderLatex(parser.Parse(structuredUrduSource), "Structured Urdu", BookStyle.Default);
+    Require(CountOccurrences(structuredUrduLatex, "\\foreignlanguage{urdu}{") >= 4, "Urdu headings, lists, or table cells were not auto-detected for publishing.");
+
+    var plainEnglishLatex = latexRenderer.RenderLatex(parser.Parse("Plain English paragraph."), "Plain English", BookStyle.Default);
+    Require(!plainEnglishLatex.Contains("\\usepackage[bidi=basic]{babel}", StringComparison.Ordinal), "Plain English unexpectedly enabled multilingual BiDi support.");
+
+    var explicitUrduLatex = latexRenderer.RenderLatex(parser.Parse(source), "Explicit Urdu font", BookStyle.Default);
+    Require(explicitUrduLatex.Contains("NotoNastaliqUrdu.ttf", StringComparison.Ordinal), "Explicit project Urdu font was not preserved in LaTeX output.");
+    Require(!explicitUrduLatex.Contains("\\IfFontExistsTF{Noto Nastaliq Urdu}", StringComparison.Ordinal), "Automatic Urdu font fallback overrode an explicit project font.");
 
     // Clipboard: TypeScribe -> HTML/RTF/plain keeps logical Unicode order and rich semantics.
     var clipboard = RichClipboardCodec.Export(source, parser);
