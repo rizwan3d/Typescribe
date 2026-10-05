@@ -45,7 +45,7 @@ public sealed class App : AvaloniaApplication
             var mutationService = new FileSystemProjectMutationService();
             var repository = new TrackingProjectRepository(
                 new TransactionalProjectRepository(new FileSystemProjectRepository(), mutationService));
-            var parser = new EmojiDocumentParser(new AdvancedDocumentParser());
+            var parser = new MergedTableDocumentParser(new EmojiDocumentParser(new AdvancedDocumentParser()));
             var renderer = new SourceMappedDocumentRenderer();
             var publishingEngine = new DiagnosticPdfPublishingEngine(new LuaLatexPublishingEngine());
             var exportService = new DocumentExportService(parser, renderer, publishingEngine);
@@ -92,7 +92,7 @@ public sealed class App : AvaloniaApplication
             RichEditorInsertFeature.Apply(window, viewModel, parser);
             RichTableMenuFeature.Apply(window, viewModel, parser);
             PagedLayoutEditingFeature.Apply(window, viewModel, parser);
-            BookDesignFeature.Apply(window, viewModel);
+            BookDesignFeature.Apply(window, viewModel, parser);
             ExactPdfCursorSyncFeature.Apply(window, viewModel, repository, parser);
             DirectEditorNavigationFeature.Apply(window, viewModel);
             StructuredPublishingFeature.Apply(window, viewModel, repository, parser, renderer, publishingEngine);

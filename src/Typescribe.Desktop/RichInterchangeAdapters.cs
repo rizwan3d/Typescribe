@@ -11,10 +11,14 @@ namespace Typescribe.Desktop;
 /// </summary>
 internal sealed class DocxInterchangeService
 {
+    private readonly IDocumentParser _parser;
     private readonly RichDocxInterchangeService _inner;
 
     public DocxInterchangeService(IDocumentParser parser, BibTeXDatabase bibliography)
-        => _inner = new RichDocxInterchangeService(parser, bibliography);
+    {
+        _parser = parser ?? throw new ArgumentNullException(nameof(parser));
+        _inner = new RichDocxInterchangeService(_parser, bibliography);
+    }
 
     public IReadOnlyList<string> LastWarnings => _inner.LastWarnings;
 
@@ -25,6 +29,11 @@ internal sealed class DocxInterchangeService
         CancellationToken cancellationToken = default)
     {
         await _inner.ExportAsync(project, documents, destination, cancellationToken);
+        await MergedTableExportPostProcessor.ApplyDocxAsync(
+            destination,
+            documents.Select(static document => document.Content),
+            _parser,
+            cancellationToken);
         WriteWarningSidecar(destination, _inner.LastWarnings);
     }
 
@@ -57,10 +66,14 @@ internal sealed class DocxInterchangeService
 /// </summary>
 internal sealed class Epub3ExportService
 {
+    private readonly IDocumentParser _parser;
     private readonly RichEpub3ExportService _inner;
 
     public Epub3ExportService(IDocumentParser parser)
-        => _inner = new RichEpub3ExportService(parser);
+    {
+        _parser = parser ?? throw new ArgumentNullException(nameof(parser));
+        _inner = new RichEpub3ExportService(_parser);
+    }
 
     public IReadOnlyList<string> LastWarnings => _inner.LastWarnings;
 
@@ -71,6 +84,11 @@ internal sealed class Epub3ExportService
         CancellationToken cancellationToken = default)
     {
         await _inner.ExportAsync(project, documents, destination, cancellationToken);
+        await MergedTableExportPostProcessor.ApplyEpubAsync(
+            destination,
+            documents.Select(static document => document.Content),
+            _parser,
+            cancellationToken);
         WriteWarningSidecar(destination, _inner.LastWarnings);
     }
 

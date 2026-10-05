@@ -6,25 +6,17 @@ using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using Typescribe.Application.Abstractions;
 using Typescribe.Desktop.ViewModels;
-using Typescribe.Domain.Models;
 using Typescribe.Infrastructure.Services;
 
 namespace Typescribe.Desktop;
 
-/// <summary>
-/// Adds EPUB 3 publishing to the existing Publish menu and upgrades the standard DOCX
-/// command so merged table geometry is preserved after the semantic Word export.
-/// </summary>
+/// <summary>Adds EPUB 3 publishing to the existing Publish menu.</summary>
 internal sealed class EpubPublishingFeature
 {
-    private const string MergedDocxClass = "merged-table-docx-export";
-
     private readonly StudioWorkspaceWindow _window;
     private readonly WorkspaceViewModel _viewModel;
     private readonly TrackingProjectRepository _repository;
-    private readonly IDocumentParser _parser;
     private readonly Epub3ExportService _exporter;
-    private readonly DocxInterchangeService _docx;
     private bool _installed;
     private bool _disposed;
 
@@ -37,9 +29,7 @@ internal sealed class EpubPublishingFeature
         _window = window;
         _viewModel = viewModel;
         _repository = repository;
-        _parser = parser;
         _exporter = new Epub3ExportService(parser);
-        _docx = new DocxInterchangeService(parser, new BibTeXDatabase());
     }
 
     public static void Apply(
@@ -76,8 +66,6 @@ internal sealed class EpubPublishingFeature
         if (publish is null) return;
 
         var items = MenuItems(publish.ItemsSource);
-        UpgradeDocxCommand(items);
-
         if (!items.OfType<MenuItem>().Any(item => HeaderEquals(item, "Export EPUB 3…") || HeaderEquals(item, "Export EPUB 3...")))
         {
             var command = new MenuItem { Header = "Export EPUB 3…" };
@@ -88,22 +76,6 @@ internal sealed class EpubPublishingFeature
         publish.ItemsSource = items.ToArray();
         _installed = true;
         _window.LayoutUpdated -= OnLayoutUpdated;
-    }
-
-    private void UpgradeDocxCommand(List<object> items)
-    {
-        if (items.OfType<MenuItem>().Any(static item => item.Classes.Contains(MergedDocxClass))) return;
-
-        var existingIndex = items.FindIndex(item =>
-            item is MenuItem menuItem &&
-            (HeaderEquals(menuItem, "Export DOCX…") || HeaderEquals(menuItem, "Export DOCX...")));
-        if (existingIndex < 0) return;
-
-        items.RemoveAt(existingIndex);
-        var command = new MenuItem { Header = "Export DOCX…" };
-        command.Classes.Add(MergedDocxClass);
-        command.Click += async (_, _) => await ExportDocxAsync();
-        items.Insert(existingIndex, command);
     }
 
     private async Task ExportEpubAsync()
@@ -132,12 +104,6 @@ internal sealed class EpubPublishingFeature
 
                 progress.Report(0.55, "Writing EPUB 3 package…");
                 await _exporter.ExportAsync(project, documents, destination);
-
-                progress.Report(0.86, "Finalizing merged tables…");
-                await MergedTableExportPostProcessor.ApplyEpubAsync(
-                    destination,
-                    documents.Select(static document => document.Content),
-                    _parser);
                 progress.Report(0.98, "Finishing EPUB 3 export…");
             });
 
@@ -146,49 +112,6 @@ internal sealed class EpubPublishingFeature
         catch (Exception ex)
         {
             await ShowMessageAsync("EPUB export failed", ex.Message);
-        }
-    }
-
-    private async Task ExportDocxAsync()
-    {
-        var project = _repository.CurrentProject;
-        if (project is null) return;
-
-        try
-        {
-            await _viewModel.SaveNowAsync();
-            var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-            {
-                Title = "Export DOCX",
-                SuggestedFileName = SanitizeFileName(project.Title) + ".docx",
-                FileTypeChoices = [new FilePickerFileType("Word document") { Patterns = ["*.docx"] }]
-            });
-            var destination = file?.TryGetLocalPath();
-            if (string.IsNullOrWhiteSpace(destination)) return;
-
-            await PublishingProgressDialog.RunAsync(_window, "Exporting DOCX", async progress =>
-            {
-                progress.Report(0.12, "Collecting manuscript documents…");
-                var documents = new List<(ProjectNode Node, string Content)>();
-                await foreach (var item in _repository.EnumerateDocumentsAsync(project))
-                    documents.Add(item);
-
-                progress.Report(0.58, "Writing Word document…");
-                await _docx.ExportAsync(project, documents, destination);
-
-                progress.Report(0.86, "Finalizing merged tables…");
-                await MergedTableExportPostProcessor.ApplyDocxAsync(
-                    destination,
-                    documents.Select(static document => document.Content),
-                    _parser);
-                progress.Report(0.98, "Finishing DOCX export…");
-            });
-
-            await ShowMessageAsync("DOCX export complete", $"Word document written to:\n{destination}");
-        }
-        catch (Exception ex)
-        {
-            await ShowMessageAsync("DOCX export failed", ex.Message);
         }
     }
 
