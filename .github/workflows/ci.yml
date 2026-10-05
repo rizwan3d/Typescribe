@@ -24,6 +24,9 @@ jobs:
         run: dotnet restore Typescribe.slnx
       - name: Build
         run: dotnet build Typescribe.slnx -c Release --no-restore
+      - name: Validate Unicode BiDi heuristics
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet run --project tools/Typescribe.BidiSmoke/Typescribe.BidiSmoke.csproj -c Release
       - name: Validate lazy project loading
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project tools/Typescribe.LazyLoadSmoke/Typescribe.LazyLoadSmoke.csproj -c Release
