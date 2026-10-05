@@ -35,10 +35,10 @@ internal sealed class SelectableEditorAnalysisFeature
     private readonly List<AnalysisIssue> _issues = [];
 
     private ManuscriptEditor? _editor;
-    private ToggleButton? _spellingToggle;
-    private ToggleButton? _grammarToggle;
-    private ToggleButton? _styleToggle;
-    private ToggleButton? _readabilityToggle;
+    private MenuItem? _spellingToolbarItem;
+    private MenuItem? _grammarToolbarItem;
+    private MenuItem? _styleToolbarItem;
+    private MenuItem? _readabilityToolbarItem;
     private TextBlock? _status;
     private MenuItem? _spellingSourceItem;
     private MenuItem? _spellingContextItem;
@@ -168,17 +168,7 @@ internal sealed class SelectableEditorAnalysisFeature
 
         var controls = new Control[]
         {
-            new TextBlock
-            {
-                Text = "Checks",
-                VerticalAlignment = VerticalAlignment.Center,
-                Opacity = 0.72,
-                Margin = new Thickness(2, 0, 3, 0)
-            },
-            CreateToggle("Spell", "Dictionary spell checking", OnSpellingChanged, out _spellingToggle),
-            CreateToggle("Grammar", "Repeated words, spacing and punctuation", OnGrammarChanged, out _grammarToggle),
-            CreateToggle("Style", "Concision and passive-construction suggestions", OnStyleChanged, out _styleToggle),
-            CreateToggle("Readability", "Long sentence and dense paragraph warnings", OnReadabilityChanged, out _readabilityToggle),
+            CreateChecksButton(),
             CreateButton("‹", "Previous enabled analysis issue", () => NavigateIssue(-1)),
             CreateButton("›", "Next enabled analysis issue", () => NavigateIssue(1)),
             CreateButton("Fix", "Apply the current analysis issue's suggested fix", ApplyCurrentFix),
@@ -195,26 +185,35 @@ internal sealed class SelectableEditorAnalysisFeature
             panel.Children.Insert(legacyIndex + offset, controls[offset]);
     }
 
-    private static ToggleButton CreateToggle(
-        string label,
-        string tip,
-        Action<bool> changed,
-        out ToggleButton toggle)
+    private Button CreateChecksButton()
     {
-        var created = new ToggleButton
+        _spellingToolbarItem = CreateCheckMenuItem("Spell", "Dictionary spell checking", OnSpellingChanged);
+        _grammarToolbarItem = CreateCheckMenuItem("Grammar", "Repeated words, spacing and punctuation", OnGrammarChanged);
+        _styleToolbarItem = CreateCheckMenuItem("Style", "Concision and passive-construction suggestions", OnStyleChanged);
+        _readabilityToolbarItem = CreateCheckMenuItem("Readability", "Long sentence and dense paragraph warnings", OnReadabilityChanged);
+
+        var button = new Button
         {
-            Content = label,
+            Content = "Checks...",
             Height = 27,
             MinHeight = 27,
-            MinWidth = 44,
+            MinWidth = 70,
             Padding = new Thickness(6, 1),
             HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Flyout = new MenuFlyout
+            {
+                ItemsSource = new object[]
+                {
+                    _spellingToolbarItem,
+                    _grammarToolbarItem,
+                    _styleToolbarItem,
+                    _readabilityToolbarItem
+                }
+            }
         };
-        ToolTip.SetTip(created, tip);
-        created.IsCheckedChanged += (_, _) => changed(created.IsChecked == true);
-        toggle = created;
-        return created;
+        ToolTip.SetTip(button, "Choose enabled writing checks");
+        return button;
     }
 
     private static Button CreateButton(string label, string tip, Action action)
@@ -286,10 +285,10 @@ internal sealed class SelectableEditorAnalysisFeature
                 legacy.IsVisible = false;
         }
 
-        _spellingContextItem = CreateContextToggle("Spelling", OnSpellingChanged);
-        _grammarContextItem = CreateContextToggle("Grammar", OnGrammarChanged);
-        _styleContextItem = CreateContextToggle("Style", OnStyleChanged);
-        _readabilityContextItem = CreateContextToggle("Readability", OnReadabilityChanged);
+        _spellingContextItem = CreateCheckMenuItem("Spelling", "Dictionary spell checking", OnSpellingChanged);
+        _grammarContextItem = CreateCheckMenuItem("Grammar", "Repeated words, spacing and punctuation", OnGrammarChanged);
+        _styleContextItem = CreateCheckMenuItem("Style", "Concision and passive-construction suggestions", OnStyleChanged);
+        _readabilityContextItem = CreateCheckMenuItem("Readability", "Long sentence and dense paragraph warnings", OnReadabilityChanged);
 
         var previous = new MenuItem { Header = "Previous Analysis Issue" };
         previous.Click += (_, _) => NavigateIssue(-1);
@@ -318,13 +317,14 @@ internal sealed class SelectableEditorAnalysisFeature
         _editor.ContextMenu.ItemsSource = existing;
     }
 
-    private MenuItem CreateContextToggle(string label, Action<bool> changed)
+    private MenuItem CreateCheckMenuItem(string label, string tip, Action<bool> changed)
     {
         var item = new MenuItem
         {
             Header = label,
             ToggleType = MenuItemToggleType.CheckBox
         };
+        ToolTip.SetTip(item, tip);
         item.Click += (_, _) =>
         {
             if (_syncingUi) return;
@@ -754,10 +754,10 @@ internal sealed class SelectableEditorAnalysisFeature
         _syncingUi = true;
         try
         {
-            SetChecked(_spellingToggle, _spellingEnabled);
-            SetChecked(_grammarToggle, _grammarEnabled);
-            SetChecked(_styleToggle, _styleEnabled);
-            SetChecked(_readabilityToggle, _readabilityEnabled);
+            SetChecked(_spellingToolbarItem, _spellingEnabled);
+            SetChecked(_grammarToolbarItem, _grammarEnabled);
+            SetChecked(_styleToolbarItem, _styleEnabled);
+            SetChecked(_readabilityToolbarItem, _readabilityEnabled);
             SetChecked(_spellingContextItem, _spellingEnabled);
             SetChecked(_grammarContextItem, _grammarEnabled);
             SetChecked(_styleContextItem, _styleEnabled);
@@ -775,11 +775,6 @@ internal sealed class SelectableEditorAnalysisFeature
             : _issues.Count == 1 ? "1 issue" : $"{_issues.Count} issues";
         var current = ResolveCurrentIssue();
         if (current is not null) ToolTip.SetTip(_status, FormatMessage(current));
-    }
-
-    private static void SetChecked(ToggleButton? item, bool value)
-    {
-        if (item is not null && item.IsChecked != value) item.IsChecked = value;
     }
 
     private static void SetChecked(MenuItem? item, bool value)
