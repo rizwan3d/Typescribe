@@ -25,7 +25,7 @@ public sealed class LuaLatexSafeDocumentRenderer : IDocumentRenderer
         "amsfonts"
     };
 
-    private readonly AdvancedDocumentRenderer _inner = new();
+    private readonly RichDocumentRenderer _inner = new();
 
     public string RenderPreview(DocumentAst document) => _inner.RenderPreview(document);
 
