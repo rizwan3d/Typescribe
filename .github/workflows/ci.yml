@@ -24,6 +24,8 @@ jobs:
         run: dotnet restore Typescribe.slnx
       - name: Build
         run: dotnet build Typescribe.slnx -c Release --no-restore
+      - name: Validate deterministic paged layout
+        run: dotnet run --project tools/Typescribe.LayoutSmoke/Typescribe.LayoutSmoke.csproj -c Release
       - name: Validate Unicode BiDi heuristics
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project tools/Typescribe.BidiSmoke/Typescribe.BidiSmoke.csproj -c Release
