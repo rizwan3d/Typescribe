@@ -45,6 +45,7 @@ internal sealed class EditorToolbarPolishFeature
         // Character/paragraph typography uses hidden, Markdown-safe metadata rather than a
         // parallel binary document model. System/project fonts and multilingual intent share it.
         RichTypographyInspectorFeature.Apply(window);
+        BidiInspectorStatusFeature.Apply(window);
     }
 
     private void WindowOpened(object? sender, EventArgs e) => QueueApply();
