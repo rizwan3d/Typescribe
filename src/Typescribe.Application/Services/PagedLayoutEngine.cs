@@ -971,7 +971,7 @@ public sealed class PagedLayoutEngine
     private sealed record TextMetrics(IReadOnlyList<WrappedLine> Lines, double LineHeightPoints);
 
     private sealed record BlockMetrics(
-        IReadOnlyList<string> Lines,
+        IReadOnlyList<WrappedLine> Lines,
         double LineHeightPoints,
         double SpaceBeforePoints,
         double SpaceAfterPoints)
