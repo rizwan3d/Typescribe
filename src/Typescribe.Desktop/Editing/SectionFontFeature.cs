@@ -37,6 +37,7 @@ internal sealed class SectionFontFeature
 
     private ManuscriptEditor? _editor;
     private TabControl? _inspectorTabs;
+    private string? _loadedProjectRoot;
     private bool _installed;
     private bool _queued;
     private bool _disposed;
@@ -129,8 +130,9 @@ internal sealed class SectionFontFeature
 
         _editor.TextArea.Caret.PositionChanged += CaretPositionChanged;
         _editor.TextChanged += EditorTextChanged;
+        _viewModel.StateChanged += WorkspaceStateChanged;
         _installed = true;
-        RefreshProjectFonts();
+        RefreshProjectFonts(force: true);
         RefreshSectionLabel();
     }
 
@@ -235,7 +237,7 @@ internal sealed class SectionFontFeature
                 : UniqueDestination(fontsDirectory, Path.GetFileName(sourceFullPath));
             if (!alreadyInProject) File.Copy(sourceFullPath, destination, overwrite: false);
 
-            RefreshProjectFonts();
+            RefreshProjectFonts(force: true);
             var choice = (_projectFont.ItemsSource as IEnumerable)?.Cast<object>()
                 .OfType<ProjectFontChoice>()
                 .FirstOrDefault(item => SamePath(item.FullPath, destination));
@@ -253,9 +255,14 @@ internal sealed class SectionFontFeature
         }
     }
 
-    private void RefreshProjectFonts()
+    private void RefreshProjectFonts(bool force = false)
     {
         var project = _repository.CurrentProject;
+        var root = project?.RootPath;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!force && string.Equals(_loadedProjectRoot, root, comparison)) return;
+        _loadedProjectRoot = root;
+
         if (project is null)
         {
             _projectFont.ItemsSource = Array.Empty<ProjectFontChoice>();
@@ -427,6 +434,12 @@ internal sealed class SectionFontFeature
 
     private void EditorTextChanged(object? sender, EventArgs e) => RefreshSectionLabel();
 
+    private void WorkspaceStateChanged(object? sender, EventArgs e)
+    {
+        RefreshProjectFonts();
+        RefreshSectionLabel();
+    }
+
     private static double? ParseSize(string? text)
         => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value > 0
             ? Math.Clamp(value, 5, 240)
@@ -466,6 +479,7 @@ internal sealed class SectionFontFeature
             _editor.TextArea.Caret.PositionChanged -= CaretPositionChanged;
             _editor.TextChanged -= EditorTextChanged;
         }
+        _viewModel.StateChanged -= WorkspaceStateChanged;
         _window.Opened -= WindowOpened;
         _window.LayoutUpdated -= WindowLayoutUpdated;
         _window.Closed -= WindowClosed;
