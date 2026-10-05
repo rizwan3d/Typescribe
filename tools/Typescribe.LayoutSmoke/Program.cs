@@ -211,4 +211,34 @@ var reparsed = richParser.Parse(removed);
 Assert(reparsed.Blocks.OfType<ParagraphBlock>().Last().Formatting?.Section is null,
     "Removing page-layout metadata should restore an unformatted block without changing its text.");
 
+var editableMarkdown =
+    "# Canvas title\r\n\r\n" +
+    "First **editable** paragraph line.\r\n" +
+    "Continuation stays in the same source block.\r\n\r\n" +
+    "## Next heading\r\n\r\n" +
+    "Following paragraph.\r\n";
+var editableDocument = richParser.Parse(editableMarkdown);
+var editableIndex = editableDocument.Blocks
+    .Select((block, index) => (block, index))
+    .First(item => item.block is ParagraphBlock paragraph &&
+                   paragraph.Inlines.ToPlainText().Contains("First", StringComparison.Ordinal))
+    .index;
+var editableSpan = PagedLayoutSourceMapper.GetEditableSpan(editableMarkdown, editableDocument, editableIndex);
+Assert(editableSpan.Text ==
+       "First **editable** paragraph line.\r\nContinuation stays in the same source block.",
+    "Paged source mapping should expose the exact Markdown block without consuming blank separators.");
+var replacedBlock = PagedLayoutSourceMapper.ReplaceBlock(
+    editableMarkdown,
+    editableDocument,
+    editableIndex,
+    "Changed paragraph.\r\nStill the same block.");
+Assert(replacedBlock.Contains(
+        "Changed paragraph.\r\nStill the same block.\r\n\r\n## Next heading",
+        StringComparison.Ordinal),
+    "Paged source replacement must preserve the surrounding Markdown block separators.");
+var replacedDocument = richParser.Parse(replacedBlock);
+Assert(replacedDocument.Blocks.OfType<ParagraphBlock>()
+        .Any(paragraph => paragraph.Inlines.ToPlainText().Contains("Changed paragraph", StringComparison.Ordinal)),
+    "Markdown edited through the page-source mapper must remain parseable by the canonical parser.");
+
 Console.WriteLine($"Paged layout smoke passed: {first.Pages.Count} pages, {first.Warnings.Count} warnings, deterministic fingerprint {Fingerprint(first).GetHashCode(StringComparison.Ordinal)}.");
