@@ -111,7 +111,19 @@ public sealed record NamedStyleCatalog(
             FirstLineIndentEm = child.FirstLineIndentEm ?? parent.FirstLineIndentEm,
             Alignment = child.Alignment ?? parent.Alignment,
             KeepWithNext = child.KeepWithNext ?? parent.KeepWithNext,
-            KeepLinesTogether = child.KeepLinesTogether ?? parent.KeepLinesTogether
+            KeepLinesTogether = child.KeepLinesTogether ?? parent.KeepLinesTogether,
+            FontSource = child.FontSource ?? parent.FontSource,
+            FontPath = child.FontPath ?? parent.FontPath,
+            Language = child.Language ?? parent.Language,
+            Script = child.Script ?? parent.Script,
+            Direction = child.Direction ?? parent.Direction,
+            OpticalMarginAlignment = child.OpticalMarginAlignment ?? parent.OpticalMarginAlignment,
+            Hyphenation = child.Hyphenation ?? parent.Hyphenation,
+            DropCap = child.DropCap ?? parent.DropCap,
+            Rules = child.Rules ?? parent.Rules,
+            Tabs = child.Tabs ?? parent.Tabs,
+            KeepFirstLines = child.KeepFirstLines ?? parent.KeepFirstLines,
+            KeepLastLines = child.KeepLastLines ?? parent.KeepLastLines
         };
 
     private static CharacterStyleDefinition Merge(CharacterStyleDefinition parent, CharacterStyleDefinition child)
@@ -125,7 +137,18 @@ public sealed record NamedStyleCatalog(
             Underline = child.Underline ?? parent.Underline,
             SmallCaps = child.SmallCaps ?? parent.SmallCaps,
             ColorHex = child.ColorHex ?? parent.ColorHex,
-            LetterSpacingEm = child.LetterSpacingEm ?? parent.LetterSpacingEm
+            LetterSpacingEm = child.LetterSpacingEm ?? parent.LetterSpacingEm,
+            FontSource = child.FontSource ?? parent.FontSource,
+            FontPath = child.FontPath ?? parent.FontPath,
+            Ligatures = child.Ligatures ?? parent.Ligatures,
+            Kerning = child.Kerning ?? parent.Kerning,
+            TrackingEm = child.TrackingEm ?? parent.TrackingEm,
+            BaselineShiftPoints = child.BaselineShiftPoints ?? parent.BaselineShiftPoints,
+            Language = child.Language ?? parent.Language,
+            Script = child.Script ?? parent.Script,
+            Direction = child.Direction ?? parent.Direction,
+            OpenTypeFeatures = child.OpenTypeFeatures ?? parent.OpenTypeFeatures,
+            VariableAxes = child.VariableAxes ?? parent.VariableAxes
         };
 
     private static FigureStyleDefinition Merge(FigureStyleDefinition parent, FigureStyleDefinition child)
@@ -153,7 +176,10 @@ public sealed record NamedStyleCatalog(
             BodyCellStyleId = child.BodyCellStyleId ?? parent.BodyCellStyleId,
             AlternateRowCellStyleId = child.AlternateRowCellStyleId ?? parent.AlternateRowCellStyleId,
             KeepTogether = child.KeepTogether ?? parent.KeepTogether,
-            CaptionPosition = child.CaptionPosition ?? parent.CaptionPosition
+            CaptionPosition = child.CaptionPosition ?? parent.CaptionPosition,
+            RepeatHeaderRows = child.RepeatHeaderRows ?? parent.RepeatHeaderRows,
+            AllowRowBreakAcrossPages = child.AllowRowBreakAcrossPages ?? parent.AllowRowBreakAcrossPages,
+            KeepRowsTogether = child.KeepRowsTogether ?? parent.KeepRowsTogether
         };
 
     private static CellStyleDefinition Merge(CellStyleDefinition parent, CellStyleDefinition child)
@@ -168,7 +194,12 @@ public sealed record NamedStyleCatalog(
             BorderWidthPoints = child.BorderWidthPoints ?? parent.BorderWidthPoints,
             BorderColorHex = child.BorderColorHex ?? parent.BorderColorHex,
             Bold = child.Bold ?? parent.Bold,
-            NumberFormat = child.NumberFormat ?? parent.NumberFormat
+            NumberFormat = child.NumberFormat ?? parent.NumberFormat,
+            FontFamily = child.FontFamily ?? parent.FontFamily,
+            FontSizePoints = child.FontSizePoints ?? parent.FontSizePoints,
+            Language = child.Language ?? parent.Language,
+            Script = child.Script ?? parent.Script,
+            Direction = child.Direction ?? parent.Direction
         };
 
     private static PageStyleDefinition Merge(PageStyleDefinition parent, PageStyleDefinition child)
@@ -182,7 +213,15 @@ public sealed record NamedStyleCatalog(
             MarginInnerInches = child.MarginInnerInches ?? parent.MarginInnerInches,
             MarginOuterInches = child.MarginOuterInches ?? parent.MarginOuterInches,
             Landscape = child.Landscape ?? parent.Landscape,
-            StartOnRight = child.StartOnRight ?? parent.StartOnRight
+            StartOnRight = child.StartOnRight ?? parent.StartOnRight,
+            FacingPages = child.FacingPages ?? parent.FacingPages,
+            BleedTopInches = child.BleedTopInches ?? parent.BleedTopInches,
+            BleedBottomInches = child.BleedBottomInches ?? parent.BleedBottomInches,
+            BleedInsideInches = child.BleedInsideInches ?? parent.BleedInsideInches,
+            BleedOutsideInches = child.BleedOutsideInches ?? parent.BleedOutsideInches,
+            SlugInches = child.SlugInches ?? parent.SlugInches,
+            CropMarks = child.CropMarks ?? parent.CropMarks,
+            BaselineGrid = child.BaselineGrid ?? parent.BaselineGrid
         };
 }
 
@@ -213,7 +252,19 @@ public sealed record ParagraphStyleDefinition(
     double? FirstLineIndentEm = null,
     TextAlignmentMode? Alignment = null,
     bool? KeepWithNext = null,
-    bool? KeepLinesTogether = null) : INamedStyleDefinition;
+    bool? KeepLinesTogether = null,
+    FontSourceKind? FontSource = null,
+    string? FontPath = null,
+    string? Language = null,
+    ScriptMode? Script = null,
+    TextDirectionMode? Direction = null,
+    bool? OpticalMarginAlignment = null,
+    bool? Hyphenation = null,
+    DropCapFormatting? DropCap = null,
+    IReadOnlyList<ParagraphRule>? Rules = null,
+    IReadOnlyList<TabStop>? Tabs = null,
+    int? KeepFirstLines = null,
+    int? KeepLastLines = null) : INamedStyleDefinition;
 
 public sealed record CharacterStyleDefinition(
     string Id,
@@ -226,7 +277,18 @@ public sealed record CharacterStyleDefinition(
     bool? Underline = null,
     bool? SmallCaps = null,
     string? ColorHex = null,
-    double? LetterSpacingEm = null) : INamedStyleDefinition;
+    double? LetterSpacingEm = null,
+    FontSourceKind? FontSource = null,
+    string? FontPath = null,
+    bool? Ligatures = null,
+    bool? Kerning = null,
+    double? TrackingEm = null,
+    double? BaselineShiftPoints = null,
+    string? Language = null,
+    ScriptMode? Script = null,
+    TextDirectionMode? Direction = null,
+    IReadOnlyList<OpenTypeFeatureSetting>? OpenTypeFeatures = null,
+    IReadOnlyList<VariableFontAxisSetting>? VariableAxes = null) : INamedStyleDefinition;
 
 public sealed record FigureStyleDefinition(
     string Id,
@@ -252,7 +314,10 @@ public sealed record TableStyleDefinition(
     string? BodyCellStyleId = null,
     string? AlternateRowCellStyleId = null,
     bool? KeepTogether = null,
-    CaptionPosition? CaptionPosition = null) : INamedStyleDefinition;
+    CaptionPosition? CaptionPosition = null,
+    int? RepeatHeaderRows = null,
+    bool? AllowRowBreakAcrossPages = null,
+    bool? KeepRowsTogether = null) : INamedStyleDefinition;
 
 public sealed record CellStyleDefinition(
     string Id,
@@ -266,7 +331,12 @@ public sealed record CellStyleDefinition(
     double? BorderWidthPoints = null,
     string? BorderColorHex = null,
     bool? Bold = null,
-    string? NumberFormat = null) : INamedStyleDefinition;
+    string? NumberFormat = null,
+    string? FontFamily = null,
+    double? FontSizePoints = null,
+    string? Language = null,
+    ScriptMode? Script = null,
+    TextDirectionMode? Direction = null) : INamedStyleDefinition;
 
 public sealed record PageStyleDefinition(
     string Id,
@@ -279,4 +349,12 @@ public sealed record PageStyleDefinition(
     double? MarginInnerInches = null,
     double? MarginOuterInches = null,
     bool? Landscape = null,
-    bool? StartOnRight = null) : INamedStyleDefinition;
+    bool? StartOnRight = null,
+    bool? FacingPages = null,
+    double? BleedTopInches = null,
+    double? BleedBottomInches = null,
+    double? BleedInsideInches = null,
+    double? BleedOutsideInches = null,
+    double? SlugInches = null,
+    bool? CropMarks = null,
+    BaselineGridFormatting? BaselineGrid = null) : INamedStyleDefinition;
