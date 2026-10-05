@@ -119,6 +119,33 @@
     <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
   </Style>
 
+  <!-- Read-mode Markdown tables are rendered as real tables inside AvaloniaEdit. -->
+  <Style Selector="Border.inline-markdown-table">
+    <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.inline-markdown-table:pointerover">
+    <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+  </Style>
+
+  <Style Selector="Border.inline-markdown-table-cell">
+    <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.inline-markdown-table-cell.inline-markdown-table-header">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+  </Style>
+
+  <Style Selector="Border.inline-markdown-table TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.inline-markdown-table-caption">
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
   <!-- Word-like inline table editing -->
   <Style Selector="Border.inline-table-editor">
     <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
