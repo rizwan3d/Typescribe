@@ -4,12 +4,11 @@
 
   <!-- Writing canvas -->
   <Style Selector="local|ManuscriptEditor.rich-manuscript-editor">
-    <Setter Property="local:RichVisualEditingCorrections.IsEnabled" Value="True" />
     <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="Padding" Value="42,34,42,72" />
+    <Setter Property="Padding" Value="46,38,46,80" />
     <Setter Property="FontSize" Value="16" />
   </Style>
 
@@ -61,7 +60,7 @@
     <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
   </Style>
 
-  <!-- Popups use their own visual roots, so these selectors intentionally do not depend on Window ancestry. -->
+  <!-- Popups use their own visual roots. -->
   <Style Selector="Border.rich-selection-toolbar">
     <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
@@ -82,6 +81,13 @@
     <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+  </Style>
+
+  <Style Selector="Border.rich-selection-toolbar ComboBox.rich-heading-picker">
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
   </Style>
 
   <Style Selector="Border.rich-quick-insert-palette">
@@ -111,5 +117,66 @@
   <Style Selector="Border.rich-quick-insert-palette ListBoxItem:selected">
     <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <!-- Word-like inline table editing -->
+  <Style Selector="Border.inline-table-editor">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.inline-table-editor Button.table-toolbar-button">
+    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Border.inline-table-editor Button.table-toolbar-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="Border.table-cell-toolbar">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.table-cell-toolbar Button.table-toolbar-button">
+    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Border.table-cell-toolbar Button.table-toolbar-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="Border.table-coordinate-header">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+    <Setter Property="BorderThickness" Value="0.5" />
+  </Style>
+
+  <Style Selector="TextBox.table-cell">
+    <Setter Property="Background" Value="{DynamicResource TsEditorBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TsBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="0" />
+  </Style>
+
+  <Style Selector="TextBox.table-cell:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+  </Style>
+
+  <Style Selector="TextBox.table-cell.table-header-cell">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+  </Style>
+
+  <Style Selector="TextBox.table-cell.active-table-cell">
+    <Setter Property="BorderBrush" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
   </Style>
 </Styles>
