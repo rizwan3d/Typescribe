@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using AvaloniaEdit;
 using AvaloniaEdit.Editing;
 using AvaloniaEdit.Rendering;
 using Typescribe.Application.Abstractions;
@@ -971,7 +972,8 @@ internal sealed class SpreadPageView : Grid
                     new TextViewPosition(startLocation.Line, startLocation.Column),
                     VisualYPosition.LineTop);
 
-                var endLocation = document.GetLocation(endOffset);
+                var endProbe = endOffset > startOffset ? endOffset - 1 : endOffset;
+                var endLocation = document.GetLocation(endProbe);
                 var endPoint = textView.GetVisualPosition(
                     new TextViewPosition(endLocation.Line, endLocation.Column),
                     VisualYPosition.LineBottom);
