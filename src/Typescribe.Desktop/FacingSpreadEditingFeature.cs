@@ -1821,3 +1821,269 @@ internal sealed class FigureObjectOverlay : Grid, IDisposable
         _resizeCommitted(Width / _scale, Height / _scale);
     }
 }
+
+
+internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
+{
+    private readonly Canvas _canvas;
+    private readonly TextFrameFormatting _frame;
+    private readonly double _scale;
+    private readonly Action _select;
+    private readonly Action<double, double> _moveCommitted;
+    private readonly Action<double, double> _resizeCommitted;
+    private readonly Border _outline;
+    private readonly Border _titleBar;
+    private readonly TextBlock _titleText;
+    private readonly Border _resizeHandle;
+    private readonly Border _inputPort;
+    private readonly Border _outputPort;
+    private readonly Border _oversetBadge;
+    private bool _selected;
+    private bool _dragging;
+    private bool _resizing;
+    private Point _startPointer;
+    private double _startLeft;
+    private double _startTop;
+    private double _startWidth;
+    private double _startHeight;
+
+    public TextFrameObjectOverlay(
+        Canvas canvas,
+        TextFrameFormatting frame,
+        PageLayoutRect container,
+        double scale,
+        bool overset,
+        Action select,
+        Action<double, double> moveCommitted,
+        Action<double, double> resizeCommitted)
+    {
+        _canvas = canvas;
+        _frame = frame;
+        _scale = scale;
+        _select = select;
+        _moveCommitted = moveCommitted;
+        _resizeCommitted = resizeCommitted;
+
+        Width = Math.Max(36, container.WidthPoints * scale);
+        Height = Math.Max(36, container.HeightPoints * scale);
+        ClipToBounds = false;
+
+        _outline = new Border
+        {
+            Width = Width,
+            Height = Height,
+            BorderBrush = new SolidColorBrush(Color.Parse("#6C9BC5")),
+            BorderThickness = new Thickness(1),
+            Background = null,
+            IsHitTestVisible = false
+        };
+        Children.Add(_outline);
+
+        _titleText = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(frame.NextFrameId)
+                ? frame.Id
+                : $"{frame.Id}  →  {frame.NextFrameId}",
+            Foreground = Brushes.White,
+            FontSize = 9.5,
+            FontWeight = FontWeight.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0)
+        };
+        _titleBar = new Border
+        {
+            Height = 18,
+            Background = new SolidColorBrush(Color.FromArgb(205, 0, 122, 204)),
+            CornerRadius = new CornerRadius(2, 2, 0, 0),
+            Child = _titleText
+        };
+        Children.Add(_titleBar);
+
+        _inputPort = Port();
+        _outputPort = Port();
+        Children.Add(_inputPort);
+        Children.Add(_outputPort);
+
+        _resizeHandle = new Border
+        {
+            Width = 10,
+            Height = 10,
+            Background = new SolidColorBrush(Color.Parse("#007ACC")),
+            BorderBrush = Brushes.White,
+            BorderThickness = new Thickness(1),
+            IsVisible = false
+        };
+        Children.Add(_resizeHandle);
+
+        _oversetBadge = new Border
+        {
+            Width = 15,
+            Height = 15,
+            Background = new SolidColorBrush(Color.Parse("#D13438")),
+            CornerRadius = new CornerRadius(2),
+            IsVisible = overset,
+            Child = new TextBlock
+            {
+                Text = "+",
+                Foreground = Brushes.White,
+                FontSize = 11,
+                FontWeight = FontWeight.Bold,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        Children.Add(_oversetBadge);
+
+        _titleBar.PointerPressed += DragPointerPressed;
+        _titleBar.PointerMoved += DragPointerMoved;
+        _titleBar.PointerReleased += DragPointerReleased;
+        _inputPort.PointerPressed += SelectPointerPressed;
+        _outputPort.PointerPressed += SelectPointerPressed;
+        _resizeHandle.PointerPressed += ResizePointerPressed;
+        _resizeHandle.PointerMoved += ResizePointerMoved;
+        _resizeHandle.PointerReleased += ResizePointerReleased;
+
+        UpdateChrome();
+        ToolTip.SetTip(_titleBar, "Text frame • drag to move");
+        ToolTip.SetTip(_resizeHandle, "Resize text frame");
+        ToolTip.SetTip(_outputPort,
+            string.IsNullOrWhiteSpace(frame.NextFrameId)
+                ? "Thread output: not linked"
+                : $"Thread output → {frame.NextFrameId}");
+        if (overset)
+            ToolTip.SetTip(_oversetBadge, "Overset text: enlarge or link this frame");
+    }
+
+    public string FrameId => _frame.Id;
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            _outline.BorderBrush = new SolidColorBrush(Color.Parse(value ? "#007ACC" : "#6C9BC5"));
+            _outline.BorderThickness = new Thickness(value ? 2 : 1);
+            _titleBar.Opacity = value ? 1 : .78;
+            _resizeHandle.IsVisible = value;
+            _inputPort.IsVisible = value;
+            _outputPort.IsVisible = value;
+        }
+    }
+
+    public void Dispose()
+    {
+        _titleBar.PointerPressed -= DragPointerPressed;
+        _titleBar.PointerMoved -= DragPointerMoved;
+        _titleBar.PointerReleased -= DragPointerReleased;
+        _inputPort.PointerPressed -= SelectPointerPressed;
+        _outputPort.PointerPressed -= SelectPointerPressed;
+        _resizeHandle.PointerPressed -= ResizePointerPressed;
+        _resizeHandle.PointerMoved -= ResizePointerMoved;
+        _resizeHandle.PointerReleased -= ResizePointerReleased;
+    }
+
+    private static Border Port()
+        => new()
+        {
+            Width = 9,
+            Height = 9,
+            Background = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.Parse("#007ACC")),
+            BorderThickness = new Thickness(2),
+            IsVisible = false
+        };
+
+    private void UpdateChrome()
+    {
+        _outline.Width = Width;
+        _outline.Height = Height;
+        _titleBar.Width = Math.Max(56, Math.Min(Width, 190));
+        Canvas.SetLeft(_titleBar, 0);
+        Canvas.SetTop(_titleBar, -18);
+
+        Canvas.SetLeft(_inputPort, -4);
+        Canvas.SetTop(_inputPort, Math.Max(5, Height / 2 - 4));
+        Canvas.SetLeft(_outputPort, Math.Max(0, Width - 5));
+        Canvas.SetTop(_outputPort, Math.Max(5, Height / 2 - 4));
+
+        Canvas.SetLeft(_resizeHandle, Math.Max(0, Width - 5));
+        Canvas.SetTop(_resizeHandle, Math.Max(0, Height - 5));
+        Canvas.SetLeft(_oversetBadge, Math.Max(0, Width - 15));
+        Canvas.SetTop(_oversetBadge, Math.Max(0, Height - 15));
+    }
+
+    private void SelectPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        e.Handled = true;
+    }
+
+    private void DragPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_titleBar).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _dragging = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startLeft = Canvas.GetLeft(this);
+        _startTop = Canvas.GetTop(this);
+        e.Pointer.Capture(_titleBar);
+        e.Handled = true;
+    }
+
+    private void DragPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging) return;
+        var point = e.GetPosition(_canvas);
+        Canvas.SetLeft(this, _startLeft + point.X - _startPointer.X);
+        Canvas.SetTop(this, _startTop + point.Y - _startPointer.Y);
+        e.Handled = true;
+    }
+
+    private void DragPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _moveCommitted((left - _startLeft) / _scale, (top - _startTop) / _scale);
+    }
+
+    private void ResizePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_resizeHandle).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _resizing = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startWidth = Width;
+        _startHeight = Height;
+        e.Pointer.Capture(_resizeHandle);
+        e.Handled = true;
+    }
+
+    private void ResizePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_resizing) return;
+        var point = e.GetPosition(_canvas);
+        Width = Math.Max(54, _startWidth + point.X - _startPointer.X);
+        Height = Math.Max(54, _startHeight + point.Y - _startPointer.Y);
+        UpdateChrome();
+        e.Handled = true;
+    }
+
+    private void ResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_resizing) return;
+        _resizing = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _resizeCommitted(Width / _scale, Height / _scale);
+    }
+}
