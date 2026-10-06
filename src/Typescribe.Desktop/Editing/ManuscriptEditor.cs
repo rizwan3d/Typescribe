@@ -72,7 +72,12 @@ public sealed class ManuscriptEditor : TextEditor
     private string? _documentIdentity;
 
     public ManuscriptEditor()
-        : base(new ManuscriptTextArea())
+        : this(new TextDocument(), projectionView: false)
+    {
+    }
+
+    internal ManuscriptEditor(TextDocument sharedDocument, bool projectionView)
+        : base(new ManuscriptTextArea(), sharedDocument ?? throw new ArgumentNullException(nameof(sharedDocument)))
     {
         WordWrap = true;
         ShowLineNumbers = false;
@@ -92,9 +97,19 @@ public sealed class ManuscriptEditor : TextEditor
         TextArea.TextView.LineTransformers.Add(_colorizer);
         TextArea.Caret.PositionChanged += CaretPositionChanged;
         TextArea.SelectionChanged += SelectionChanged;
-        Document.Changing += DocumentChanging;
-        TextChanged += ManuscriptTextChanged;
-        ContextMenu = BuildContextMenu();
+
+        if (!projectionView)
+        {
+            Document.Changing += DocumentChanging;
+            TextChanged += ManuscriptTextChanged;
+            ContextMenu = BuildContextMenu();
+        }
+        else
+        {
+            SpellIndicatorsEnabled = false;
+            RevisionLevel = 0;
+        }
+
         UpdateFocusParagraph();
     }
 
