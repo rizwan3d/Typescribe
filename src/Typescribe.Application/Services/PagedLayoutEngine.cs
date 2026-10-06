@@ -55,7 +55,8 @@ public sealed record PageLayoutFragment(
     int? TableRowIndex = null,
     int FrameColumns = 1,
     int SourceTextStart = 0,
-    int SourceTextLength = 0);
+    int SourceTextLength = 0,
+    PageLayoutRect? ContainerBounds = null);
 
 public sealed record PageLayoutColumn(int Index, PageLayoutRect Bounds, IReadOnlyList<PageLayoutFragment> Fragments);
 
@@ -325,6 +326,12 @@ public sealed class PagedLayoutEngine
 
     private void LayoutText(AstBlock block, int blockIndex, PageLayoutFragmentKind kind, TextFrameFormatting? frame)
     {
+        if (frame is not null)
+        {
+            LayoutTextFrame(block, blockIndex, frame);
+            return;
+        }
+
         var text = TextFor(block);
         var flowBounds = frame is null ? ResolveTextFlowBounds() : CurrentColumn.Bounds;
         var metrics = MeasureBlock(block, text, flowBounds.WidthPoints);
@@ -426,6 +433,176 @@ public sealed class PagedLayoutEngine
                 if (frame is not null) frameSlot++;
             }
         }
+    }
+
+    private void LayoutTextFrame(AstBlock block, int blockIndex, TextFrameFormatting rootFrame)
+    {
+        var text = TextFor(block);
+        if (text.Length == 0) return;
+
+        var chain = FollowFrameChain(rootFrame.Id).ToArray();
+        if (chain.Length == 0) chain = [rootFrame.Id];
+
+        var rootPageIndex = CurrentPage.Index;
+        var sourceOffset = 0;
+        var fragmentIndex = 0;
+        PageLayoutRect? lastContainer = null;
+        var lastFrameId = rootFrame.Id;
+
+        for (var slot = 0; slot < chain.Length && sourceOffset < text.Length; slot++)
+        {
+            var frameId = chain[slot];
+            if (!_frames.TryGetValue(frameId, out var frame))
+                frame = slot == 0 ? rootFrame : new TextFrameFormatting(frameId);
+
+            var explicitGeometry = HasExplicitFrameGeometry(frame);
+            if (explicitGeometry)
+            {
+                var targetPageIndex = rootPageIndex + Math.Max(0, frame.PageOffset);
+                while (CurrentPage.Index < targetPageIndex)
+                    StartPage();
+            }
+            else if (slot > 0)
+            {
+                AdvanceColumn();
+            }
+
+            var container = explicitGeometry
+                ? ResolveFrameContainer(frame)
+                : new PageLayoutRect(
+                    CurrentColumn.Bounds.XPoints,
+                    _cursorY,
+                    CurrentColumn.Bounds.WidthPoints,
+                    Math.Max(_options.MinimumLineHeightPoints, AvailableHeight));
+            var inner = ApplyFrameInsets(container, frame);
+            lastContainer = container;
+            lastFrameId = frameId;
+
+            var remainingText = text[sourceOffset..];
+            var metrics = MeasureBlock(block, remainingText, inner.WidthPoints);
+            var before = fragmentIndex == 0 ? metrics.SpaceBeforePoints : 0;
+            var available = Math.Max(0, inner.HeightPoints - before);
+            var fit = Math.Min(
+                metrics.Lines.Count,
+                Math.Max(0, (int)Math.Floor(available / metrics.LineHeightPoints)));
+
+            if (fit <= 0)
+                continue;
+
+            var lastInStory = fit >= metrics.Lines.Count;
+            var after = lastInStory ? metrics.SpaceAfterPoints : 0;
+            var firstWrappedLine = metrics.Lines[0];
+            var lastWrappedLine = metrics.Lines[fit - 1];
+            var sourceTextStart = sourceOffset + firstWrappedLine.Start;
+            var sourceTextLength = Math.Max(
+                0,
+                lastWrappedLine.Start + lastWrappedLine.Length - firstWrappedLine.Start);
+            var usedHeight = Math.Min(
+                inner.HeightPoints,
+                before + fit * metrics.LineHeightPoints + after);
+            var textBounds = new PageLayoutRect(
+                inner.XPoints,
+                inner.YPoints,
+                inner.WidthPoints,
+                Math.Max(metrics.LineHeightPoints, usedHeight));
+
+            CurrentColumn.Fragments.Add(new PageLayoutFragment(
+                NextId(),
+                PageLayoutFragmentKind.TextFrame,
+                block.SourceLine,
+                blockIndex,
+                textBounds,
+                string.Join('\n', metrics.Lines.Take(fit).Select(static line => line.Text)),
+                FragmentIndex: fragmentIndex,
+                IsContinuation: fragmentIndex > 0,
+                FrameId: frameId,
+                FrameColumns: Math.Max(1, frame.Columns),
+                SourceTextStart: sourceTextStart,
+                SourceTextLength: sourceTextLength,
+                ContainerBounds: container));
+
+            var consumed = lastWrappedLine.Start + lastWrappedLine.Length;
+            if (consumed <= 0 && remainingText.Length > 0)
+                consumed = 1;
+            sourceOffset = Math.Min(text.Length, sourceOffset + consumed);
+            fragmentIndex++;
+
+            if (!explicitGeometry)
+                _cursorY = Math.Max(_cursorY, container.YPoints + usedHeight);
+        }
+
+        if (sourceOffset >= text.Length) return;
+
+        AddFrameOverset(
+            block,
+            blockIndex,
+            lastFrameId,
+            lastContainer ?? CurrentColumn.Bounds,
+            text.Length - sourceOffset);
+    }
+
+    private static bool HasExplicitFrameGeometry(TextFrameFormatting frame)
+        => frame.XPoints is not null ||
+           frame.YPoints is not null ||
+           frame.WidthPoints is not null ||
+           frame.HeightPoints is not null ||
+           frame.PageOffset != 0;
+
+    private PageLayoutRect ResolveFrameContainer(TextFrameFormatting frame)
+    {
+        var content = CurrentPage.Geometry.ContentBounds;
+        var x = content.XPoints + (frame.XPoints ?? 0);
+        var y = content.YPoints + (frame.YPoints ?? 0);
+        var width = Math.Max(36, frame.WidthPoints ?? content.WidthPoints);
+        var height = Math.Max(36, frame.HeightPoints ?? content.HeightPoints);
+
+        x = Math.Clamp(x, 0, Math.Max(0, CurrentPage.Geometry.WidthPoints - 18));
+        y = Math.Clamp(y, 0, Math.Max(0, CurrentPage.Geometry.HeightPoints - 18));
+        width = Math.Min(width, Math.Max(36, CurrentPage.Geometry.WidthPoints - x));
+        height = Math.Min(height, Math.Max(36, CurrentPage.Geometry.HeightPoints - y));
+        return new PageLayoutRect(x, y, width, height);
+    }
+
+    private static PageLayoutRect ApplyFrameInsets(PageLayoutRect bounds, TextFrameFormatting frame)
+    {
+        var left = Math.Max(0, frame.InsetLeftPoints);
+        var right = Math.Max(0, frame.InsetRightPoints);
+        var top = Math.Max(0, frame.InsetTopPoints);
+        var bottom = Math.Max(0, frame.InsetBottomPoints);
+        return new PageLayoutRect(
+            bounds.XPoints + left,
+            bounds.YPoints + top,
+            Math.Max(12, bounds.WidthPoints - left - right),
+            Math.Max(12, bounds.HeightPoints - top - bottom));
+    }
+
+    private void AddFrameOverset(
+        AstBlock block,
+        int blockIndex,
+        string frameId,
+        PageLayoutRect container,
+        int remainingCharacters)
+    {
+        var size = Math.Min(_options.OversetIndicatorHeightPoints, Math.Max(6, Math.Min(container.WidthPoints, container.HeightPoints)));
+        var bounds = new PageLayoutRect(
+            Math.Max(container.XPoints, container.RightPoints - size),
+            Math.Max(container.YPoints, container.BottomPoints - size),
+            size,
+            size);
+        CurrentColumn.Fragments.Add(new PageLayoutFragment(
+            NextId(),
+            PageLayoutFragmentKind.OversetIndicator,
+            block.SourceLine,
+            blockIndex,
+            bounds,
+            "+",
+            IsContinuation: true,
+            FrameId: frameId,
+            ContainerBounds: container));
+        _warnings.Add(new PageLayoutWarning(
+            "overset",
+            $"Text frame '{frameId}' has overset text ({Math.Max(0, remainingCharacters)} characters remain).",
+            block.SourceLine));
     }
 
     private void AddOverset(AstBlock block, int blockIndex, string frameId, IEnumerable<WrappedLine> remaining)
