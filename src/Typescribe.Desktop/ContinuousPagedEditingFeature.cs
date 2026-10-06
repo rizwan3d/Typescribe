@@ -262,7 +262,7 @@ internal sealed class ContinuousPagedEditingFeature
             _pageStarts = [];
             _renderer?.SetPages([]);
             _pageBreakGenerator?.SetPages([]);
-            _editor.TextArea.TextView.Redraw();
+            editor.TextArea.TextView.Redraw();
             UpdatePageBadge();
             return;
         }
@@ -289,7 +289,7 @@ internal sealed class ContinuousPagedEditingFeature
             _renderer?.SetPages([]);
             _pageBreakGenerator?.SetPages([]);
             _pageStarts = [];
-            _editor.TextArea.TextView.Redraw();
+            editor.TextArea.TextView.Redraw();
             UpdatePageBadge();
         }
     }
@@ -365,7 +365,7 @@ internal sealed class ContinuousPagedEditingFeature
         _pageBreakGenerator?.SetPages(_printLayoutEnabled ? _pageStarts : []);
         if (_editor is not null)
         {
-            _editor.TextArea.TextView.Redraw();
+            editor.TextArea.TextView.Redraw();
             _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
         }
     }
