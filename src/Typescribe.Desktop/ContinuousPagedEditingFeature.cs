@@ -35,6 +35,7 @@ internal sealed class ContinuousPagedEditingFeature
     private LongFormEditorChrome? _host;
     private ManuscriptEditor? _editor;
     private ContinuousPageRenderer? _renderer;
+    private PageBreakElementGenerator? _pageBreakGenerator;
     private TextBlock? _pageBadge;
     private ToggleButton? _pagesToggle;
     private IReadOnlyList<PageStart> _pageStarts = [];
@@ -104,7 +105,9 @@ internal sealed class ContinuousPagedEditingFeature
         _host = host;
         _editor = editor;
         _renderer = new ContinuousPageRenderer();
+        _pageBreakGenerator = new PageBreakElementGenerator();
         editor.TextArea.TextView.BackgroundRenderers.Add(_renderer);
+        editor.TextArea.TextView.ElementGenerators.Insert(0, _pageBreakGenerator);
         editor.Classes.Add("continuous-paged-editor");
         editor.IsVisible = true;
 
@@ -112,6 +115,7 @@ internal sealed class ContinuousPagedEditingFeature
         InstallPageBadge(host);
 
         editor.TextChanged += EditorTextChanged;
+        editor.SizeChanged += EditorSizeChanged;
         editor.TextArea.Caret.PositionChanged += CaretChanged;
         editor.TextArea.TextView.ScrollOffsetChanged += TextViewScrollChanged;
 
@@ -228,6 +232,12 @@ internal sealed class ContinuousPagedEditingFeature
     private void EditorTextChanged(object? sender, EventArgs e)
         => ScheduleLayout();
 
+    private void EditorSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        _pageBreakGenerator?.SetViewportWidth(Math.Max(240, e.NewSize.Width));
+        _editor?.TextArea.TextView.Redraw();
+    }
+
     private void CaretChanged(object? sender, EventArgs e)
         => UpdatePageBadge();
 
@@ -251,6 +261,8 @@ internal sealed class ContinuousPagedEditingFeature
             _layout = null;
             _pageStarts = [];
             _renderer?.SetPages([]);
+            _pageBreakGenerator?.SetPages([]);
+            _editor.TextArea.TextView.Redraw();
             UpdatePageBadge();
             return;
         }
@@ -265,6 +277,8 @@ internal sealed class ContinuousPagedEditingFeature
             _layout = layout;
             _pageStarts = starts;
             _renderer?.SetPages(_printLayoutEnabled ? starts : []);
+            _pageBreakGenerator?.SetViewportWidth(Math.Max(240, editor.Bounds.Width));
+            _pageBreakGenerator?.SetPages(_printLayoutEnabled ? starts : []);
             ApplyRendererState();
             UpdatePageBadge();
         }
@@ -273,7 +287,9 @@ internal sealed class ContinuousPagedEditingFeature
             // Editing must never be blocked by a transient parse/layout failure. The single
             // ManuscriptEditor stays live; page furniture simply waits for the next valid pass.
             _renderer?.SetPages([]);
+            _pageBreakGenerator?.SetPages([]);
             _pageStarts = [];
+            _editor.TextArea.TextView.Redraw();
             UpdatePageBadge();
         }
     }
@@ -346,7 +362,12 @@ internal sealed class ContinuousPagedEditingFeature
         if (_renderer is null) return;
         _renderer.Enabled = _printLayoutEnabled;
         _renderer.SetPages(_printLayoutEnabled ? _pageStarts : []);
-        _editor?.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        _pageBreakGenerator?.SetPages(_printLayoutEnabled ? _pageStarts : []);
+        if (_editor is not null)
+        {
+            _editor.TextArea.TextView.Redraw();
+            _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        }
     }
 
     private void UpdatePageBadge()
@@ -393,10 +414,13 @@ internal sealed class ContinuousPagedEditingFeature
         if (_editor is not null)
         {
             _editor.TextChanged -= EditorTextChanged;
+            _editor.SizeChanged -= EditorSizeChanged;
             _editor.TextArea.Caret.PositionChanged -= CaretChanged;
             _editor.TextArea.TextView.ScrollOffsetChanged -= TextViewScrollChanged;
             if (_renderer is not null)
                 _editor.TextArea.TextView.BackgroundRenderers.Remove(_renderer);
+            if (_pageBreakGenerator is not null)
+                _editor.TextArea.TextView.ElementGenerators.Remove(_pageBreakGenerator);
         }
     }
 
@@ -406,6 +430,97 @@ internal sealed class ContinuousPagedEditingFeature
         int PhysicalNumber,
         int SourceOffset,
         bool IsLeftPage);
+
+    private sealed class PageBreakElementGenerator : VisualLineElementGenerator
+    {
+        private const double PageGapHeight = 86;
+        private static readonly IBrush PasteboardBrush = new SolidColorBrush(Color.Parse("#111315"));
+        private static readonly IBrush EdgeBrush = new SolidColorBrush(Color.Parse("#3F3F46"));
+        private static readonly IBrush LabelBrush = new SolidColorBrush(Color.Parse("#969696"));
+        private static readonly IBrush AccentBrush = new SolidColorBrush(Color.Parse("#007ACC"));
+        private IReadOnlyList<PageStart> _pages = [];
+        private double _viewportWidth = 760;
+
+        public void SetPages(IReadOnlyList<PageStart> pages)
+            => _pages = pages.Count <= 1
+                ? []
+                : pages.Skip(1).OrderBy(static page => page.SourceOffset).ToArray();
+
+        public void SetViewportWidth(double width)
+            => _viewportWidth = Math.Max(240, width);
+
+        public override int GetFirstInterestedOffset(int startOffset)
+        {
+            foreach (var page in _pages)
+            {
+                if (page.SourceOffset >= startOffset)
+                    return page.SourceOffset;
+            }
+            return -1;
+        }
+
+        public override VisualLineElement ConstructElement(int offset)
+        {
+            var page = _pages.FirstOrDefault(candidate => candidate.SourceOffset == offset);
+            if (page is null) return null!;
+
+            var textViewWidth = CurrentContext?.TextView.Bounds.Width ?? 0;
+            var width = Math.Max(240, textViewWidth > 0 ? textViewWidth : _viewportWidth);
+
+            var label = new TextBlock
+            {
+                Text = $"Page {page.DisplayNumber}",
+                Foreground = LabelBrush,
+                FontSize = 10,
+                FontWeight = FontWeight.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            };
+
+            var accent = new Border
+            {
+                Width = 28,
+                Height = 2,
+                Background = AccentBrush,
+                CornerRadius = new CornerRadius(1),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 20, 0, 0),
+                IsHitTestVisible = false
+            };
+
+            var gap = new Grid
+            {
+                Width = width,
+                Height = PageGapHeight,
+                Background = PasteboardBrush,
+                IsHitTestVisible = false,
+                Children =
+                {
+                    new Border
+                    {
+                        Height = 1,
+                        Background = EdgeBrush,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        IsHitTestVisible = false
+                    },
+                    label,
+                    accent,
+                    new Border
+                    {
+                        Height = 1,
+                        Background = EdgeBrush,
+                        VerticalAlignment = VerticalAlignment.Bottom,
+                        IsHitTestVisible = false
+                    }
+                }
+            };
+
+            ToolTip.SetTip(gap, $"Physical page {page.PhysicalNumber}");
+            return new InlineObjectElement(0, gap);
+        }
+    }
 
     private sealed class ContinuousPageRenderer : IBackgroundRenderer
     {
