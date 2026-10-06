@@ -273,6 +273,14 @@ Assert(Math.Abs(explicitFrameFragment.ContainerBounds!.XPoints - (explicitFrameP
     "Explicit text-frame geometry must project relative to the page content box.");
 Assert(explicitFrameFragment.FrameColumns == 2,
     "Text-frame column count must survive into the paged projection.");
+var explicitFrameFragments = explicitFramePage.Columns
+    .SelectMany(column => column.Fragments)
+    .Where(fragment => fragment.Kind == PageLayoutFragmentKind.TextFrame &&
+                       fragment.FrameId == "frame.direct")
+    .ToArray();
+Assert(explicitFrameFragments.Length >= 2 &&
+       explicitFrameFragments.Select(fragment => fragment.Bounds.XPoints).Distinct().Count() >= 2,
+    "A multi-column text frame must flow through distinct internal frame columns.");
 Assert(explicitFrameLayout.Warnings.Any(warning => warning.Code == "overset"),
     "A deliberately small explicit frame must report overset instead of dropping text.");
 Assert(explicitFramePage.Columns.SelectMany(column => column.Fragments)
