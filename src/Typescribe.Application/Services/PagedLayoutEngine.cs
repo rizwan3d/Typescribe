@@ -568,8 +568,9 @@ public sealed class PagedLayoutEngine
         {
             if (NeedsDirectFrameLayout(current)) return true;
             if (string.IsNullOrWhiteSpace(current.NextFrameId) ||
-                !_frames.TryGetValue(current.NextFrameId, out current!))
+                !_frames.TryGetValue(current.NextFrameId, out var next))
                 break;
+            current = next;
         }
 
         return false;
