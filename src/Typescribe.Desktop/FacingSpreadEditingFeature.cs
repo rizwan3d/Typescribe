@@ -1073,7 +1073,7 @@ internal sealed class SpreadPageView : Grid
         _pageBorder.Height = pageHeight;
         _pageCanvas.Width = pageWidth;
         _pageCanvas.Height = pageHeight;
-        _pageCanvas.Children.Clear();
+        ClearPageCanvas();
 
         DrawPageFurniture(page, style, scale);
 
