@@ -718,6 +718,137 @@ internal sealed class FacingSpreadSurface : Grid
             _ => FloatPlacementMode.Here
         };
 
+    private void OnTextFrameSelected(
+        SpreadPageView view,
+        AstBlock block,
+        TextFrameFormatting frame,
+        PageLayoutRect container,
+        bool overset)
+    {
+        if (!_active) return;
+        _activeView = view;
+        _selectedFrameId = frame.Id;
+        _left.SetSelectedTextFrame(_selectedFrameId);
+        _right.SetSelectedTextFrame(_selectedFrameId);
+        UpdateActivePageBorders();
+
+        PageObjectSelectionHub.SelectTextFrame(BuildFrameSelection(block, frame, container, overset));
+    }
+
+    private void OnTextFrameMoved(
+        SpreadPageView view,
+        AstBlock snapshot,
+        TextFrameFormatting snapshotFrame,
+        PageLayoutRect container,
+        double deltaXPoints,
+        double deltaYPoints)
+    {
+        if (!_active || (Math.Abs(deltaXPoints) < .1 && Math.Abs(deltaYPoints) < .1)) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var block = TextFrameSourceEditor.FindFrameBlock(ast, snapshotFrame.Id, snapshot.SourceLine);
+            var current = block?.Formatting?.TextFrame;
+            if (block is null || current is null) return;
+
+            var content = view.Range?.Page.ContentBounds;
+            var baseX = current.XPoints ?? (content is null ? 0 : container.XPoints - content.XPoints);
+            var baseY = current.YPoints ?? (content is null ? 0 : container.YPoints - content.YPoints);
+
+            var updatedFrame = current with
+            {
+                XPoints = baseX + deltaXPoints,
+                YPoints = baseY + deltaYPoints,
+                WidthPoints = current.WidthPoints ?? container.WidthPoints,
+                HeightPoints = current.HeightPoints ?? container.HeightPoints
+            };
+
+            var updated = TextFrameSourceEditor.UpdateFrame(
+                source,
+                ast,
+                current.Id,
+                _ => updatedFrame,
+                block.SourceLine);
+            _selectedFrameId = current.Id;
+            _viewModel.UpdateEditorText(updated);
+            PageObjectSelectionHub.SelectTextFrame(
+                BuildFrameSelection(block, updatedFrame, container, overset: false));
+        }
+        catch
+        {
+            // A repagination may race the pointer release; canonical source remains unchanged
+            // until the frame can be resolved on the next pass.
+        }
+    }
+
+    private void OnTextFrameResized(
+        SpreadPageView view,
+        AstBlock snapshot,
+        TextFrameFormatting snapshotFrame,
+        PageLayoutRect container,
+        double widthPoints,
+        double heightPoints)
+    {
+        if (!_active) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var block = TextFrameSourceEditor.FindFrameBlock(ast, snapshotFrame.Id, snapshot.SourceLine);
+            var current = block?.Formatting?.TextFrame;
+            if (block is null || current is null) return;
+
+            var content = view.Range?.Page.ContentBounds;
+            var updatedFrame = current with
+            {
+                XPoints = current.XPoints ?? (content is null ? 0 : container.XPoints - content.XPoints),
+                YPoints = current.YPoints ?? (content is null ? 0 : container.YPoints - content.YPoints),
+                WidthPoints = Math.Clamp(widthPoints, 36, view.Range?.Page.WidthPoints ?? 2000),
+                HeightPoints = Math.Clamp(heightPoints, 36, view.Range?.Page.HeightPoints ?? 2000)
+            };
+
+            var updated = TextFrameSourceEditor.UpdateFrame(
+                source,
+                ast,
+                current.Id,
+                _ => updatedFrame,
+                block.SourceLine);
+            _selectedFrameId = current.Id;
+            _viewModel.UpdateEditorText(updated);
+            PageObjectSelectionHub.SelectTextFrame(
+                BuildFrameSelection(block, updatedFrame, container, overset: false));
+        }
+        catch
+        {
+            // Keep the last committed frame geometry if a transient layout update races the pointer.
+        }
+    }
+
+    private static PageTextFrameSelection BuildFrameSelection(
+        AstBlock block,
+        TextFrameFormatting frame,
+        PageLayoutRect container,
+        bool overset)
+        => new(
+            block.SourceLine,
+            frame.Id,
+            frame.NextFrameId,
+            frame.Columns,
+            frame.ColumnGapPoints,
+            frame.InsetTopPoints,
+            frame.InsetRightPoints,
+            frame.InsetBottomPoints,
+            frame.InsetLeftPoints,
+            frame.XPoints,
+            frame.YPoints,
+            frame.WidthPoints ?? container.WidthPoints,
+            frame.HeightPoints ?? container.HeightPoints,
+            frame.PageOffset,
+            overset);
+
     private void OnProjectionFocused(SpreadPageView view)
     {
         if (!_active || _syncing) return;
@@ -1240,6 +1371,68 @@ internal sealed class SpreadPageView : Grid
         foreach (var frame in _textFrameObjects) frame.Dispose();
         _textFrameObjects.Clear();
         _pageCanvas.Children.Clear();
+    }
+
+    private void RenderTextFrameObjects(
+        PageLayoutPage page,
+        DocumentAst? ast,
+        double scale,
+        string? selectedFrameId)
+    {
+        if (ast is null) return;
+
+        var allFragments = page.Columns.SelectMany(static column => column.Fragments).ToArray();
+        var frameGroups = allFragments
+            .Where(static fragment =>
+                fragment.Kind == PageLayoutFragmentKind.TextFrame &&
+                !string.IsNullOrWhiteSpace(fragment.FrameId))
+            .GroupBy(static fragment => fragment.FrameId!, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var group in frameGroups)
+        {
+            var block = TextFrameSourceEditor.FindFrameBlock(ast, group.Key);
+            var frame = block?.Formatting?.TextFrame;
+            if (block is null || frame is null) continue;
+
+            var first = group.First();
+            var container = first.ContainerBounds ?? Union(group.Select(static fragment => fragment.Bounds));
+            var overset = allFragments.Any(fragment =>
+                fragment.Kind == PageLayoutFragmentKind.OversetIndicator &&
+                string.Equals(fragment.FrameId, frame.Id, StringComparison.Ordinal));
+
+            var overlay = new TextFrameObjectOverlay(
+                _pageCanvas,
+                frame,
+                container,
+                scale,
+                overset,
+                () =>
+                {
+                    SetSelectedTextFrame(null);
+                    _textFrameSelected(this, block, frame, container, overset);
+                },
+                (dx, dy) => _textFrameMoved(this, block, frame, container, dx, dy),
+                (width, height) => _textFrameResized(this, block, frame, container, width, height));
+
+            overlay.IsSelected = selectedFrameId is not null &&
+                                 string.Equals(selectedFrameId, frame.Id, StringComparison.Ordinal);
+            _textFrameObjects.Add(overlay);
+            _pageCanvas.Children.Add(overlay);
+            Canvas.SetLeft(overlay, container.XPoints * scale);
+            Canvas.SetTop(overlay, container.YPoints * scale);
+        }
+    }
+
+    private static PageLayoutRect Union(IEnumerable<PageLayoutRect> rectangles)
+    {
+        var values = rectangles.ToArray();
+        if (values.Length == 0) return new PageLayoutRect(0, 0, 36, 36);
+        var left = values.Min(static rect => rect.XPoints);
+        var top = values.Min(static rect => rect.YPoints);
+        var right = values.Max(static rect => rect.RightPoints);
+        var bottom = values.Max(static rect => rect.BottomPoints);
+        return new PageLayoutRect(left, top, Math.Max(36, right - left), Math.Max(36, bottom - top));
     }
 
     private void RenderFigureObjects(
