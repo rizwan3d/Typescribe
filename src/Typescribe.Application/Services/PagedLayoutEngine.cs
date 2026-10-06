@@ -123,6 +123,7 @@ public sealed class PagedLayoutEngine
     private readonly Dictionary<string, TextFrameFormatting> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<int>> _frameLines = new(StringComparer.Ordinal);
     private readonly List<PageLayoutFrameThread> _frameThreads = [];
+    private readonly List<WrapExclusion> _wrapExclusions = [];
 
     private DocumentAst _document = new([]);
     private BookStyle _style = BookStyle.Default;
@@ -207,6 +208,7 @@ public sealed class PagedLayoutEngine
         _frames.Clear();
         _frameLines.Clear();
         _frameThreads.Clear();
+        _wrapExclusions.Clear();
         _columnIndex = 0;
         _cursorY = 0;
         _nextDisplayNumber = 1;
@@ -324,7 +326,8 @@ public sealed class PagedLayoutEngine
     private void LayoutText(AstBlock block, int blockIndex, PageLayoutFragmentKind kind, TextFrameFormatting? frame)
     {
         var text = TextFor(block);
-        var metrics = MeasureBlock(block, text, CurrentColumn.Bounds.WidthPoints);
+        var flowBounds = frame is null ? ResolveTextFlowBounds() : CurrentColumn.Bounds;
+        var metrics = MeasureBlock(block, text, flowBounds.WidthPoints);
         var paragraph = block.Formatting?.Paragraph;
         var keepTogether = KeepTogether(paragraph, block) || kind == PageLayoutFragmentKind.Heading;
 
@@ -334,7 +337,7 @@ public sealed class PagedLayoutEngine
                 .FirstOrDefault(static candidate => candidate is not FootnoteDefinitionBlock and not BibliographyEntryBlock);
             if (next is not null)
             {
-                var pairHeight = metrics.TotalHeightPoints + EstimateHeight(next, CurrentColumn.Bounds.WidthPoints);
+                var pairHeight = metrics.TotalHeightPoints + EstimateHeight(next, flowBounds.WidthPoints);
                 if (pairHeight <= CurrentColumn.Bounds.HeightPoints && pairHeight > AvailableHeight)
                     AdvanceColumn();
             }
@@ -392,7 +395,7 @@ public sealed class PagedLayoutEngine
             var last = lineOffset + fit >= metrics.Lines.Count;
             var after = last ? metrics.SpaceAfterPoints : 0;
             var height = before + fit * metrics.LineHeightPoints + after;
-            var bounds = new PageLayoutRect(CurrentColumn.Bounds.XPoints, _cursorY, CurrentColumn.Bounds.WidthPoints, height);
+            var bounds = new PageLayoutRect(flowBounds.XPoints, _cursorY, flowBounds.WidthPoints, height);
             var frameId = frame is null ? null : frameChain[frameSlot];
             var firstWrappedLine = metrics.Lines[lineOffset];
             var lastWrappedLine = metrics.Lines[lineOffset + fit - 1];
@@ -476,7 +479,13 @@ public sealed class PagedLayoutEngine
             AdvanceColumn();
 
         height = Math.Min(height, CurrentColumn.Bounds.HeightPoints);
-        var x = CurrentColumn.Bounds.XPoints + (CurrentColumn.Bounds.WidthPoints - width) / 2;
+        var alignment = figure.Layout?.Alignment ?? named?.Alignment ?? FigureAlignment.Center;
+        var x = alignment switch
+        {
+            FigureAlignment.Left => CurrentColumn.Bounds.XPoints,
+            FigureAlignment.Right => CurrentColumn.Bounds.RightPoints - width,
+            _ => CurrentColumn.Bounds.XPoints + (CurrentColumn.Bounds.WidthPoints - width) / 2
+        };
         var y = _cursorY;
         if (placement == FloatPlacementMode.Bottom) y = Math.Max(_cursorY, BodyBottom - height);
         if (placement == FloatPlacementMode.Page) y = CurrentColumn.Bounds.YPoints + Math.Max(0, (CurrentColumn.Bounds.HeightPoints - height) / 2);
@@ -495,9 +504,12 @@ public sealed class PagedLayoutEngine
             y + (anchored?.OffsetYPoints ?? 0),
             width,
             height);
+        var wrap = anchored?.Wrap ?? TextWrapMode.None;
         var kind = placement switch
         {
             FloatPlacementMode.Margin => PageLayoutFragmentKind.MarginNote,
+            _ when wrap is TextWrapMode.BoundingBox or TextWrapMode.Contour or TextWrapMode.JumpObject
+                => PageLayoutFragmentKind.FloatingObject,
             FloatPlacementMode.Inline or FloatPlacementMode.Here => PageLayoutFragmentKind.Figure,
             _ => PageLayoutFragmentKind.FloatingObject
         };
@@ -509,7 +521,7 @@ public sealed class PagedLayoutEngine
             bounds,
             string.IsNullOrWhiteSpace(figure.Caption) ? figure.Source : figure.Caption,
             AnchorId: anchored?.Id,
-            Wrap: anchored?.Wrap ?? TextWrapMode.None,
+            Wrap: wrap,
             Placement: placement);
 
         if (kind is PageLayoutFragmentKind.FloatingObject or PageLayoutFragmentKind.MarginNote)
@@ -517,8 +529,63 @@ public sealed class PagedLayoutEngine
         else
             CurrentColumn.Fragments.Add(fragment);
 
-        if (placement is not FloatPlacementMode.Margin)
-            _cursorY = Math.Max(_cursorY, bounds.BottomPoints);
+        if (placement == FloatPlacementMode.Margin)
+            return;
+
+        if (wrap is TextWrapMode.BoundingBox or TextWrapMode.Contour)
+        {
+            _wrapExclusions.Add(new WrapExclusion(
+                CurrentPage.Index,
+                _columnIndex,
+                bounds,
+                wrap,
+                anchored?.WrapTopPoints ?? 0,
+                anchored?.WrapRightPoints ?? 0,
+                anchored?.WrapBottomPoints ?? 0,
+                anchored?.WrapLeftPoints ?? 0));
+            return;
+        }
+
+        if (wrap == TextWrapMode.JumpObject)
+        {
+            _cursorY = Math.Max(_cursorY, bounds.BottomPoints + (anchored?.WrapBottomPoints ?? 0));
+            return;
+        }
+
+        _cursorY = Math.Max(_cursorY, bounds.BottomPoints);
+    }
+
+    private PageLayoutRect ResolveTextFlowBounds()
+    {
+        var column = CurrentColumn.Bounds;
+        var minimumSideWidth = Math.Max(72, _style.BodyFontSizePoints * 8);
+
+        var exclusion = _wrapExclusions
+            .Where(item =>
+                item.PageIndex == CurrentPage.Index &&
+                item.ColumnIndex == _columnIndex &&
+                item.Bounds.BottomPoints + item.BottomPoints > _cursorY)
+            .OrderByDescending(static item => item.Bounds.YPoints)
+            .FirstOrDefault();
+
+        if (exclusion is null)
+            return column;
+
+        var leftEdge = exclusion.Bounds.XPoints - exclusion.LeftPoints;
+        var rightEdge = exclusion.Bounds.RightPoints + exclusion.RightPoints;
+        var leftWidth = Math.Max(0, leftEdge - column.XPoints);
+        var rightWidth = Math.Max(0, column.RightPoints - rightEdge);
+
+        if (leftWidth < minimumSideWidth && rightWidth < minimumSideWidth)
+        {
+            _cursorY = Math.Max(_cursorY, exclusion.Bounds.BottomPoints + exclusion.BottomPoints);
+            return column;
+        }
+
+        if (rightWidth >= leftWidth)
+            return new PageLayoutRect(rightEdge, _cursorY, rightWidth, Math.Max(0, BodyBottom - _cursorY));
+
+        return new PageLayoutRect(column.XPoints, _cursorY, leftWidth, Math.Max(0, BodyBottom - _cursorY));
     }
 
     private void LayoutTable(TableBlock table, int blockIndex)
@@ -966,6 +1033,16 @@ public sealed class PagedLayoutEngine
     }
 
     private string NextId() => $"layout-{_fragmentSerial++:D6}";
+
+    private sealed record WrapExclusion(
+        int PageIndex,
+        int ColumnIndex,
+        PageLayoutRect Bounds,
+        TextWrapMode Mode,
+        double TopPoints,
+        double RightPoints,
+        double BottomPoints,
+        double LeftPoints);
 
     private sealed record WrappedLine(string Text, int Start, int Length);
     private sealed record TextMetrics(IReadOnlyList<WrappedLine> Lines, double LineHeightPoints);
