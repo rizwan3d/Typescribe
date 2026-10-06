@@ -104,6 +104,7 @@ public sealed class App : AvaloniaApplication
             UnifiedVisualWorkspaceFeature.Apply(window, viewModel);
             ContinuousPagedEditingFeature.Apply(window, viewModel, parser);
             FacingSpreadEditingFeature.Apply(window, viewModel, parser);
+            FigureContextInspectorFeature.Apply(window, viewModel, parser);
             if (startupProjectPath is not null)
             {
                 window.Opened += async (_, _) =>
