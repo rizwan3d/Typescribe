@@ -1,8 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
@@ -222,6 +224,8 @@ internal sealed class FacingSpreadSurface : Grid
 
     private IReadOnlyList<SpreadPageRange> _ranges = [];
     private IReadOnlyList<SpreadPair> _spreads = [];
+    private DocumentAst? _ast;
+    private string? _selectedFigureKey;
     private int _spreadIndex;
     private bool _active;
     private bool _disposed;
@@ -241,8 +245,22 @@ internal sealed class FacingSpreadSurface : Grid
         Background = Brush("#111315");
         RowDefinitions = new RowDefinitions("Auto,*");
 
-        _left = new SpreadPageView(mainEditor.Document, OnProjectionCaretChanged, OnProjectionSelectionChanged, OnProjectionFocused);
-        _right = new SpreadPageView(mainEditor.Document, OnProjectionCaretChanged, OnProjectionSelectionChanged, OnProjectionFocused);
+        _left = new SpreadPageView(
+            mainEditor.Document,
+            OnProjectionCaretChanged,
+            OnProjectionSelectionChanged,
+            OnProjectionFocused,
+            OnFigureSelected,
+            OnFigureMoved,
+            OnFigureResized);
+        _right = new SpreadPageView(
+            mainEditor.Document,
+            OnProjectionCaretChanged,
+            OnProjectionSelectionChanged,
+            OnProjectionFocused,
+            OnFigureSelected,
+            OnFigureMoved,
+            OnFigureResized);
         _spreadGrid.Children.Add(_left);
         Grid.SetColumn(_right, 2);
         _spreadGrid.Children.Add(_right);
@@ -391,8 +409,9 @@ internal sealed class FacingSpreadSurface : Grid
         {
             _ranges = [];
             _spreads = [];
-            _left.Configure(null, _viewModel.CurrentStyle, .8, false);
-            _right.Configure(null, _viewModel.CurrentStyle, .8, false);
+            _ast = null;
+            _left.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey);
+            _right.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey);
             _spreadLabel.Text = "Select a manuscript";
             UpdateNavigation();
             return;
@@ -402,6 +421,7 @@ internal sealed class FacingSpreadSurface : Grid
         {
             var source = _mainEditor.Text ?? string.Empty;
             var ast = _parser.Parse(source);
+            _ast = ast;
             var layout = _engine.Paginate(ast, _viewModel.CurrentStyle);
             _ranges = BuildPageRanges(source, ast, layout);
             _spreads = BuildSpreads(_ranges);
@@ -438,8 +458,8 @@ internal sealed class FacingSpreadSurface : Grid
         var pair = _spreads[_spreadIndex];
         var scale = CalculateScale(pair);
 
-        _left.Configure(pair.Left, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left));
-        _right.Configure(pair.Right, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right));
+        _left.Configure(pair.Left, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left), _selectedFigureKey);
+        _right.Configure(pair.Right, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right), _selectedFigureKey);
 
         var leftLabel = pair.Left?.Page.DisplayNumberText;
         var rightLabel = pair.Right?.Page.DisplayNumberText;
@@ -532,6 +552,139 @@ internal sealed class FacingSpreadSurface : Grid
         SyncProjectionFromMain(target, focusProjection);
         UpdateActivePageBorders();
     }
+
+    private void OnFigureSelected(SpreadPageView view, FigureBlock figure, PageLayoutFragment fragment)
+    {
+        if (!_active) return;
+        _activeView = view;
+        _selectedFigureKey = FigureKey(figure);
+        _left.SetSelectedFigure(_selectedFigureKey);
+        _right.SetSelectedFigure(_selectedFigureKey);
+        UpdateActivePageBorders();
+
+        PageObjectSelectionHub.SelectFigure(new PageFigureSelection(
+            figure.SourceLine,
+            figure.Identifier,
+            figure.Source,
+            figure.Caption,
+            figure.Layout,
+            figure.Formatting?.AnchoredObject,
+            fragment.Bounds.WidthPoints,
+            fragment.Bounds.HeightPoints));
+    }
+
+    private void OnFigureMoved(
+        SpreadPageView view,
+        FigureBlock snapshot,
+        PageLayoutFragment fragment,
+        double deltaXPoints,
+        double deltaYPoints)
+    {
+        if (!_active || (Math.Abs(deltaXPoints) < .1 && Math.Abs(deltaYPoints) < .1)) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var figure = FigureSourceEditor.FindFigure(ast, snapshot.SourceLine, snapshot.Identifier, snapshot.Source);
+            if (figure is null) return;
+
+            var current = figure.Formatting?.AnchoredObject;
+            var anchored = new AnchoredObjectFormatting(
+                current?.Id ?? figure.Identifier ?? $"figure-{figure.SourceLine}",
+                current?.Placement ?? ToFloatPlacement(figure.Layout?.Placement),
+                current?.Wrap ?? TextWrapMode.None,
+                (current?.OffsetXPoints ?? 0) + deltaXPoints,
+                (current?.OffsetYPoints ?? 0) + deltaYPoints,
+                current?.WrapTopPoints ?? 0,
+                current?.WrapRightPoints ?? 0,
+                current?.WrapBottomPoints ?? 0,
+                current?.WrapLeftPoints ?? 0,
+                current?.KeepWithAnchor ?? true);
+
+            var updated = RichBlockFormattingEditor.SetAnchoredObject(source, figure.SourceLine, anchored);
+            _selectedFigureKey = FigureKey(figure);
+            _viewModel.UpdateEditorText(updated);
+            PageObjectSelectionHub.SelectFigure(new PageFigureSelection(
+                figure.SourceLine,
+                figure.Identifier,
+                figure.Source,
+                figure.Caption,
+                figure.Layout,
+                anchored,
+                fragment.Bounds.WidthPoints,
+                fragment.Bounds.HeightPoints));
+        }
+        catch
+        {
+            // The next layout pass restores the object from canonical source if a transient
+            // pointer/update race occurs.
+        }
+    }
+
+    private void OnFigureResized(
+        SpreadPageView view,
+        FigureBlock snapshot,
+        PageLayoutFragment fragment,
+        double columnWidthPoints,
+        double widthPoints,
+        double heightPoints)
+    {
+        if (!_active || columnWidthPoints <= 0) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var figure = FigureSourceEditor.FindFigure(ast, snapshot.SourceLine, snapshot.Identifier, snapshot.Source);
+            if (figure is null) return;
+
+            var widthPercent = Math.Clamp(widthPoints / columnWidthPoints * 100d, 10, 100);
+            var captionHeight = string.IsNullOrWhiteSpace(figure.Caption)
+                ? 0
+                : _viewModel.CurrentStyle.CaptionFontSizePoints * 1.3;
+            var imageHeightPoints = Math.Max(36, heightPoints - captionHeight);
+
+            var layout = (figure.Layout ?? new FigureLayout()) with
+            {
+                WidthPercent = widthPercent,
+                HeightInches = Math.Clamp(imageHeightPoints / 72d, .5, 24)
+            };
+            var updatedFigure = figure with { Layout = layout };
+            var updated = FigureSourceEditor.ReplaceFigure(source, figure, updatedFigure);
+            _selectedFigureKey = FigureKey(updatedFigure);
+            _viewModel.UpdateEditorText(updated);
+
+            PageObjectSelectionHub.SelectFigure(new PageFigureSelection(
+                updatedFigure.SourceLine,
+                updatedFigure.Identifier,
+                updatedFigure.Source,
+                updatedFigure.Caption,
+                updatedFigure.Layout,
+                updatedFigure.Formatting?.AnchoredObject,
+                widthPoints,
+                heightPoints));
+        }
+        catch
+        {
+            // Keep the last canonical figure if a transient layout update races the pointer.
+        }
+    }
+
+    private static string FigureKey(FigureBlock figure)
+        => !string.IsNullOrWhiteSpace(figure.Identifier)
+            ? $"id:{figure.Identifier}"
+            : $"source:{figure.Source}\u001f{figure.Caption}";
+
+    private static FloatPlacementMode ToFloatPlacement(FigurePlacement? placement)
+        => placement switch
+        {
+            FigurePlacement.Inline => FloatPlacementMode.Inline,
+            FigurePlacement.Top => FloatPlacementMode.Top,
+            FigurePlacement.Bottom => FloatPlacementMode.Bottom,
+            FigurePlacement.Page => FloatPlacementMode.Page,
+            _ => FloatPlacementMode.Here
+        };
 
     private void OnProjectionFocused(SpreadPageView view)
     {
@@ -802,6 +955,10 @@ internal sealed class SpreadPageView : Grid
     private readonly Action<SpreadPageView> _caretChanged;
     private readonly Action<SpreadPageView> _selectionChanged;
     private readonly Action<SpreadPageView> _focused;
+    private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment> _figureSelected;
+    private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double> _figureMoved;
+    private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> _figureResized;
+    private readonly List<FigureObjectOverlay> _figureObjects = [];
     private readonly Border _pageBorder = new()
     {
         Background = Brushes.White,
@@ -838,11 +995,17 @@ internal sealed class SpreadPageView : Grid
         AvaloniaEdit.Document.TextDocument sharedDocument,
         Action<SpreadPageView> caretChanged,
         Action<SpreadPageView> selectionChanged,
-        Action<SpreadPageView> focused)
+        Action<SpreadPageView> focused,
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment> figureSelected,
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double> figureMoved,
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> figureResized)
     {
         _caretChanged = caretChanged;
         _selectionChanged = selectionChanged;
         _focused = focused;
+        _figureSelected = figureSelected;
+        _figureMoved = figureMoved;
+        _figureResized = figureResized;
 
         RowDefinitions = new RowDefinitions("Auto,Auto");
         Children.Add(_label);
@@ -873,9 +1036,11 @@ internal sealed class SpreadPageView : Grid
 
     public void Configure(
         FacingSpreadSurface.SpreadPageRange? range,
+        DocumentAst? ast,
         BookStyle style,
         double scale,
-        bool active)
+        bool active,
+        string? selectedFigureKey)
     {
         if (_disposed) return;
         Range = range;
@@ -890,7 +1055,7 @@ internal sealed class SpreadPageView : Grid
             _pageBorder.Height = style.PageHeightInches * 72 * scale;
             _pageCanvas.Width = _pageBorder.Width;
             _pageCanvas.Height = _pageBorder.Height;
-            _pageCanvas.Children.Clear();
+            ClearPageCanvas();
             _blank.Text = "No page";
             _pageCanvas.Children.Add(_blank);
             Canvas.SetLeft(_blank, Math.Max(0, (_pageCanvas.Width - 55) / 2));
@@ -940,6 +1105,7 @@ internal sealed class SpreadPageView : Grid
         Canvas.SetLeft(Editor, content.XPoints * scale);
         Canvas.SetTop(Editor, content.YPoints * scale);
 
+        RenderFigureObjects(page, ast, scale, selectedFigureKey);
         PositionViewport();
     }
 
@@ -1004,6 +1170,70 @@ internal sealed class SpreadPageView : Grid
         Editor.TextArea.Caret.PositionChanged -= EditorCaretChanged;
         Editor.TextArea.SelectionChanged -= EditorSelectionChanged;
         Editor.GotFocus -= EditorGotFocus;
+        foreach (var figure in _figureObjects) figure.Dispose();
+        _figureObjects.Clear();
+    }
+
+    public void SetSelectedFigure(string? key)
+    {
+        foreach (var figure in _figureObjects)
+            figure.IsSelected = key is not null && string.Equals(figure.SelectionKey, key, StringComparison.Ordinal);
+    }
+
+    private void ClearPageCanvas()
+    {
+        foreach (var figure in _figureObjects) figure.Dispose();
+        _figureObjects.Clear();
+        _pageCanvas.Children.Clear();
+    }
+
+    private void RenderFigureObjects(
+        PageLayoutPage page,
+        DocumentAst? ast,
+        double scale,
+        string? selectedFigureKey)
+    {
+        if (ast is null) return;
+
+        var fragments = page.Columns.SelectMany(static column => column.Fragments)
+            .Concat(page.FloatingObjects)
+            .Where(static fragment =>
+                fragment.Kind is PageLayoutFragmentKind.Figure or
+                    PageLayoutFragmentKind.FloatingObject or
+                    PageLayoutFragmentKind.MarginNote)
+            .ToArray();
+
+        foreach (var fragment in fragments)
+        {
+            if (fragment.SourceBlockIndex < 0 || fragment.SourceBlockIndex >= ast.Blocks.Count ||
+                ast.Blocks[fragment.SourceBlockIndex] is not FigureBlock figure)
+                continue;
+
+            var columnWidth = page.Columns
+                .FirstOrDefault(column => column.Fragments.Any(candidate => candidate.Id == fragment.Id))
+                ?.Bounds.WidthPoints ?? page.ContentBounds.WidthPoints;
+
+            var overlay = new FigureObjectOverlay(
+                _pageCanvas,
+                figure,
+                fragment,
+                columnWidth,
+                scale,
+                () =>
+                {
+                    SetSelectedFigure(null);
+                    _figureSelected(this, figure, fragment);
+                },
+                (dx, dy) => _figureMoved(this, figure, fragment, dx, dy),
+                (width, height) => _figureResized(this, figure, fragment, columnWidth, width, height));
+
+            overlay.IsSelected = selectedFigureKey is not null &&
+                                 string.Equals(overlay.SelectionKey, selectedFigureKey, StringComparison.Ordinal);
+            _figureObjects.Add(overlay);
+            _pageCanvas.Children.Add(overlay);
+            Canvas.SetLeft(overlay, fragment.Bounds.XPoints * scale);
+            Canvas.SetTop(overlay, fragment.Bounds.YPoints * scale);
+        }
     }
 
     private void EditorCaretChanged(object? sender, EventArgs e) => _caretChanged(this);
@@ -1078,5 +1308,268 @@ internal sealed class SpreadPageView : Grid
         {
             return new SolidColorBrush(Color.Parse(fallback));
         }
+    }
+}
+
+internal sealed class FigureObjectOverlay : Grid, IDisposable
+{
+    private readonly Canvas _canvas;
+    private readonly FigureBlock _figure;
+    private readonly PageLayoutFragment _fragment;
+    private readonly double _scale;
+    private readonly Action _select;
+    private readonly Action<double, double> _moveCommitted;
+    private readonly Action<double, double> _resizeCommitted;
+    private readonly Border _frame;
+    private readonly Border _resizeHandle;
+    private Bitmap? _bitmap;
+    private bool _selected;
+    private bool _dragging;
+    private bool _resizing;
+    private Point _startPointer;
+    private double _startLeft;
+    private double _startTop;
+    private double _startWidth;
+    private double _startHeight;
+
+    public FigureObjectOverlay(
+        Canvas canvas,
+        FigureBlock figure,
+        PageLayoutFragment fragment,
+        double columnWidthPoints,
+        double scale,
+        Action select,
+        Action<double, double> moveCommitted,
+        Action<double, double> resizeCommitted)
+    {
+        _canvas = canvas;
+        _figure = figure;
+        _fragment = fragment;
+        _scale = scale;
+        _select = select;
+        _moveCommitted = moveCommitted;
+        _resizeCommitted = resizeCommitted;
+
+        Width = Math.Max(24, fragment.Bounds.WidthPoints * scale);
+        Height = Math.Max(24, fragment.Bounds.HeightPoints * scale);
+        ClipToBounds = false;
+
+        _frame = new Border
+        {
+            Background = Brushes.White,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(1),
+            ClipToBounds = true,
+            Child = BuildContent(figure)
+        };
+        Children.Add(_frame);
+
+        _resizeHandle = new Border
+        {
+            Width = 10,
+            Height = 10,
+            Background = new SolidColorBrush(Color.Parse("#007ACC")),
+            BorderBrush = Brushes.White,
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, -5, -5),
+            IsVisible = false
+        };
+        Children.Add(_resizeHandle);
+
+        PointerPressed += BodyPointerPressed;
+        PointerMoved += BodyPointerMoved;
+        PointerReleased += BodyPointerReleased;
+        _resizeHandle.PointerPressed += ResizePointerPressed;
+        _resizeHandle.PointerMoved += ResizePointerMoved;
+        _resizeHandle.PointerReleased += ResizePointerReleased;
+
+        ToolTip.SetTip(this, "Click to select • drag to move • drag blue handle to resize");
+    }
+
+    public string SelectionKey
+        => !string.IsNullOrWhiteSpace(_figure.Identifier)
+            ? $"id:{_figure.Identifier}"
+            : $"source:{_figure.Source}\u001f{_figure.Caption}";
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            _frame.BorderBrush = new SolidColorBrush(Color.Parse(value ? "#007ACC" : "#D8D8D8"));
+            _frame.BorderThickness = new Thickness(value ? 2 : 1);
+            _resizeHandle.IsVisible = value;
+        }
+    }
+
+    public void Dispose()
+    {
+        PointerPressed -= BodyPointerPressed;
+        PointerMoved -= BodyPointerMoved;
+        PointerReleased -= BodyPointerReleased;
+        _resizeHandle.PointerPressed -= ResizePointerPressed;
+        _resizeHandle.PointerMoved -= ResizePointerMoved;
+        _resizeHandle.PointerReleased -= ResizePointerReleased;
+        _bitmap?.Dispose();
+        _bitmap = null;
+    }
+
+    private Control BuildContent(FigureBlock figure)
+    {
+        var grid = new Grid
+        {
+            Background = Brushes.White,
+            RowDefinitions = string.IsNullOrWhiteSpace(figure.Caption)
+                ? new RowDefinitions("*")
+                : new RowDefinitions("*,Auto")
+        };
+
+        var image = TryLoadImage(figure);
+        if (image is not null)
+        {
+            grid.Children.Add(image);
+        }
+        else
+        {
+            grid.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#F2F3F5")),
+                Child = new TextBlock
+                {
+                    Text = figure.Source,
+                    Foreground = new SolidColorBrush(Color.Parse("#60646C")),
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center,
+                    Margin = new Thickness(8),
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(figure.Caption))
+        {
+            var caption = new TextBlock
+            {
+                Text = figure.Caption,
+                Foreground = new SolidColorBrush(Color.Parse("#30343A")),
+                FontSize = 9,
+                FontStyle = FontStyle.Italic,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+                Margin = new Thickness(5, 3, 5, 4)
+            };
+            Grid.SetRow(caption, 1);
+            grid.Children.Add(caption);
+        }
+
+        return grid;
+    }
+
+    private Image? TryLoadImage(FigureBlock figure)
+    {
+        if (figure.SourceKind == FigureSourceKind.ExternalUri || string.IsNullOrWhiteSpace(figure.Source))
+            return null;
+
+        var project = TrackingProjectRepository.ActiveInstance?.CurrentProject;
+        if (project is null) return null;
+
+        var source = figure.Source.Trim();
+        var path = Path.IsPathRooted(source)
+            ? source
+            : Path.Combine(project.RootPath, source.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            _bitmap = new Bitmap(path);
+            return new Image
+            {
+                Source = _bitmap,
+                Stretch = figure.Layout?.Fit switch
+                {
+                    FigureFitMode.Native => Stretch.None,
+                    FigureFitMode.Cover => Stretch.UniformToFill,
+                    FigureFitMode.Fill => Stretch.Fill,
+                    _ => Stretch.Uniform
+                }
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private void BodyPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_resizing || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _dragging = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startLeft = Canvas.GetLeft(this);
+        _startTop = Canvas.GetTop(this);
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    private void BodyPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging || _resizing) return;
+        var point = e.GetPosition(_canvas);
+        var dx = point.X - _startPointer.X;
+        var dy = point.Y - _startPointer.Y;
+        Canvas.SetLeft(this, _startLeft + dx);
+        Canvas.SetTop(this, _startTop + dy);
+        e.Handled = true;
+    }
+
+    private void BodyPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_dragging || _resizing) return;
+        _dragging = false;
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _moveCommitted((left - _startLeft) / _scale, (top - _startTop) / _scale);
+    }
+
+    private void ResizePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_resizeHandle).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _dragging = false;
+        _resizing = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startWidth = Width;
+        _startHeight = Height;
+        e.Pointer.Capture(_resizeHandle);
+        e.Handled = true;
+    }
+
+    private void ResizePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_resizing) return;
+        var point = e.GetPosition(_canvas);
+        var dx = point.X - _startPointer.X;
+        var dy = point.Y - _startPointer.Y;
+        Width = Math.Max(36, _startWidth + dx);
+        Height = Math.Max(36, _startHeight + dy);
+        e.Handled = true;
+    }
+
+    private void ResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_resizing) return;
+        _resizing = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _resizeCommitted(Width / _scale, Height / _scale);
     }
 }
