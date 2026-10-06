@@ -129,6 +129,8 @@ Arabic-script shaping and Unicode BiDi are separate concerns:
 ### 4. Page-layout model
 
 - Sections, columns, text frames/threading, anchors/wrap and baseline grids.
+- Text frames default to automatic document flow, with optional source-backed X/Y/width/height/page-offset geometry when the author directly manipulates a frame on the spread canvas.
+- Frame insets and internal columns are semantic layout properties; linked frames continue to use `NextFrameId`, and overset remains a diagnostic rather than hidden/truncated content.
 - Parent pages, guides, ruler and spreads.
 - Footnotes/sidenotes/floats/table continuation and keep rules.
 
