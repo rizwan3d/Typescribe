@@ -46,7 +46,7 @@ public static class RichBlockFormattingEditor
             if (metadataIndex >= 0)
                 lines[metadataIndex] = metadata;
             else
-                lines.Insert(targetIndex, metadata);
+                lines.Insert(FindInsertionIndex(lines, targetIndex), metadata);
         }
 
         var result = string.Join(newline, lines);
@@ -100,9 +100,26 @@ public static class RichBlockFormattingEditor
         for (var index = targetIndex - 1; index >= 0; index--)
         {
             if (RichMarkdownFormattingCodec.IsBlockMetadata(lines[index])) return index;
-            if (!string.IsNullOrWhiteSpace(lines[index])) break;
+            if (string.IsNullOrWhiteSpace(lines[index])) continue;
+            if (IsSemanticMetadata(lines[index])) continue;
+            break;
         }
         return -1;
+    }
+
+    private static int FindInsertionIndex(IReadOnlyList<string> lines, int targetIndex)
+    {
+        var insertion = targetIndex;
+        while (insertion > 0 && IsSemanticMetadata(lines[insertion - 1]))
+            insertion--;
+        return insertion;
+    }
+
+    private static bool IsSemanticMetadata(string? line)
+    {
+        var trimmed = line?.TrimStart() ?? string.Empty;
+        return trimmed.StartsWith(FigureMarkupCodec.MetadataPrefix, StringComparison.Ordinal) ||
+               trimmed.StartsWith(TableMarkupCodec.MetadataPrefix, StringComparison.Ordinal);
     }
 
     private static string DetectNewline(string text)
