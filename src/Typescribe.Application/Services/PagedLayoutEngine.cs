@@ -478,57 +478,70 @@ public sealed class PagedLayoutEngine
             lastContainer = container;
             lastFrameId = frameId;
 
-            var remainingText = text[sourceOffset..];
-            var metrics = MeasureBlock(block, remainingText, inner.WidthPoints);
-            var before = fragmentIndex == 0 ? metrics.SpaceBeforePoints : 0;
-            var available = Math.Max(0, inner.HeightPoints - before);
-            var fit = Math.Min(
-                metrics.Lines.Count,
-                Math.Max(0, (int)Math.Floor(available / metrics.LineHeightPoints)));
+            var frameColumns = Math.Max(1, frame.Columns);
+            var columnGap = Math.Max(0, frame.ColumnGapPoints);
+            var frameColumnWidth = Math.Max(
+                12,
+                (inner.WidthPoints - columnGap * (frameColumns - 1)) / frameColumns);
+            var maxUsedHeight = 0d;
 
-            if (fit <= 0)
-                continue;
+            for (var frameColumn = 0;
+                 frameColumn < frameColumns && sourceOffset < text.Length;
+                 frameColumn++)
+            {
+                var remainingText = text[sourceOffset..];
+                var metrics = MeasureBlock(block, remainingText, frameColumnWidth);
+                var before = fragmentIndex == 0 ? metrics.SpaceBeforePoints : 0;
+                var available = Math.Max(0, inner.HeightPoints - before);
+                var fit = Math.Min(
+                    metrics.Lines.Count,
+                    Math.Max(0, (int)Math.Floor(available / metrics.LineHeightPoints)));
 
-            var lastInStory = fit >= metrics.Lines.Count;
-            var after = lastInStory ? metrics.SpaceAfterPoints : 0;
-            var firstWrappedLine = metrics.Lines[0];
-            var lastWrappedLine = metrics.Lines[fit - 1];
-            var sourceTextStart = sourceOffset + firstWrappedLine.Start;
-            var sourceTextLength = Math.Max(
-                0,
-                lastWrappedLine.Start + lastWrappedLine.Length - firstWrappedLine.Start);
-            var usedHeight = Math.Min(
-                inner.HeightPoints,
-                before + fit * metrics.LineHeightPoints + after);
-            var textBounds = new PageLayoutRect(
-                inner.XPoints,
-                inner.YPoints,
-                inner.WidthPoints,
-                Math.Max(metrics.LineHeightPoints, usedHeight));
+                if (fit <= 0)
+                    continue;
 
-            CurrentColumn.Fragments.Add(new PageLayoutFragment(
-                NextId(),
-                PageLayoutFragmentKind.TextFrame,
-                block.SourceLine,
-                blockIndex,
-                textBounds,
-                string.Join('\n', metrics.Lines.Take(fit).Select(static line => line.Text)),
-                FragmentIndex: fragmentIndex,
-                IsContinuation: fragmentIndex > 0,
-                FrameId: frameId,
-                FrameColumns: Math.Max(1, frame.Columns),
-                SourceTextStart: sourceTextStart,
-                SourceTextLength: sourceTextLength,
-                ContainerBounds: container));
+                var lastInStory = fit >= metrics.Lines.Count;
+                var after = lastInStory ? metrics.SpaceAfterPoints : 0;
+                var firstWrappedLine = metrics.Lines[0];
+                var lastWrappedLine = metrics.Lines[fit - 1];
+                var sourceTextStart = sourceOffset + firstWrappedLine.Start;
+                var sourceTextLength = Math.Max(
+                    0,
+                    lastWrappedLine.Start + lastWrappedLine.Length - firstWrappedLine.Start);
+                var usedHeight = Math.Min(
+                    inner.HeightPoints,
+                    before + fit * metrics.LineHeightPoints + after);
+                maxUsedHeight = Math.Max(maxUsedHeight, usedHeight);
+                var textBounds = new PageLayoutRect(
+                    inner.XPoints + frameColumn * (frameColumnWidth + columnGap),
+                    inner.YPoints,
+                    frameColumnWidth,
+                    Math.Max(metrics.LineHeightPoints, usedHeight));
 
-            var consumed = lastWrappedLine.Start + lastWrappedLine.Length;
-            if (consumed <= 0 && remainingText.Length > 0)
-                consumed = 1;
-            sourceOffset = Math.Min(text.Length, sourceOffset + consumed);
-            fragmentIndex++;
+                CurrentColumn.Fragments.Add(new PageLayoutFragment(
+                    NextId(),
+                    PageLayoutFragmentKind.TextFrame,
+                    block.SourceLine,
+                    blockIndex,
+                    textBounds,
+                    string.Join('\n', metrics.Lines.Take(fit).Select(static line => line.Text)),
+                    FragmentIndex: fragmentIndex,
+                    IsContinuation: fragmentIndex > 0,
+                    FrameId: frameId,
+                    FrameColumns: frameColumns,
+                    SourceTextStart: sourceTextStart,
+                    SourceTextLength: sourceTextLength,
+                    ContainerBounds: container));
+
+                var consumed = lastWrappedLine.Start + lastWrappedLine.Length;
+                if (consumed <= 0 && remainingText.Length > 0)
+                    consumed = 1;
+                sourceOffset = Math.Min(text.Length, sourceOffset + consumed);
+                fragmentIndex++;
+            }
 
             if (!explicitGeometry)
-                _cursorY = Math.Max(_cursorY, container.YPoints + usedHeight);
+                _cursorY = Math.Max(_cursorY, container.YPoints + maxUsedHeight);
         }
 
         if (sourceOffset >= text.Length) return;
