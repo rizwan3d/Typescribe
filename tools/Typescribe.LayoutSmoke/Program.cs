@@ -200,6 +200,44 @@ Assert(((ParagraphBlock)document.Blocks[1]).Inlines.ToPlainText().StartsWith("De
 Assert(PagedLayoutEngine.FormatPageNumber(14, PageNumberStyle.UpperRoman) == "XIV", "Roman page-number formatting failed.");
 Assert(PagedLayoutEngine.FormatPageNumber(27, PageNumberStyle.UpperLetters) == "AA", "Alphabetic page-number formatting failed.");
 
+var wrapDocument = new DocumentAst(
+[
+    new FigureBlock(
+        1,
+        "assets/wrap.png",
+        "Wrapped figure",
+        "fig-wrap",
+        Layout: new FigureLayout(
+            WidthPercent: 40,
+            Alignment: FigureAlignment.Left,
+            Placement: FigurePlacement.Here))
+    {
+        Formatting = new RichBlockFormatting(
+            AnchoredObject: new AnchoredObjectFormatting(
+                "fig-wrap-anchor",
+                Placement: FloatPlacementMode.Here,
+                Wrap: TextWrapMode.BoundingBox,
+                WrapRightPoints: 8))
+    },
+    new ParagraphBlock(
+        2,
+        [Text(string.Join(' ', Enumerable.Repeat("Side flow follows the figure boundary.", 8)))])
+]);
+var wrappedLayout = engine.Paginate(wrapDocument, style);
+var wrappedPage = wrappedLayout.Pages.First(page => !page.IsBlank);
+var wrappedFigure = wrappedPage.FloatingObjects.Single(fragment => fragment.SourceLine == 1);
+var wrappedText = wrappedPage.Columns
+    .SelectMany(column => column.Fragments)
+    .First(fragment => fragment.SourceLine == 2);
+var wrappedColumn = wrappedPage.Columns.First(column =>
+    wrappedText.Bounds.XPoints >= column.Bounds.XPoints &&
+    wrappedText.Bounds.XPoints < column.Bounds.RightPoints);
+Assert(wrappedFigure.Wrap == TextWrapMode.BoundingBox,
+    "Wrapped figures must remain floating page objects.");
+Assert(wrappedText.Bounds.WidthPoints < wrappedColumn.Bounds.WidthPoints &&
+       wrappedText.Bounds.XPoints > wrappedColumn.Bounds.XPoints,
+    "Bounding-box wrap must move following text into the available side-flow region.");
+
 var markdown = "alpha\n\nbeta\n";
 var edited = RichBlockFormattingEditor.Upsert(
     markdown,
