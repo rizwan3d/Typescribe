@@ -307,6 +307,7 @@ internal sealed class FacingSpreadSurface : Grid
         _layoutTimer.Tick += LayoutTimerTick;
 
         _viewModel.StateChanged += WorkspaceChanged;
+        PageObjectSelectionHub.FigureSelectionChanged += ExternalFigureSelectionChanged;
         _mainEditor.TextChanged += MainTextChanged;
         _mainEditor.TextArea.Caret.PositionChanged += MainCaretChanged;
         _mainEditor.TextArea.SelectionChanged += MainSelectionChanged;
@@ -336,6 +337,7 @@ internal sealed class FacingSpreadSurface : Grid
         _next.Click -= NextClicked;
         SizeChanged -= SurfaceSizeChanged;
         _viewModel.StateChanged -= WorkspaceChanged;
+        PageObjectSelectionHub.FigureSelectionChanged -= ExternalFigureSelectionChanged;
         _mainEditor.TextChanged -= MainTextChanged;
         _mainEditor.TextArea.Caret.PositionChanged -= MainCaretChanged;
         _mainEditor.TextArea.SelectionChanged -= MainSelectionChanged;
@@ -367,6 +369,20 @@ internal sealed class FacingSpreadSurface : Grid
         if (!_active) return;
         ScheduleRefresh();
     }
+
+    private void ExternalFigureSelectionChanged(PageFigureSelection? selection)
+    {
+        _selectedFigureKey = selection is null
+            ? null
+            : !string.IsNullOrWhiteSpace(selection.Identifier)
+                ? $"id:{selection.Identifier}"
+                : $"source:{selection.Source}\u001f{selection.Caption}";
+
+        if (!_active) return;
+        _left.SetSelectedFigure(_selectedFigureKey);
+        _right.SetSelectedFigure(_selectedFigureKey);
+    }
+
 
     private void MainTextChanged(object? sender, EventArgs e)
     {
