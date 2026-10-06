@@ -221,6 +221,37 @@ var reparsed = richParser.Parse(removed);
 Assert(reparsed.Blocks.OfType<ParagraphBlock>().Last().Formatting?.Section is null,
     "Removing page-layout metadata should restore an unformatted block without changing its text.");
 
+var figureMarkdown = FigureMarkupCodec.Serialize(
+    new FigureBlock(
+        2,
+        "assets/cover.png",
+        "Cover art",
+        "fig-cover",
+        Layout: new FigureLayout(WidthPercent: 72, Placement: FigurePlacement.Here)),
+    "\n") + "\n";
+var anchoredFigureMarkdown = RichBlockFormattingEditor.SetAnchoredObject(
+    figureMarkdown,
+    2,
+    new AnchoredObjectFormatting(
+        "fig-cover-anchor",
+        Placement: FloatPlacementMode.Here,
+        Wrap: TextWrapMode.BoundingBox,
+        OffsetXPoints: 18,
+        OffsetYPoints: -6));
+var combinedFigureParser = new EmojiDocumentParser(new AdvancedDocumentParser());
+var combinedFigure = combinedFigureParser.Parse(anchoredFigureMarkdown).Blocks.OfType<FigureBlock>().Single();
+Assert(combinedFigure.Layout?.WidthPercent == 72,
+    "Figure semantic metadata must survive adjacent rich anchored-object metadata.");
+Assert(combinedFigure.Formatting?.AnchoredObject?.Wrap == TextWrapMode.BoundingBox &&
+       combinedFigure.Formatting.AnchoredObject.OffsetXPoints == 18 &&
+       combinedFigure.Formatting.AnchoredObject.OffsetYPoints == -6,
+    "Anchored drag/wrap metadata must survive beside figure metadata.");
+var figureLines = anchoredFigureMarkdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+Assert(RichMarkdownFormattingCodec.IsBlockMetadata(figureLines[0]) &&
+       figureLines[1].StartsWith(FigureMarkupCodec.MetadataPrefix, StringComparison.Ordinal) &&
+       figureLines[2].StartsWith("![", StringComparison.Ordinal),
+    "Rich block metadata must be emitted before figure metadata so both layers bind to the same image.");
+
 var editableMarkdown =
     "# Canvas title\r\n\r\n" +
     "First **editable** paragraph line.\r\n" +
