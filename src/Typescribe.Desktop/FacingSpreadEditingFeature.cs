@@ -1006,7 +1006,7 @@ internal sealed class SpreadPageView : Grid
 
     private void EditorCaretChanged(object? sender, EventArgs e) => _caretChanged(this);
     private void EditorSelectionChanged(object? sender, EventArgs e) => _selectionChanged(this);
-    private void EditorGotFocus(object? sender, Avalonia.Input.GotFocusEventArgs e) => _focused(this);
+    private void EditorGotFocus(object? sender, GotFocusEventArgs e) => _focused(this);
 
     private void DrawPageFurniture(PageLayoutPage page, BookStyle style, double scale)
     {
