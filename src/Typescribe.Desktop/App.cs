@@ -103,6 +103,7 @@ public sealed class App : AvaloniaApplication
             ReferenceTopChrome.Apply(window);
             UnifiedVisualWorkspaceFeature.Apply(window, viewModel);
             ContinuousPagedEditingFeature.Apply(window, viewModel, parser);
+            FacingSpreadEditingFeature.Apply(window, viewModel, parser);
             if (startupProjectPath is not null)
             {
                 window.Opened += async (_, _) =>
