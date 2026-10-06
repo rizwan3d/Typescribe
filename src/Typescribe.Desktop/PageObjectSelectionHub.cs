@@ -14,13 +14,13 @@ internal sealed record PageFigureSelection(
 
 internal static class PageObjectSelectionHub
 {
-    public static event EventHandler<PageFigureSelection?>? FigureSelectionChanged;
+    public static event Action<PageFigureSelection?>? FigureSelectionChanged;
 
     public static PageFigureSelection? SelectedFigure { get; private set; }
 
     public static void SelectFigure(PageFigureSelection? selection)
     {
         SelectedFigure = selection;
-        FigureSelectionChanged?.Invoke(null, selection);
+        FigureSelectionChanged?.Invoke(selection);
     }
 }
