@@ -365,7 +365,7 @@ internal sealed class ContinuousPagedEditingFeature
         _pageBreakGenerator?.SetPages(_printLayoutEnabled ? _pageStarts : []);
         if (_editor is not null)
         {
-            editor.TextArea.TextView.Redraw();
+            _editor.TextArea.TextView.Redraw();
             _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
         }
     }
