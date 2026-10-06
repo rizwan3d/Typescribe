@@ -404,6 +404,13 @@ public sealed class PagedLayoutEngine
             var height = before + fit * metrics.LineHeightPoints + after;
             var bounds = new PageLayoutRect(flowBounds.XPoints, _cursorY, flowBounds.WidthPoints, height);
             var frameId = frame is null ? null : frameChain[frameSlot];
+            var frameContainer = frame is null
+                ? null
+                : new PageLayoutRect(
+                    CurrentColumn.Bounds.XPoints,
+                    _cursorY,
+                    CurrentColumn.Bounds.WidthPoints,
+                    Math.Max(height, AvailableHeight));
             var firstWrappedLine = metrics.Lines[lineOffset];
             var lastWrappedLine = metrics.Lines[lineOffset + fit - 1];
             var sourceTextStart = firstWrappedLine.Start;
@@ -422,7 +429,8 @@ public sealed class PagedLayoutEngine
                 FrameId: frameId,
                 FrameColumns: Math.Max(1, frame?.Columns ?? 1),
                 SourceTextStart: sourceTextStart,
-                SourceTextLength: sourceTextLength));
+                SourceTextLength: sourceTextLength,
+                ContainerBounds: frameContainer));
             _cursorY += height;
             lineOffset += fit;
             fragmentIndex++;
