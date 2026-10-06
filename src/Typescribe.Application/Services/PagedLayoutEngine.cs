@@ -326,7 +326,7 @@ public sealed class PagedLayoutEngine
 
     private void LayoutText(AstBlock block, int blockIndex, PageLayoutFragmentKind kind, TextFrameFormatting? frame)
     {
-        if (frame is not null)
+        if (frame is not null && UsesDirectFrameLayout(frame))
         {
             LayoutTextFrame(block, blockIndex, frame);
             return;
@@ -560,6 +560,29 @@ public sealed class PagedLayoutEngine
            frame.WidthPoints is not null ||
            frame.HeightPoints is not null ||
            frame.PageOffset != 0;
+    private bool UsesDirectFrameLayout(TextFrameFormatting root)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = root;
+        while (seen.Add(current.Id))
+        {
+            if (NeedsDirectFrameLayout(current)) return true;
+            if (string.IsNullOrWhiteSpace(current.NextFrameId) ||
+                !_frames.TryGetValue(current.NextFrameId, out current!))
+                break;
+        }
+
+        return false;
+    }
+
+    private static bool NeedsDirectFrameLayout(TextFrameFormatting frame)
+        => HasExplicitFrameGeometry(frame) ||
+           frame.Columns > 1 ||
+           frame.InsetTopPoints > 0 ||
+           frame.InsetRightPoints > 0 ||
+           frame.InsetBottomPoints > 0 ||
+           frame.InsetLeftPoints > 0;
+
 
     private PageLayoutRect ResolveFrameContainer(TextFrameFormatting frame)
     {
