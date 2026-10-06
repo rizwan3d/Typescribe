@@ -226,6 +226,7 @@ internal sealed class FacingSpreadSurface : Grid
     private IReadOnlyList<SpreadPair> _spreads = [];
     private DocumentAst? _ast;
     private string? _selectedFigureKey;
+    private string? _selectedFrameId;
     private int _spreadIndex;
     private bool _active;
     private bool _disposed;
@@ -252,7 +253,10 @@ internal sealed class FacingSpreadSurface : Grid
             OnProjectionFocused,
             OnFigureSelected,
             OnFigureMoved,
-            OnFigureResized);
+            OnFigureResized,
+            OnTextFrameSelected,
+            OnTextFrameMoved,
+            OnTextFrameResized);
         _right = new SpreadPageView(
             mainEditor.Document,
             OnProjectionCaretChanged,
@@ -260,7 +264,10 @@ internal sealed class FacingSpreadSurface : Grid
             OnProjectionFocused,
             OnFigureSelected,
             OnFigureMoved,
-            OnFigureResized);
+            OnFigureResized,
+            OnTextFrameSelected,
+            OnTextFrameMoved,
+            OnTextFrameResized);
         _spreadGrid.Children.Add(_left);
         Grid.SetColumn(_right, 2);
         _spreadGrid.Children.Add(_right);
@@ -308,6 +315,7 @@ internal sealed class FacingSpreadSurface : Grid
 
         _viewModel.StateChanged += WorkspaceChanged;
         PageObjectSelectionHub.FigureSelectionChanged += ExternalFigureSelectionChanged;
+        PageObjectSelectionHub.TextFrameSelectionChanged += ExternalTextFrameSelectionChanged;
         _mainEditor.TextChanged += MainTextChanged;
         _mainEditor.TextArea.Caret.PositionChanged += MainCaretChanged;
         _mainEditor.TextArea.SelectionChanged += MainSelectionChanged;
@@ -338,6 +346,7 @@ internal sealed class FacingSpreadSurface : Grid
         SizeChanged -= SurfaceSizeChanged;
         _viewModel.StateChanged -= WorkspaceChanged;
         PageObjectSelectionHub.FigureSelectionChanged -= ExternalFigureSelectionChanged;
+        PageObjectSelectionHub.TextFrameSelectionChanged -= ExternalTextFrameSelectionChanged;
         _mainEditor.TextChanged -= MainTextChanged;
         _mainEditor.TextArea.Caret.PositionChanged -= MainCaretChanged;
         _mainEditor.TextArea.SelectionChanged -= MainSelectionChanged;
@@ -383,6 +392,13 @@ internal sealed class FacingSpreadSurface : Grid
         _right.SetSelectedFigure(_selectedFigureKey);
     }
 
+    private void ExternalTextFrameSelectionChanged(PageTextFrameSelection? selection)
+    {
+        _selectedFrameId = selection?.FrameId;
+        if (!_active) return;
+        _left.SetSelectedTextFrame(_selectedFrameId);
+        _right.SetSelectedTextFrame(_selectedFrameId);
+    }
 
     private void MainTextChanged(object? sender, EventArgs e)
     {
@@ -426,8 +442,8 @@ internal sealed class FacingSpreadSurface : Grid
             _ranges = [];
             _spreads = [];
             _ast = null;
-            _left.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey);
-            _right.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey);
+            _left.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId);
+            _right.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId);
             _spreadLabel.Text = "Select a manuscript";
             UpdateNavigation();
             return;
@@ -474,8 +490,8 @@ internal sealed class FacingSpreadSurface : Grid
         var pair = _spreads[_spreadIndex];
         var scale = CalculateScale(pair);
 
-        _left.Configure(pair.Left, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left), _selectedFigureKey);
-        _right.Configure(pair.Right, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right), _selectedFigureKey);
+        _left.Configure(pair.Left, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left), _selectedFigureKey, _selectedFrameId);
+        _right.Configure(pair.Right, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right), _selectedFigureKey, _selectedFrameId);
 
         var leftLabel = pair.Left?.Page.DisplayNumberText;
         var rightLabel = pair.Right?.Page.DisplayNumberText;
@@ -974,7 +990,11 @@ internal sealed class SpreadPageView : Grid
     private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment> _figureSelected;
     private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double> _figureMoved;
     private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> _figureResized;
+    private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, bool> _textFrameSelected;
+    private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameMoved;
+    private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameResized;
     private readonly List<FigureObjectOverlay> _figureObjects = [];
+    private readonly List<TextFrameObjectOverlay> _textFrameObjects = [];
     private readonly Border _pageBorder = new()
     {
         Background = Brushes.White,
@@ -1014,7 +1034,10 @@ internal sealed class SpreadPageView : Grid
         Action<SpreadPageView> focused,
         Action<SpreadPageView, FigureBlock, PageLayoutFragment> figureSelected,
         Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double> figureMoved,
-        Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> figureResized)
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> figureResized,
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, bool> textFrameSelected,
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameMoved,
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameResized)
     {
         _caretChanged = caretChanged;
         _selectionChanged = selectionChanged;
@@ -1022,6 +1045,9 @@ internal sealed class SpreadPageView : Grid
         _figureSelected = figureSelected;
         _figureMoved = figureMoved;
         _figureResized = figureResized;
+        _textFrameSelected = textFrameSelected;
+        _textFrameMoved = textFrameMoved;
+        _textFrameResized = textFrameResized;
 
         RowDefinitions = new RowDefinitions("Auto,Auto");
         Children.Add(_label);
@@ -1056,7 +1082,8 @@ internal sealed class SpreadPageView : Grid
         BookStyle style,
         double scale,
         bool active,
-        string? selectedFigureKey)
+        string? selectedFigureKey,
+        string? selectedFrameId)
     {
         if (_disposed) return;
         Range = range;
@@ -1121,6 +1148,7 @@ internal sealed class SpreadPageView : Grid
         Canvas.SetLeft(Editor, content.XPoints * scale);
         Canvas.SetTop(Editor, content.YPoints * scale);
 
+        RenderTextFrameObjects(page, ast, scale, selectedFrameId);
         RenderFigureObjects(page, ast, scale, selectedFigureKey);
         PositionViewport();
     }
@@ -1188,6 +1216,8 @@ internal sealed class SpreadPageView : Grid
         Editor.GotFocus -= EditorGotFocus;
         foreach (var figure in _figureObjects) figure.Dispose();
         _figureObjects.Clear();
+        foreach (var frame in _textFrameObjects) frame.Dispose();
+        _textFrameObjects.Clear();
     }
 
     public void SetSelectedFigure(string? key)
@@ -1196,10 +1226,19 @@ internal sealed class SpreadPageView : Grid
             figure.IsSelected = key is not null && string.Equals(figure.SelectionKey, key, StringComparison.Ordinal);
     }
 
+    public void SetSelectedTextFrame(string? frameId)
+    {
+        foreach (var frame in _textFrameObjects)
+            frame.IsSelected = frameId is not null &&
+                               string.Equals(frame.FrameId, frameId, StringComparison.Ordinal);
+    }
+
     private void ClearPageCanvas()
     {
         foreach (var figure in _figureObjects) figure.Dispose();
         _figureObjects.Clear();
+        foreach (var frame in _textFrameObjects) frame.Dispose();
+        _textFrameObjects.Clear();
         _pageCanvas.Children.Clear();
     }
 
