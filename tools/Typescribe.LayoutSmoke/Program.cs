@@ -238,6 +238,49 @@ Assert(wrappedText.Bounds.WidthPoints < wrappedColumn.Bounds.WidthPoints &&
        wrappedText.Bounds.XPoints > wrappedColumn.Bounds.XPoints,
     "Bounding-box wrap must move following text into the available side-flow region.");
 
+var explicitFrame = new TextFrameFormatting(
+    "frame.direct",
+    Columns: 2,
+    ColumnGapPoints: 10,
+    InsetTopPoints: 6,
+    InsetRightPoints: 7,
+    InsetBottomPoints: 8,
+    InsetLeftPoints: 9,
+    XPoints: 24,
+    YPoints: 36,
+    WidthPoints: 160,
+    HeightPoints: 72);
+var explicitFrameDocument = new DocumentAst(
+[
+    new ParagraphBlock(
+        1,
+        [Text(string.Join(' ', Enumerable.Repeat("Explicit text frame geometry must constrain story flow.", 20)))])
+    {
+        Formatting = new RichBlockFormatting(TextFrame: explicitFrame)
+    }
+]);
+var explicitFrameLayout = engine.Paginate(explicitFrameDocument, style);
+var explicitFramePage = explicitFrameLayout.Pages.First(page => !page.IsBlank);
+var explicitFrameFragment = explicitFramePage.Columns
+    .SelectMany(column => column.Fragments)
+    .First(fragment => fragment.Kind == PageLayoutFragmentKind.TextFrame);
+Assert(explicitFrameFragment.ContainerBounds is not null,
+    "Text-frame fragments must expose their containing frame rectangle.");
+Assert(Math.Abs(explicitFrameFragment.ContainerBounds!.XPoints - (explicitFramePage.ContentBounds.XPoints + 24)) < .001 &&
+       Math.Abs(explicitFrameFragment.ContainerBounds.YPoints - (explicitFramePage.ContentBounds.YPoints + 36)) < .001 &&
+       Math.Abs(explicitFrameFragment.ContainerBounds.WidthPoints - 160) < .001 &&
+       Math.Abs(explicitFrameFragment.ContainerBounds.HeightPoints - 72) < .001,
+    "Explicit text-frame geometry must project relative to the page content box.");
+Assert(explicitFrameFragment.FrameColumns == 2,
+    "Text-frame column count must survive into the paged projection.");
+Assert(explicitFrameLayout.Warnings.Any(warning => warning.Code == "overset"),
+    "A deliberately small explicit frame must report overset instead of dropping text.");
+Assert(explicitFramePage.Columns.SelectMany(column => column.Fragments)
+        .Any(fragment => fragment.Kind == PageLayoutFragmentKind.OversetIndicator &&
+                         fragment.FrameId == "frame.direct" &&
+                         fragment.ContainerBounds is not null),
+    "Overset indicators must remain attached to the explicit frame container.");
+
 var markdown = "alpha\n\nbeta\n";
 var edited = RichBlockFormattingEditor.Upsert(
     markdown,
@@ -248,6 +291,30 @@ var edited = RichBlockFormattingEditor.Upsert(
 var richParser = new RichDocumentParser(new AdvancedDocumentParser());
 var parsed = richParser.Parse(edited);
 var beta = parsed.Blocks.OfType<ParagraphBlock>().Last();
+
+var frameMarkdown = RichBlockFormattingEditor.SetTextFrame(
+    "Frame body remains Markdown.\n",
+    1,
+    explicitFrame);
+var frameParsed = richParser.Parse(frameMarkdown);
+var frameBlock = frameParsed.Blocks.OfType<ParagraphBlock>().Single();
+Assert(frameBlock.Formatting?.TextFrame is { } parsedFrame &&
+       parsedFrame.Id == "frame.direct" &&
+       parsedFrame.Columns == 2 &&
+       parsedFrame.XPoints == 24 &&
+       parsedFrame.YPoints == 36 &&
+       parsedFrame.WidthPoints == 160 &&
+       parsedFrame.HeightPoints == 72,
+    "Direct text-frame geometry must round-trip through canonical Markdown metadata.");
+var movedFrameMarkdown = TextFrameSourceEditor.UpdateFrame(
+    frameMarkdown,
+    frameParsed,
+    "frame.direct",
+    current => current with { XPoints = 42, WidthPoints = 180 },
+    frameBlock.SourceLine);
+var movedFrame = richParser.Parse(movedFrameMarkdown).Blocks.OfType<ParagraphBlock>().Single().Formatting?.TextFrame;
+Assert(movedFrame?.XPoints == 42 && movedFrame.WidthPoints == 180,
+    "TextFrameSourceEditor must update direct-manipulation geometry without rewriting authored text.");
 Assert(beta.Inlines.ToPlainText() == "beta", "Layout metadata editing must leave authored Markdown text intact.");
 Assert(beta.Formatting?.Section?.Columns == 2, "Inserted section metadata did not round-trip through the rich parser.");
 
