@@ -207,6 +207,32 @@ Assert(Math.Abs(parentEdited.ContentBounds.YPoints - 43.2) < .001 &&
 Assert(parentEdited.PageStyleId == "page.smoke",
     "Projected pages must retain the parent page ID used by the spread inspector.");
 
+var furnitureStyle = style with
+{
+    HeaderFooterFontSizePoints = 9.5,
+    HeaderLeft = "Author",
+    HeaderCenter = "Book Title",
+    HeaderRight = "Chapter",
+    FooterLeft = "Draft",
+    FooterCenter = string.Empty,
+    FooterRight = "TypeScribe",
+    ShowHeadersAndFooters = true,
+    ShowPageNumbers = true
+};
+var furnitureLatex = new DocumentRenderer().RenderLatex(
+    new DocumentAst([new ParagraphBlock(1, [Text("Publishing furniture uses the same book style.")])]),
+    "Furniture smoke",
+    furnitureStyle);
+Assert(furnitureLatex.Contains("\\fancyhead[L]{", StringComparison.Ordinal) &&
+       furnitureLatex.Contains("Author", StringComparison.Ordinal) &&
+       furnitureLatex.Contains("\\fancyhead[C]{Book Title}", StringComparison.Ordinal) &&
+       furnitureLatex.Contains("\\fancyhead[R]{Chapter}", StringComparison.Ordinal),
+    "Running headers edited on the spread must feed the normal LaTeX publishing style.");
+Assert(furnitureLatex.Contains("\\fancyfoot[L]{Draft}", StringComparison.Ordinal) &&
+       furnitureLatex.Contains("\\fancyfoot[C]{\\thepage}", StringComparison.Ordinal) &&
+       furnitureLatex.Contains("\\fancyfoot[R]{TypeScribe}", StringComparison.Ordinal),
+    "Footer edits and generated page-number fallback must remain publishing-aligned.");
+
 var continuationFragments = first.Pages
     .SelectMany(page => page.Columns)
     .SelectMany(column => column.Fragments)
