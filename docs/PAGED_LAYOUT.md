@@ -55,6 +55,22 @@ Figures use their semantic figure size/style plus optional `AnchoredObjectFormat
 
 `TextFrameFormatting.Id` identifies a story frame and `NextFrameId` links it to the next frame. The engine pre-scans the AST, validates duplicate/missing/cyclic links, and flows fragments through the resulting chain. If content remains after the final frame, layout emits an `OversetIndicator` and an `overset` warning instead of dropping or truncating source text.
 
+Frames remain auto-flowing by default for backward compatibility. Direct page manipulation materializes optional `XPoints`, `YPoints`, `WidthPoints`, `HeightPoints` and `PageOffset` values in the same block metadata. Once explicit geometry, non-zero insets, or multiple internal columns are present, `PagedLayoutEngine` treats the frame as a page object: text flows through its inset box, through internal columns using `ColumnGapPoints`, then through `NextFrameId`. The resulting fragments expose their full `ContainerBounds` so the desktop spread surface can draw selection chrome without inventing a second coordinate store.
+
+The facing-page canvas uses those source-backed rectangles for direct manipulation. Dragging the frame label persists X/Y geometry; dragging the lower-right handle persists width/height. Frame input/output ports, thread labels and the overset badge are UI projections only; the canonical relationship remains `TextFrameFormatting.Id/NextFrameId`.
+
+## Parent-page furniture on the unified spread
+
+Facing-page editing projects parent/master-page furniture directly into the normal document spread. The page margins remain outside the canonical manuscript text stream:
+
+- the parent-page chip identifies the page's resolved `PageStyleDefinition`;
+- header-left/center/right and footer-left/center/right edit the existing `BookStyle` running-furniture fields used by PDF publishing;
+- when footer-center is empty and page numbers are enabled, the center footer projects the generated section page number rather than fixed text;
+- the contextual Layout inspector edits parent-page trim, margins, facing-page behavior and crop marks through the named page-style catalog;
+- editing the default parent page also mirrors trim/margin geometry into the legacy scalar `BookStyle` bridge so the current LaTeX publishing pipeline stays aligned with the visual canvas.
+
+These controls are UI projections of existing style data. Selecting or typing in a running head does not insert header text into Markdown, and parent-page geometry is not stored as per-page canvas coordinates.
+
 ## Page Layout window
 
 Use **View → Page Layout…** (`Ctrl/Cmd+Shift+P`) for the live page projection. The window provides:
