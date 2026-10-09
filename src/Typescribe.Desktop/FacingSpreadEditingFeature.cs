@@ -1738,13 +1738,12 @@ internal sealed class RunningFurnitureOverlay : Border, IDisposable
 {
     private readonly int _pageIndex;
     private readonly PageFurnitureKind _kind;
-    private readonly string _originalValue;
+    private string _lastCommittedValue;
     private readonly Action _select;
     private readonly Action<string> _commit;
     private readonly TextBox? _editor;
     private readonly TextBlock? _label;
     private bool _selected;
-    private bool _committed;
 
     public RunningFurnitureOverlay(
         int pageIndex,
@@ -1763,7 +1762,7 @@ internal sealed class RunningFurnitureOverlay : Border, IDisposable
     {
         _pageIndex = pageIndex;
         _kind = kind;
-        _originalValue = value ?? string.Empty;
+        _lastCommittedValue = value ?? string.Empty;
         _select = select;
         _commit = commit;
 
@@ -1877,9 +1876,8 @@ internal sealed class RunningFurnitureOverlay : Border, IDisposable
     {
         if (_editor is null) return;
         var value = _editor.Text ?? string.Empty;
-        if (_committed && string.Equals(value, _originalValue, StringComparison.Ordinal)) return;
-        if (string.Equals(value, _originalValue, StringComparison.Ordinal)) return;
-        _committed = true;
+        if (string.Equals(value, _lastCommittedValue, StringComparison.Ordinal)) return;
+        _lastCommittedValue = value;
         _commit(value);
     }
 }
