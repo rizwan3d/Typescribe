@@ -29,13 +29,36 @@ internal sealed record PageTextFrameSelection(
     int PageOffset,
     bool Overset);
 
+internal enum PageFurnitureKind
+{
+    ParentPage,
+    HeaderLeft,
+    HeaderCenter,
+    HeaderRight,
+    FooterLeft,
+    FooterCenter,
+    FooterRight,
+    PageNumber
+}
+
+internal sealed record PageFurnitureSelection(
+    int PageIndex,
+    int DisplayPageNumber,
+    string DisplayPageNumberText,
+    string? PageStyleId,
+    bool IsLeftPage,
+    PageFurnitureKind Kind,
+    string Value);
+
 internal static class PageObjectSelectionHub
 {
     public static event Action<PageFigureSelection?>? FigureSelectionChanged;
     public static event Action<PageTextFrameSelection?>? TextFrameSelectionChanged;
+    public static event Action<PageFurnitureSelection?>? FurnitureSelectionChanged;
 
     public static PageFigureSelection? SelectedFigure { get; private set; }
     public static PageTextFrameSelection? SelectedTextFrame { get; private set; }
+    public static PageFurnitureSelection? SelectedFurniture { get; private set; }
 
     public static void SelectFigure(PageFigureSelection? selection)
     {
@@ -44,6 +67,11 @@ internal static class PageObjectSelectionHub
         {
             SelectedTextFrame = null;
             TextFrameSelectionChanged?.Invoke(null);
+        }
+        if (selection is not null && SelectedFurniture is not null)
+        {
+            SelectedFurniture = null;
+            FurnitureSelectionChanged?.Invoke(null);
         }
         FigureSelectionChanged?.Invoke(selection);
     }
@@ -56,14 +84,37 @@ internal static class PageObjectSelectionHub
             SelectedFigure = null;
             FigureSelectionChanged?.Invoke(null);
         }
+        if (selection is not null && SelectedFurniture is not null)
+        {
+            SelectedFurniture = null;
+            FurnitureSelectionChanged?.Invoke(null);
+        }
         TextFrameSelectionChanged?.Invoke(selection);
+    }
+
+    public static void SelectFurniture(PageFurnitureSelection? selection)
+    {
+        SelectedFurniture = selection;
+        if (selection is not null && SelectedFigure is not null)
+        {
+            SelectedFigure = null;
+            FigureSelectionChanged?.Invoke(null);
+        }
+        if (selection is not null && SelectedTextFrame is not null)
+        {
+            SelectedTextFrame = null;
+            TextFrameSelectionChanged?.Invoke(null);
+        }
+        FurnitureSelectionChanged?.Invoke(selection);
     }
 
     public static void Clear()
     {
         SelectedFigure = null;
         SelectedTextFrame = null;
+        SelectedFurniture = null;
         FigureSelectionChanged?.Invoke(null);
         TextFrameSelectionChanged?.Invoke(null);
+        FurnitureSelectionChanged?.Invoke(null);
     }
 }
