@@ -132,6 +132,7 @@ Arabic-script shaping and Unicode BiDi are separate concerns:
 - Text frames default to automatic document flow, with optional source-backed X/Y/width/height/page-offset geometry when the author directly manipulates a frame on the spread canvas.
 - Frame insets and internal columns are semantic layout properties; linked frames continue to use `NextFrameId`, and overset remains a diagnostic rather than hidden/truncated content.
 - Parent pages, guides, ruler and spreads.
+- Running headers/footers and generated page numbers are direct spread objects backed by `BookStyle`; parent-page trim/margins remain named `PageStyleDefinition` data rather than manuscript text or free canvas coordinates.
 - Footnotes/sidenotes/floats/table continuation and keep rules.
 
 ### 5. Print production
