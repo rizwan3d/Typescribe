@@ -1207,8 +1207,11 @@ internal sealed class SpreadPageView : Grid
     private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, bool> _textFrameSelected;
     private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameMoved;
     private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameResized;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> _furnitureSelected;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> _furnitureEdited;
     private readonly List<FigureObjectOverlay> _figureObjects = [];
     private readonly List<TextFrameObjectOverlay> _textFrameObjects = [];
+    private readonly List<RunningFurnitureOverlay> _furnitureObjects = [];
     private readonly Border _pageBorder = new()
     {
         Background = Brushes.White,
@@ -1251,7 +1254,9 @@ internal sealed class SpreadPageView : Grid
         Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> figureResized,
         Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, bool> textFrameSelected,
         Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameMoved,
-        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameResized)
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameResized,
+        Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureSelected,
+        Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureEdited)
     {
         _caretChanged = caretChanged;
         _selectionChanged = selectionChanged;
@@ -1262,6 +1267,8 @@ internal sealed class SpreadPageView : Grid
         _textFrameSelected = textFrameSelected;
         _textFrameMoved = textFrameMoved;
         _textFrameResized = textFrameResized;
+        _furnitureSelected = furnitureSelected;
+        _furnitureEdited = furnitureEdited;
 
         RowDefinitions = new RowDefinitions("Auto,Auto");
         Children.Add(_label);
@@ -1297,7 +1304,8 @@ internal sealed class SpreadPageView : Grid
         double scale,
         bool active,
         string? selectedFigureKey,
-        string? selectedFrameId)
+        string? selectedFrameId,
+        string? selectedFurnitureKey)
     {
         if (_disposed) return;
         Range = range;
@@ -1332,7 +1340,7 @@ internal sealed class SpreadPageView : Grid
         _pageCanvas.Height = pageHeight;
         ClearPageCanvas();
 
-        DrawPageFurniture(page, style, scale);
+        DrawPageGuides(page, scale);
 
         if (!range.Editable || page.IsBlank)
         {
@@ -1362,6 +1370,7 @@ internal sealed class SpreadPageView : Grid
         Canvas.SetLeft(Editor, content.XPoints * scale);
         Canvas.SetTop(Editor, content.YPoints * scale);
 
+        RenderRunningFurniture(page, style, scale, selectedFurnitureKey);
         RenderTextFrameObjects(page, ast, scale, selectedFrameId);
         RenderFigureObjects(page, ast, scale, selectedFigureKey);
         PositionViewport();
@@ -1432,6 +1441,8 @@ internal sealed class SpreadPageView : Grid
         _figureObjects.Clear();
         foreach (var frame in _textFrameObjects) frame.Dispose();
         _textFrameObjects.Clear();
+        foreach (var furniture in _furnitureObjects) furniture.Dispose();
+        _furnitureObjects.Clear();
     }
 
     public void SetSelectedFigure(string? key)
@@ -1447,12 +1458,21 @@ internal sealed class SpreadPageView : Grid
                                string.Equals(frame.FrameId, frameId, StringComparison.Ordinal);
     }
 
+    public void SetSelectedFurniture(string? key)
+    {
+        foreach (var furniture in _furnitureObjects)
+            furniture.IsSelected = key is not null &&
+                                   string.Equals(furniture.SelectionKey, key, StringComparison.Ordinal);
+    }
+
     private void ClearPageCanvas()
     {
         foreach (var figure in _figureObjects) figure.Dispose();
         _figureObjects.Clear();
         foreach (var frame in _textFrameObjects) frame.Dispose();
         _textFrameObjects.Clear();
+        foreach (var furniture in _furnitureObjects) furniture.Dispose();
+        _furnitureObjects.Clear();
         _pageCanvas.Children.Clear();
     }
 
@@ -1571,7 +1591,7 @@ internal sealed class SpreadPageView : Grid
     private void EditorSelectionChanged(object? sender, EventArgs e) => _selectionChanged(this);
     private void EditorGotFocus(object? sender, GotFocusEventArgs e) => _focused(this);
 
-    private void DrawPageFurniture(PageLayoutPage page, BookStyle style, double scale)
+    private void DrawPageGuides(PageLayoutPage page, double scale)
     {
         var content = page.ContentBounds;
         var guideBrush = new SolidColorBrush(Color.FromArgb(45, 45, 126, 214));
@@ -1596,37 +1616,6 @@ internal sealed class SpreadPageView : Grid
         Canvas.SetTop(bottomGuide, content.BottomPoints * scale);
         _pageCanvas.Children.Add(bottomGuide);
 
-        if (style.ShowHeadersAndFooters && !page.IsBlank)
-        {
-            var header = new TextBlock
-            {
-                Text = string.IsNullOrWhiteSpace(style.HeaderCenter) ? string.Empty : style.HeaderCenter,
-                Foreground = new SolidColorBrush(Color.Parse("#60646C")),
-                FontSize = Math.Max(6, style.HeaderFooterFontSizePoints * scale),
-                Width = content.WidthPoints * scale,
-                TextAlignment = TextAlignment.Center,
-                IsHitTestVisible = false
-            };
-            Canvas.SetLeft(header, content.XPoints * scale);
-            Canvas.SetTop(header, Math.Max(5, content.YPoints * scale * .35));
-            _pageCanvas.Children.Add(header);
-        }
-
-        if (style.ShowPageNumbers && !page.IsBlank)
-        {
-            var number = new TextBlock
-            {
-                Text = page.DisplayNumberText,
-                Foreground = new SolidColorBrush(Color.Parse("#60646C")),
-                FontSize = Math.Max(6, style.HeaderFooterFontSizePoints * scale),
-                Width = 48,
-                TextAlignment = TextAlignment.Center,
-                IsHitTestVisible = false
-            };
-            Canvas.SetLeft(number, page.WidthPoints * scale / 2 - 24);
-            Canvas.SetTop(number, page.HeightPoints * scale - Math.Max(19, 25 * scale));
-            _pageCanvas.Children.Add(number);
-        }
     }
 
     private static IBrush SafeBrush(string? value, string fallback)
