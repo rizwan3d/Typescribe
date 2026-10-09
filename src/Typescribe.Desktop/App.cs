@@ -106,6 +106,7 @@ public sealed class App : AvaloniaApplication
             FacingSpreadEditingFeature.Apply(window, viewModel, parser);
             FigureContextInspectorFeature.Apply(window, viewModel, parser);
             TextFrameContextInspectorFeature.Apply(window, viewModel, parser);
+            ParentPageFurnitureInspectorFeature.Apply(window, viewModel);
             if (startupProjectPath is not null)
             {
                 window.Opened += async (_, _) =>
