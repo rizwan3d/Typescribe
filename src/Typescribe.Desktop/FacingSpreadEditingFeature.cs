@@ -1341,6 +1341,7 @@ internal sealed class SpreadPageView : Grid
         ClearPageCanvas();
 
         DrawPageGuides(page, scale);
+        RenderRunningFurniture(page, style, scale, selectedFurnitureKey);
 
         if (!range.Editable || page.IsBlank)
         {
@@ -1370,7 +1371,6 @@ internal sealed class SpreadPageView : Grid
         Canvas.SetLeft(Editor, content.XPoints * scale);
         Canvas.SetTop(Editor, content.YPoints * scale);
 
-        RenderRunningFurniture(page, style, scale, selectedFurnitureKey);
         RenderTextFrameObjects(page, ast, scale, selectedFrameId);
         RenderFigureObjects(page, ast, scale, selectedFigureKey);
         PositionViewport();
@@ -1474,6 +1474,109 @@ internal sealed class SpreadPageView : Grid
         foreach (var furniture in _furnitureObjects) furniture.Dispose();
         _furnitureObjects.Clear();
         _pageCanvas.Children.Clear();
+    }
+
+    private void RenderRunningFurniture(
+        PageLayoutPage page,
+        BookStyle style,
+        double scale,
+        string? selectedFurnitureKey)
+    {
+        var content = page.ContentBounds;
+        var pageStyleId = page.PageStyleId ?? style.DefaultPageStyleId;
+
+        AddFurniture(
+            PageFurnitureKind.ParentPage,
+            pageStyleId,
+            $"Parent · {pageStyleId}",
+            content.XPoints,
+            5,
+            Math.Min(150, Math.Max(90, content.WidthPoints * .42)),
+            18,
+            TextAlignment.Left,
+            editable: false,
+            placeholder: null,
+            parentChip: true);
+
+        if (page.IsBlank) return;
+
+        var fontSize = Math.Max(6, style.HeaderFooterFontSizePoints);
+        var cellWidth = content.WidthPoints / 3d;
+        var headerHeight = Math.Max(16, fontSize * 1.7);
+        var footerHeight = headerHeight;
+        var headerY = Math.Max(20, content.YPoints / 2d - headerHeight / 2d);
+        var bottomMargin = Math.Max(18, page.HeightPoints - content.BottomPoints);
+        var footerY = Math.Min(
+            page.HeightPoints - footerHeight - 5,
+            content.BottomPoints + bottomMargin / 2d - footerHeight / 2d);
+
+        if (style.ShowHeadersAndFooters)
+        {
+            AddFurniture(PageFurnitureKind.HeaderLeft, style.HeaderLeft, style.HeaderLeft,
+                content.XPoints, headerY, cellWidth, headerHeight, TextAlignment.Left, true, "Header left");
+            AddFurniture(PageFurnitureKind.HeaderCenter, style.HeaderCenter, style.HeaderCenter,
+                content.XPoints + cellWidth, headerY, cellWidth, headerHeight, TextAlignment.Center, true, "Header center");
+            AddFurniture(PageFurnitureKind.HeaderRight, style.HeaderRight, style.HeaderRight,
+                content.XPoints + cellWidth * 2, headerY, cellWidth, headerHeight, TextAlignment.Right, true, "Header right");
+
+            AddFurniture(PageFurnitureKind.FooterLeft, style.FooterLeft, style.FooterLeft,
+                content.XPoints, footerY, cellWidth, footerHeight, TextAlignment.Left, true, "Footer left");
+
+            if (!string.IsNullOrWhiteSpace(style.FooterCenter) || !style.ShowPageNumbers)
+            {
+                AddFurniture(PageFurnitureKind.FooterCenter, style.FooterCenter, style.FooterCenter,
+                    content.XPoints + cellWidth, footerY, cellWidth, footerHeight, TextAlignment.Center, true, "Footer center");
+            }
+            else
+            {
+                AddFurniture(PageFurnitureKind.PageNumber, page.DisplayNumberText, page.DisplayNumberText,
+                    content.XPoints + cellWidth, footerY, cellWidth, footerHeight, TextAlignment.Center, false, null);
+            }
+
+            AddFurniture(PageFurnitureKind.FooterRight, style.FooterRight, style.FooterRight,
+                content.XPoints + cellWidth * 2, footerY, cellWidth, footerHeight, TextAlignment.Right, true, "Footer right");
+        }
+        else if (style.ShowPageNumbers)
+        {
+            AddFurniture(PageFurnitureKind.PageNumber, page.DisplayNumberText, page.DisplayNumberText,
+                content.XPoints + cellWidth, footerY, cellWidth, footerHeight, TextAlignment.Center, false, null);
+        }
+
+        void AddFurniture(
+            PageFurnitureKind kind,
+            string value,
+            string display,
+            double xPoints,
+            double yPoints,
+            double widthPoints,
+            double heightPoints,
+            TextAlignment alignment,
+            bool editable,
+            string? placeholder,
+            bool parentChip = false)
+        {
+            var overlay = new RunningFurnitureOverlay(
+                page.Index,
+                kind,
+                value,
+                display,
+                Math.Max(36, widthPoints * scale),
+                Math.Max(16, heightPoints * scale),
+                Math.Max(6, style.HeaderFooterFontSizePoints * scale),
+                alignment,
+                editable,
+                placeholder,
+                parentChip,
+                () => _furnitureSelected(this, page, kind, value),
+                text => _furnitureEdited(this, page, kind, text));
+
+            overlay.IsSelected = selectedFurnitureKey is not null &&
+                                 string.Equals(overlay.SelectionKey, selectedFurnitureKey, StringComparison.Ordinal);
+            _furnitureObjects.Add(overlay);
+            _pageCanvas.Children.Add(overlay);
+            Canvas.SetLeft(overlay, xPoints * scale);
+            Canvas.SetTop(overlay, yPoints * scale);
+        }
     }
 
     private void RenderTextFrameObjects(
