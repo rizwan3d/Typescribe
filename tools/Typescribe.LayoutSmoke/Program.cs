@@ -176,6 +176,37 @@ Assert(first.Pages.Any(page => page.DisplayNumber == 10 && page.NumberStyle == P
     "Expected the later section to restart Arabic page numbers at 10.");
 Assert(first.Pages.Any(page => page.IsBlank), "Expected odd/even section starts to insert a recoverable blank page when needed.");
 
+var parentEditedPage = namedStyles.PageStyles[0] with
+{
+    WidthInches = 5,
+    HeightInches = 7,
+    MarginTopInches = .6,
+    MarginBottomInches = .7,
+    MarginInnerInches = .8,
+    MarginOuterInches = .55
+};
+var parentEditedCatalog = namedStyles with { PageStyles = [parentEditedPage] };
+var parentEditedStyle = style with { NamedStyles = parentEditedCatalog };
+var parentEditedLayout = engine.Paginate(
+    new DocumentAst(
+    [
+        new ParagraphBlock(1, [Text("Parent-page geometry remains a deterministic projection.")])
+        {
+            Formatting = new RichBlockFormatting(
+                Section: new SectionFormatting(PageStyleId: "page.smoke", FacingPages: true))
+        }
+    ]),
+    parentEditedStyle);
+var parentEdited = parentEditedLayout.Pages.First(page => !page.IsBlank);
+Assert(Math.Abs(parentEdited.WidthPoints - 360) < .001 &&
+       Math.Abs(parentEdited.HeightPoints - 504) < .001,
+    "Editing a named parent page must change projected trim size.");
+Assert(Math.Abs(parentEdited.ContentBounds.YPoints - 43.2) < .001 &&
+       Math.Abs(parentEdited.ContentBounds.HeightPoints - (504 - 43.2 - 50.4)) < .001,
+    "Editing parent-page top/bottom margins must change the projected content box.");
+Assert(parentEdited.PageStyleId == "page.smoke",
+    "Projected pages must retain the parent page ID used by the spread inspector.");
+
 var continuationFragments = first.Pages
     .SelectMany(page => page.Columns)
     .SelectMany(column => column.Fragments)
