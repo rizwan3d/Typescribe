@@ -227,6 +227,7 @@ internal sealed class FacingSpreadSurface : Grid
     private DocumentAst? _ast;
     private string? _selectedFigureKey;
     private string? _selectedFrameId;
+    private string? _selectedFurnitureKey;
     private int _spreadIndex;
     private bool _active;
     private bool _disposed;
@@ -256,7 +257,9 @@ internal sealed class FacingSpreadSurface : Grid
             OnFigureResized,
             OnTextFrameSelected,
             OnTextFrameMoved,
-            OnTextFrameResized);
+            OnTextFrameResized,
+            OnFurnitureSelected,
+            OnFurnitureEdited);
         _right = new SpreadPageView(
             mainEditor.Document,
             OnProjectionCaretChanged,
@@ -267,7 +270,9 @@ internal sealed class FacingSpreadSurface : Grid
             OnFigureResized,
             OnTextFrameSelected,
             OnTextFrameMoved,
-            OnTextFrameResized);
+            OnTextFrameResized,
+            OnFurnitureSelected,
+            OnFurnitureEdited);
         _spreadGrid.Children.Add(_left);
         Grid.SetColumn(_right, 2);
         _spreadGrid.Children.Add(_right);
@@ -316,6 +321,7 @@ internal sealed class FacingSpreadSurface : Grid
         _viewModel.StateChanged += WorkspaceChanged;
         PageObjectSelectionHub.FigureSelectionChanged += ExternalFigureSelectionChanged;
         PageObjectSelectionHub.TextFrameSelectionChanged += ExternalTextFrameSelectionChanged;
+        PageObjectSelectionHub.FurnitureSelectionChanged += ExternalFurnitureSelectionChanged;
         _mainEditor.TextChanged += MainTextChanged;
         _mainEditor.TextArea.Caret.PositionChanged += MainCaretChanged;
         _mainEditor.TextArea.SelectionChanged += MainSelectionChanged;
@@ -347,6 +353,7 @@ internal sealed class FacingSpreadSurface : Grid
         _viewModel.StateChanged -= WorkspaceChanged;
         PageObjectSelectionHub.FigureSelectionChanged -= ExternalFigureSelectionChanged;
         PageObjectSelectionHub.TextFrameSelectionChanged -= ExternalTextFrameSelectionChanged;
+        PageObjectSelectionHub.FurnitureSelectionChanged -= ExternalFurnitureSelectionChanged;
         _mainEditor.TextChanged -= MainTextChanged;
         _mainEditor.TextArea.Caret.PositionChanged -= MainCaretChanged;
         _mainEditor.TextArea.SelectionChanged -= MainSelectionChanged;
@@ -400,6 +407,16 @@ internal sealed class FacingSpreadSurface : Grid
         _right.SetSelectedTextFrame(_selectedFrameId);
     }
 
+    private void ExternalFurnitureSelectionChanged(PageFurnitureSelection? selection)
+    {
+        _selectedFurnitureKey = selection is null
+            ? null
+            : FurnitureKey(selection.PageIndex, selection.Kind);
+        if (!_active) return;
+        _left.SetSelectedFurniture(_selectedFurnitureKey);
+        _right.SetSelectedFurniture(_selectedFurnitureKey);
+    }
+
     private void MainTextChanged(object? sender, EventArgs e)
     {
         if (!_active) return;
@@ -442,8 +459,8 @@ internal sealed class FacingSpreadSurface : Grid
             _ranges = [];
             _spreads = [];
             _ast = null;
-            _left.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId);
-            _right.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId);
+            _left.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
+            _right.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
             _spreadLabel.Text = "Select a manuscript";
             UpdateNavigation();
             return;
@@ -490,8 +507,8 @@ internal sealed class FacingSpreadSurface : Grid
         var pair = _spreads[_spreadIndex];
         var scale = CalculateScale(pair);
 
-        _left.Configure(pair.Left, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left), _selectedFigureKey, _selectedFrameId);
-        _right.Configure(pair.Right, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right), _selectedFigureKey, _selectedFrameId);
+        _left.Configure(pair.Left, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left), _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
+        _right.Configure(pair.Right, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right), _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
 
         var leftLabel = pair.Left?.Page.DisplayNumberText;
         var rightLabel = pair.Right?.Page.DisplayNumberText;
@@ -848,6 +865,72 @@ internal sealed class FacingSpreadSurface : Grid
             frame.HeightPoints ?? container.HeightPoints,
             frame.PageOffset,
             overset);
+
+    private void OnFurnitureSelected(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageFurnitureKind kind,
+        string value)
+    {
+        if (!_active) return;
+        _activeView = view;
+        _selectedFurnitureKey = FurnitureKey(page.Index, kind);
+        _left.SetSelectedFurniture(_selectedFurnitureKey);
+        _right.SetSelectedFurniture(_selectedFurnitureKey);
+        UpdateActivePageBorders();
+
+        PageObjectSelectionHub.SelectFurniture(new PageFurnitureSelection(
+            page.Index,
+            page.DisplayNumber,
+            page.DisplayNumberText,
+            page.PageStyleId,
+            page.IsLeftPage,
+            kind,
+            value));
+    }
+
+    private async void OnFurnitureEdited(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageFurnitureKind kind,
+        string value)
+    {
+        if (!_active || kind is PageFurnitureKind.ParentPage or PageFurnitureKind.PageNumber) return;
+
+        try
+        {
+            var style = _viewModel.CurrentStyle;
+            var updated = kind switch
+            {
+                PageFurnitureKind.HeaderLeft => style with { HeaderLeft = value },
+                PageFurnitureKind.HeaderCenter => style with { HeaderCenter = value },
+                PageFurnitureKind.HeaderRight => style with { HeaderRight = value },
+                PageFurnitureKind.FooterLeft => style with { FooterLeft = value },
+                PageFurnitureKind.FooterCenter => style with { FooterCenter = value },
+                PageFurnitureKind.FooterRight => style with { FooterRight = value },
+                _ => style
+            };
+
+            await _viewModel.UpdateStyleAsync(updated.Validate());
+            _selectedFurnitureKey = FurnitureKey(page.Index, kind);
+            PageObjectSelectionHub.SelectFurniture(new PageFurnitureSelection(
+                page.Index,
+                page.DisplayNumber,
+                page.DisplayNumberText,
+                page.PageStyleId,
+                page.IsLeftPage,
+                kind,
+                value));
+        }
+        catch
+        {
+            // Keep the last persisted running furniture when a style save fails.
+            ScheduleRefresh();
+        }
+    }
+
+    private static string FurnitureKey(int pageIndex, PageFurnitureKind kind)
+        => $"{pageIndex}:{kind}";
 
     private void OnProjectionFocused(SpreadPageView view)
     {
