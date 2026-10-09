@@ -1808,7 +1808,7 @@ internal sealed class RunningFurnitureOverlay : Border, IDisposable
                 TextAlignment = alignment,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(4, 0)
+                Margin = new Thickness(4, 0)
             };
             Child = _label;
             PointerPressed += LabelPointerPressed;
