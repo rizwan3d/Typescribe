@@ -59,6 +59,18 @@ Frames remain auto-flowing by default for backward compatibility. Direct page ma
 
 The facing-page canvas uses those source-backed rectangles for direct manipulation. Dragging the frame label persists X/Y geometry; dragging the lower-right handle persists width/height. Frame input/output ports, thread labels and the overset badge are UI projections only; the canonical relationship remains `TextFrameFormatting.Id/NextFrameId`.
 
+## Parent-page furniture on the unified spread
+
+Facing-page editing projects parent/master-page furniture directly into the normal document spread. The page margins remain outside the canonical manuscript text stream:
+
+- the parent-page chip identifies the page's resolved `PageStyleDefinition`;
+- header-left/center/right and footer-left/center/right edit the existing `BookStyle` running-furniture fields used by PDF publishing;
+- when footer-center is empty and page numbers are enabled, the center footer projects the generated section page number rather than fixed text;
+- the contextual Layout inspector edits parent-page trim, margins, facing-page behavior and crop marks through the named page-style catalog;
+- editing the default parent page also mirrors trim/margin geometry into the legacy scalar `BookStyle` bridge so the current LaTeX publishing pipeline stays aligned with the visual canvas.
+
+These controls are UI projections of existing style data. Selecting or typing in a running head does not insert header text into Markdown, and parent-page geometry is not stored as per-page canvas coordinates.
+
 ## Page Layout window
 
 Use **View → Page Layout…** (`Ctrl/Cmd+Shift+P`) for the live page projection. The window provides:
