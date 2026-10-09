@@ -1734,6 +1734,156 @@ internal sealed class SpreadPageView : Grid
     }
 }
 
+internal sealed class RunningFurnitureOverlay : Border, IDisposable
+{
+    private readonly int _pageIndex;
+    private readonly PageFurnitureKind _kind;
+    private readonly string _originalValue;
+    private readonly Action _select;
+    private readonly Action<string> _commit;
+    private readonly TextBox? _editor;
+    private readonly TextBlock? _label;
+    private bool _selected;
+    private bool _committed;
+
+    public RunningFurnitureOverlay(
+        int pageIndex,
+        PageFurnitureKind kind,
+        string value,
+        string display,
+        double width,
+        double height,
+        double fontSize,
+        TextAlignment alignment,
+        bool editable,
+        string? placeholder,
+        bool parentChip,
+        Action select,
+        Action<string> commit)
+    {
+        _pageIndex = pageIndex;
+        _kind = kind;
+        _originalValue = value ?? string.Empty;
+        _select = select;
+        _commit = commit;
+
+        Width = width;
+        Height = height;
+        BorderThickness = new Thickness(1);
+        BorderBrush = Brushes.Transparent;
+        CornerRadius = new CornerRadius(parentChip ? 3 : 1);
+        Background = parentChip
+            ? new SolidColorBrush(Color.FromArgb(24, 0, 122, 204))
+            : Brushes.Transparent;
+
+        if (editable)
+        {
+            _editor = new TextBox
+            {
+                Text = value ?? string.Empty,
+                PlaceholderText = placeholder,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(3, 0),
+                FontSize = fontSize,
+                Foreground = new SolidColorBrush(Color.Parse("#60646C")),
+                TextAlignment = alignment,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                AcceptsReturn = false
+            };
+            _editor.GotFocus += EditorGotFocus;
+            _editor.LostFocus += EditorLostFocus;
+            _editor.KeyDown += EditorKeyDown;
+            Child = _editor;
+        }
+        else
+        {
+            _label = new TextBlock
+            {
+                Text = display,
+                FontSize = parentChip ? Math.Max(8, fontSize * .9) : fontSize,
+                FontWeight = parentChip ? FontWeight.SemiBold : FontWeight.Normal,
+                Foreground = new SolidColorBrush(Color.Parse(parentChip ? "#007ACC" : "#60646C")),
+                TextAlignment = alignment,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(4, 0)
+            };
+            Child = _label;
+            PointerPressed += LabelPointerPressed;
+        }
+
+        ToolTip.SetTip(this, kind switch
+        {
+            PageFurnitureKind.ParentPage => "Select parent page / master-page settings",
+            PageFurnitureKind.PageNumber => "Generated page number",
+            _ => "Click and type to edit running furniture"
+        });
+    }
+
+    public string SelectionKey => $"{_pageIndex}:{_kind}";
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            BorderBrush = new SolidColorBrush(Color.Parse(value ? "#007ACC" : "#00000000"));
+            BorderThickness = new Thickness(value ? 1.5 : 1);
+            if (_editor is not null)
+                _editor.Opacity = value || !string.IsNullOrWhiteSpace(_editor.Text) ? 1 : .42;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_editor is not null)
+        {
+            _editor.GotFocus -= EditorGotFocus;
+            _editor.LostFocus -= EditorLostFocus;
+            _editor.KeyDown -= EditorKeyDown;
+        }
+        if (_label is not null)
+            PointerPressed -= LabelPointerPressed;
+    }
+
+    private void LabelPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        e.Handled = true;
+    }
+
+    private void EditorGotFocus(object? sender, GotFocusEventArgs e)
+    {
+        _select();
+        IsSelected = true;
+    }
+
+    private void EditorLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => CommitIfChanged();
+
+    private void EditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        CommitIfChanged();
+        e.Handled = true;
+    }
+
+    private void CommitIfChanged()
+    {
+        if (_editor is null) return;
+        var value = _editor.Text ?? string.Empty;
+        if (_committed && string.Equals(value, _originalValue, StringComparison.Ordinal)) return;
+        if (string.Equals(value, _originalValue, StringComparison.Ordinal)) return;
+        _committed = true;
+        _commit(value);
+    }
+}
+
 internal sealed class FigureObjectOverlay : Grid, IDisposable
 {
     private readonly Canvas _canvas;
