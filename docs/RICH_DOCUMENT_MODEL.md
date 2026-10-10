@@ -72,8 +72,8 @@ Arabic-script shaping and Unicode BiDi are separate concerns:
 | Text frames | block metadata | `TextFrameFormatting` | page-layout view/export |
 | Linked/threaded text frames | block metadata | `TextFrameFormatting.NextFrameId` | page-layout view/export |
 | Master/parent pages | project/page styles | named page styles + page templates | page-layout view/export |
-| Page guides | project layout metadata | page/workspace model | editor-only layout aid |
-| Ruler | no source syntax | editor UI | paragraph indents/tabs |
+| Page guides | named page-style metadata | `PageGuideDefinition` + projected `PageLayoutGuide` | editor layout aid + object snapping |
+| Ruler | no source syntax | editor UI over physical page points | guide creation + paragraph indents/tabs |
 | Tabs/tab stops | block metadata | `TabStop` | editor/export |
 | Baseline grids | section/page metadata | `BaselineGridFormatting` | page-layout view/export |
 | Anchored objects | Markdown figure/object + metadata | `AnchoredObjectFormatting` | editor/export |
