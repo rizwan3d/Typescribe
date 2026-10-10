@@ -39,10 +39,11 @@ public sealed partial class LongFormEditorChrome : Grid
         if (editor.Parent is not null)
             throw new InvalidOperationException("The manuscript editor must be detached before it is hosted.");
 
-        Grid.SetRow(editor, 2);
+        Grid.SetRow(editor, 3);
         Grid.SetColumn(editor, 0);
         Grid.SetRowSpan(editor, 1);
         Grid.SetColumnSpan(editor, 1);
+        editor.Margin = new Avalonia.Thickness(28, 18, 28, 24);
         Children.Add(editor);
     }
 

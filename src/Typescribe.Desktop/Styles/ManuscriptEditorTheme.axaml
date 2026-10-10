@@ -76,14 +76,14 @@
   <Style Selector="local|ManuscriptEditor ScrollBar:horizontal">
     <Setter Property="MinHeight" Value="14" />
     <Setter Property="Height" Value="14" />
-    <Setter Property="Background" Value="#252A32" />
-    <Setter Property="Foreground" Value="#697386" />
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
   </Style>
 
   <Style Selector="local|ManuscriptEditor ScrollBar:vertical">
     <Setter Property="MinWidth" Value="14" />
     <Setter Property="Width" Value="14" />
-    <Setter Property="Background" Value="#252A32" />
-    <Setter Property="Foreground" Value="#697386" />
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceMutedBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
   </Style>
 </Styles>

@@ -1,0 +1,3002 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using AvaloniaEdit;
+using AvaloniaEdit.Editing;
+using AvaloniaEdit.Rendering;
+using Typescribe.Application.Abstractions;
+using Typescribe.Application.Services;
+using Typescribe.Desktop.Editing;
+using Typescribe.Desktop.ViewModels;
+using Typescribe.Domain.Models;
+
+namespace Typescribe.Desktop;
+
+/// <summary>
+/// Adds an editable two-page spread mode without introducing a second manuscript model.
+/// The left/right page views share the exact TextDocument (and therefore the same UndoStack)
+/// owned by the canonical ManuscriptEditor. Pagination only decides which source ranges are
+/// visible in each physical page viewport.
+/// </summary>
+internal sealed class FacingSpreadEditingFeature
+{
+    private readonly StudioWorkspaceWindow _window;
+    private readonly WorkspaceViewModel _viewModel;
+    private readonly IDocumentParser _parser;
+    private bool _installed;
+    private bool _queued;
+    private bool _disposed;
+    private ManuscriptEditor? _mainEditor;
+    private FacingSpreadSurface? _surface;
+    private ToggleButton? _toggle;
+
+    private FacingSpreadEditingFeature(
+        StudioWorkspaceWindow window,
+        WorkspaceViewModel viewModel,
+        IDocumentParser parser)
+    {
+        _window = window;
+        _viewModel = viewModel;
+        _parser = parser;
+    }
+
+    public static void Apply(
+        StudioWorkspaceWindow window,
+        WorkspaceViewModel viewModel,
+        IDocumentParser parser)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(parser);
+
+        var feature = new FacingSpreadEditingFeature(window, viewModel, parser);
+        window.Opened += feature.WindowReady;
+        window.LayoutUpdated += feature.WindowReady;
+        window.Closed += feature.WindowClosed;
+        feature.QueueInstall();
+    }
+
+    private void WindowReady(object? sender, EventArgs e) => QueueInstall();
+
+    private void QueueInstall()
+    {
+        if (_disposed || _installed || _queued) return;
+        _queued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _queued = false;
+            if (!_disposed) TryInstall();
+        }, DispatcherPriority.Background);
+    }
+
+    private void TryInstall()
+    {
+        if (_disposed || _installed) return;
+
+        var host = _window.GetVisualDescendants().OfType<LongFormEditorChrome>().FirstOrDefault();
+        if (host is null) return;
+
+        var editor = host.Children.OfType<ManuscriptEditor>().FirstOrDefault();
+        if (editor is null) return;
+
+        _mainEditor = editor;
+        _surface = new FacingSpreadSurface(_viewModel, _parser, editor)
+        {
+            IsVisible = false
+        };
+        Grid.SetRow(_surface, 3);
+        Grid.SetColumn(_surface, 0);
+        host.Children.Add(_surface);
+
+        InstallToggle(host);
+        _installed = true;
+        _window.LayoutUpdated -= WindowReady;
+
+        // The new visual direction is page-first. Facing spreads start enabled, but the
+        // author can return to the continuous single-page view at any time.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed || _toggle is null) return;
+            _toggle.IsChecked = true;
+            SetFacingMode(true);
+        }, DispatcherPriority.Background);
+    }
+
+    private void InstallToggle(LongFormEditorChrome host)
+    {
+        if (host.CommandBar.Child is not WrapPanel wrap) return;
+
+        var existingGroup = wrap.Children
+            .OfType<Border>()
+            .FirstOrDefault(item => item.Classes.Contains("continuous-page-layout-group"));
+
+        var row = existingGroup?.Child as StackPanel;
+        if (row is null)
+        {
+            row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 2,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            existingGroup = new Border
+            {
+                Child = row,
+                Padding = new Thickness(3, 2),
+                Margin = new Thickness(0, 0, 4, 2),
+                CornerRadius = new CornerRadius(5)
+            };
+            existingGroup.Classes.Add("editor-command-group");
+            existingGroup.Classes.Add("continuous-page-layout-group");
+            wrap.Children.Insert(0, existingGroup);
+        }
+
+        if (row.Children.OfType<ToggleButton>().Any(button =>
+                string.Equals(button.Content?.ToString(), "Facing", StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        _toggle = new ToggleButton
+        {
+            Content = "Facing",
+            MinWidth = 56,
+            Height = 28,
+            MinHeight = 28,
+            Padding = new Thickness(8, 3),
+            HorizontalContentAlignment = HorizontalAlignment.Center
+        };
+        _toggle.Classes.Add("editor-command-button");
+        ToolTip.SetTip(_toggle, "Edit left/right book pages side-by-side using the same manuscript document");
+        _toggle.IsCheckedChanged += ToggleChanged;
+        row.Children.Add(_toggle);
+    }
+
+    private void ToggleChanged(object? sender, EventArgs e)
+        => SetFacingMode(_toggle?.IsChecked == true);
+
+    private void SetFacingMode(bool enabled)
+    {
+        if (_surface is null || _mainEditor is null) return;
+
+        if (enabled)
+        {
+            _surface.IsVisible = true;
+            _mainEditor.IsVisible = false;
+            _surface.Activate();
+        }
+        else
+        {
+            _surface.Deactivate();
+            _surface.IsVisible = false;
+            _mainEditor.IsVisible = true;
+            _mainEditor.Focus();
+        }
+    }
+
+    private void WindowClosed(object? sender, EventArgs e)
+    {
+        _disposed = true;
+        if (_toggle is not null)
+            _toggle.IsCheckedChanged -= ToggleChanged;
+        _surface?.Dispose();
+        _window.Opened -= WindowReady;
+        _window.LayoutUpdated -= WindowReady;
+        _window.Closed -= WindowClosed;
+    }
+}
+
+internal sealed class FacingSpreadSurface : Grid
+{
+    private readonly WorkspaceViewModel _viewModel;
+    private readonly IDocumentParser _parser;
+    private readonly ManuscriptEditor _mainEditor;
+    private readonly PagedLayoutEngine _engine = new();
+    private readonly DispatcherTimer _layoutTimer;
+
+    private readonly Button _previous = new() { Content = "‹", Width = 32, Height = 28 };
+    private readonly Button _next = new() { Content = "›", Width = 32, Height = 28 };
+    private readonly ToggleButton _snap = new()
+    {
+        Content = "Snap",
+        IsChecked = true,
+        MinWidth = 58,
+        Height = 28
+    };
+    private readonly TextBlock _spreadLabel = new()
+    {
+        Text = "Facing pages",
+        VerticalAlignment = VerticalAlignment.Center,
+        FontWeight = FontWeight.SemiBold
+    };
+    private readonly TextBlock _hint = new()
+    {
+        Text = "One document • one undo history • caret hands off across pages",
+        VerticalAlignment = VerticalAlignment.Center,
+        Opacity = .58,
+        FontSize = 10.5
+    };
+    private readonly Grid _spreadGrid = new()
+    {
+        ColumnDefinitions = new ColumnDefinitions("Auto,22,Auto"),
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Top
+    };
+    private readonly SpreadPageView _left;
+    private readonly SpreadPageView _right;
+
+    private IReadOnlyList<SpreadPageRange> _ranges = [];
+    private IReadOnlyList<SpreadPair> _spreads = [];
+    private DocumentAst? _ast;
+    private string? _selectedFigureKey;
+    private string? _selectedFrameId;
+    private string? _selectedFurnitureKey;
+    private int _spreadIndex;
+    private bool _active;
+    private bool _disposed;
+    private bool _syncing;
+    private bool _refreshQueued;
+    private SpreadPageView? _activeView;
+
+    public FacingSpreadSurface(
+        WorkspaceViewModel viewModel,
+        IDocumentParser parser,
+        ManuscriptEditor mainEditor)
+    {
+        _viewModel = viewModel;
+        _parser = parser;
+        _mainEditor = mainEditor;
+
+        Background = Brush("#111315");
+        RowDefinitions = new RowDefinitions("Auto,*");
+
+        _left = new SpreadPageView(
+            mainEditor.Document,
+            OnProjectionCaretChanged,
+            OnProjectionSelectionChanged,
+            OnProjectionFocused,
+            OnFigureSelected,
+            OnFigureMoved,
+            OnFigureResized,
+            OnTextFrameSelected,
+            OnTextFrameMoved,
+            OnTextFrameResized,
+            OnFurnitureSelected,
+            OnFurnitureEdited,
+            OnGuideCreated,
+            OnGuideMoved,
+            () => _snap.IsChecked == true);
+        _right = new SpreadPageView(
+            mainEditor.Document,
+            OnProjectionCaretChanged,
+            OnProjectionSelectionChanged,
+            OnProjectionFocused,
+            OnFigureSelected,
+            OnFigureMoved,
+            OnFigureResized,
+            OnTextFrameSelected,
+            OnTextFrameMoved,
+            OnTextFrameResized,
+            OnFurnitureSelected,
+            OnFurnitureEdited,
+            OnGuideCreated,
+            OnGuideMoved,
+            () => _snap.IsChecked == true);
+        _spreadGrid.Children.Add(_left);
+        Grid.SetColumn(_right, 2);
+        _spreadGrid.Children.Add(_right);
+
+        var topGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,*,Auto"),
+            ColumnSpacing = 7
+        };
+        topGrid.Children.Add(_previous);
+        Grid.SetColumn(_next, 1);
+        topGrid.Children.Add(_next);
+        Grid.SetColumn(_spreadLabel, 2);
+        topGrid.Children.Add(_spreadLabel);
+        Grid.SetColumn(_snap, 3);
+        topGrid.Children.Add(_snap);
+        Grid.SetColumn(_hint, 5);
+        topGrid.Children.Add(_hint);
+
+        var top = new Border
+        {
+            Background = Brush("#181818"),
+            BorderBrush = Brush("#3F3F46"),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(10, 6),
+            Child = topGrid
+        };
+
+        var scroll = new ScrollViewer
+        {
+            Content = _spreadGrid,
+            Background = Brush("#111315"),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Padding = new Thickness(26, 22, 26, 34)
+        };
+
+        Children.Add(top);
+        Grid.SetRow(scroll, 1);
+        Children.Add(scroll);
+
+        _previous.Click += PreviousClicked;
+        _next.Click += NextClicked;
+        _snap.IsCheckedChanged += SnapChanged;
+        SizeChanged += SurfaceSizeChanged;
+
+        _layoutTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(95) };
+        _layoutTimer.Tick += LayoutTimerTick;
+
+        _viewModel.StateChanged += WorkspaceChanged;
+        PageObjectSelectionHub.FigureSelectionChanged += ExternalFigureSelectionChanged;
+        PageObjectSelectionHub.TextFrameSelectionChanged += ExternalTextFrameSelectionChanged;
+        PageObjectSelectionHub.FurnitureSelectionChanged += ExternalFurnitureSelectionChanged;
+        _mainEditor.TextChanged += MainTextChanged;
+        _mainEditor.TextArea.Caret.PositionChanged += MainCaretChanged;
+        _mainEditor.TextArea.SelectionChanged += MainSelectionChanged;
+    }
+
+    public void Activate()
+    {
+        if (_disposed) return;
+        _active = true;
+        RefreshLayout(forceCaretSpread: true);
+    }
+
+    public void Deactivate()
+    {
+        _active = false;
+        _layoutTimer.Stop();
+        SyncMainFromActiveProjection();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _layoutTimer.Stop();
+
+        _previous.Click -= PreviousClicked;
+        _next.Click -= NextClicked;
+        _snap.IsCheckedChanged -= SnapChanged;
+        SizeChanged -= SurfaceSizeChanged;
+        _viewModel.StateChanged -= WorkspaceChanged;
+        PageObjectSelectionHub.FigureSelectionChanged -= ExternalFigureSelectionChanged;
+        PageObjectSelectionHub.TextFrameSelectionChanged -= ExternalTextFrameSelectionChanged;
+        PageObjectSelectionHub.FurnitureSelectionChanged -= ExternalFurnitureSelectionChanged;
+        _mainEditor.TextChanged -= MainTextChanged;
+        _mainEditor.TextArea.Caret.PositionChanged -= MainCaretChanged;
+        _mainEditor.TextArea.SelectionChanged -= MainSelectionChanged;
+
+        _left.Dispose();
+        _right.Dispose();
+    }
+
+    private void SnapChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _hint.Text = _snap.IsChecked == true
+            ? "Snap on • margins, guides, page centers and nearby objects"
+            : "Snap off • free positioning on the physical page";
+    }
+
+    private void PreviousClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_spreads.Count == 0) return;
+        ShowSpread(Math.Max(0, _spreadIndex - 1), moveCaret: true);
+    }
+
+    private void NextClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_spreads.Count == 0) return;
+        ShowSpread(Math.Min(_spreads.Count - 1, _spreadIndex + 1), moveCaret: true);
+    }
+
+    private void SurfaceSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        if (!_active || _spreads.Count == 0) return;
+        RenderCurrentSpread();
+    }
+
+    private void WorkspaceChanged(object? sender, EventArgs e)
+    {
+        if (!_active) return;
+        ScheduleRefresh();
+    }
+
+    private void ExternalFigureSelectionChanged(PageFigureSelection? selection)
+    {
+        _selectedFigureKey = selection is null
+            ? null
+            : !string.IsNullOrWhiteSpace(selection.Identifier)
+                ? $"id:{selection.Identifier}"
+                : $"source:{selection.Source}\u001f{selection.Caption}";
+
+        if (!_active) return;
+        _left.SetSelectedFigure(_selectedFigureKey);
+        _right.SetSelectedFigure(_selectedFigureKey);
+    }
+
+    private void ExternalTextFrameSelectionChanged(PageTextFrameSelection? selection)
+    {
+        _selectedFrameId = selection?.FrameId;
+        if (!_active) return;
+        _left.SetSelectedTextFrame(_selectedFrameId);
+        _right.SetSelectedTextFrame(_selectedFrameId);
+    }
+
+    private void ExternalFurnitureSelectionChanged(PageFurnitureSelection? selection)
+    {
+        _selectedFurnitureKey = selection is null
+            ? null
+            : FurnitureKey(selection.PageIndex, selection.Kind);
+        if (!_active) return;
+        _left.SetSelectedFurniture(_selectedFurnitureKey);
+        _right.SetSelectedFurniture(_selectedFurnitureKey);
+    }
+
+    private void MainTextChanged(object? sender, EventArgs e)
+    {
+        if (!_active) return;
+        ScheduleRefresh();
+    }
+
+    private void MainCaretChanged(object? sender, EventArgs e)
+    {
+        if (!_active || _syncing) return;
+        NavigateToOffset(_mainEditor.CaretOffset, focusProjection: false);
+    }
+
+    private void MainSelectionChanged(object? sender, EventArgs e)
+    {
+        if (!_active || _syncing) return;
+        NavigateToOffset(_mainEditor.CaretOffset, focusProjection: false);
+    }
+
+    private void ScheduleRefresh()
+    {
+        if (_disposed || !_active || _refreshQueued) return;
+        _refreshQueued = true;
+        _layoutTimer.Stop();
+        _layoutTimer.Start();
+    }
+
+    private void LayoutTimerTick(object? sender, EventArgs e)
+    {
+        _layoutTimer.Stop();
+        _refreshQueued = false;
+        RefreshLayout(forceCaretSpread: true);
+    }
+
+    private void RefreshLayout(bool forceCaretSpread)
+    {
+        if (_disposed || !_active) return;
+
+        if (!_viewModel.HasDocument)
+        {
+            _ranges = [];
+            _spreads = [];
+            _ast = null;
+            _left.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
+            _right.Configure(null, null, _viewModel.CurrentStyle, .8, false, _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
+            _spreadLabel.Text = "Select a manuscript";
+            UpdateNavigation();
+            return;
+        }
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            _ast = ast;
+            var layout = _engine.Paginate(ast, _viewModel.CurrentStyle);
+            _ranges = BuildPageRanges(source, ast, layout);
+            _spreads = BuildSpreads(_ranges);
+
+            if (_spreads.Count == 0)
+            {
+                _spreadLabel.Text = "No pages";
+                UpdateNavigation();
+                return;
+            }
+
+            if (forceCaretSpread)
+            {
+                var page = FindPageForOffset(_mainEditor.CaretOffset);
+                _spreadIndex = page is null ? Math.Clamp(_spreadIndex, 0, _spreads.Count - 1) : SpreadIndexForPage(page.PageIndex);
+            }
+            else
+            {
+                _spreadIndex = Math.Clamp(_spreadIndex, 0, _spreads.Count - 1);
+            }
+
+            RenderCurrentSpread();
+        }
+        catch (Exception ex)
+        {
+            _spreadLabel.Text = $"Spread layout unavailable: {ex.Message}";
+        }
+    }
+
+    private void RenderCurrentSpread()
+    {
+        if (_spreads.Count == 0) return;
+        _spreadIndex = Math.Clamp(_spreadIndex, 0, _spreads.Count - 1);
+        var pair = _spreads[_spreadIndex];
+        var scale = CalculateScale(pair);
+
+        _left.Configure(pair.Left, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _left), _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
+        _right.Configure(pair.Right, _ast, _viewModel.CurrentStyle, scale, ReferenceEquals(_activeView, _right), _selectedFigureKey, _selectedFrameId, _selectedFurnitureKey);
+
+        var leftLabel = pair.Left?.Page.DisplayNumberText;
+        var rightLabel = pair.Right?.Page.DisplayNumberText;
+        _spreadLabel.Text = leftLabel is not null && rightLabel is not null
+            ? $"Pages {leftLabel}–{rightLabel}"
+            : $"Page {leftLabel ?? rightLabel ?? "—"}";
+
+        UpdateNavigation();
+
+        // Preserve the global caret after a repagination. The page view that contains it gets
+        // focus only when the user was already editing the spread; navigation alone does not
+        // steal focus from menus/inspectors.
+        var current = FindPageForOffset(_mainEditor.CaretOffset);
+        if (current is not null)
+        {
+            var target = pair.Left?.PageIndex == current.PageIndex ? _left :
+                         pair.Right?.PageIndex == current.PageIndex ? _right : null;
+            if (target is not null)
+            {
+                target.PositionViewport();
+                if (_activeView is not null)
+                    SyncProjectionFromMain(target, focus: false);
+            }
+        }
+    }
+
+    private double CalculateScale(SpreadPair pair)
+    {
+        var pages = new[] { pair.Left, pair.Right }.Where(static page => page is not null).Select(static page => page!).ToArray();
+        if (pages.Length == 0) return .8;
+
+        var totalPoints = pages.Sum(page => page.Page.WidthPoints) + (pages.Length > 1 ? 22 : 0);
+        var availableWidth = Math.Max(520, Bounds.Width - 90);
+        var widthScale = availableWidth / Math.Max(1, totalPoints);
+        var maxHeight = pages.Max(page => page.Page.HeightPoints);
+        var availableHeight = Math.Max(480, Bounds.Height - 105);
+        var heightScale = availableHeight / Math.Max(1, maxHeight);
+
+        return Math.Clamp(Math.Min(widthScale, heightScale), .52, 1.02);
+    }
+
+    private void ShowSpread(int index, bool moveCaret)
+    {
+        if (_spreads.Count == 0) return;
+        _spreadIndex = Math.Clamp(index, 0, _spreads.Count - 1);
+        RenderCurrentSpread();
+
+        if (!moveCaret) return;
+        var pair = _spreads[_spreadIndex];
+        var target = pair.Left is { Editable: true } ? pair.Left : pair.Right is { Editable: true } ? pair.Right : null;
+        if (target is null) return;
+
+        _syncing = true;
+        try
+        {
+            _mainEditor.CaretOffset = Math.Clamp(target.StartOffset, 0, _mainEditor.Document.TextLength);
+            _mainEditor.Select(_mainEditor.CaretOffset, 0);
+        }
+        finally
+        {
+            _syncing = false;
+        }
+
+        var view = pair.Left?.PageIndex == target.PageIndex ? _left : _right;
+        _activeView = view;
+        SyncProjectionFromMain(view, focus: true);
+        RenderCurrentSpread();
+    }
+
+    private void NavigateToOffset(int offset, bool focusProjection)
+    {
+        var page = FindPageForOffset(offset);
+        if (page is null || _spreads.Count == 0) return;
+
+        var targetSpread = SpreadIndexForPage(page.PageIndex);
+        if (targetSpread != _spreadIndex)
+        {
+            _spreadIndex = targetSpread;
+            RenderCurrentSpread();
+        }
+
+        var pair = _spreads[_spreadIndex];
+        var target = pair.Left?.PageIndex == page.PageIndex ? _left :
+                     pair.Right?.PageIndex == page.PageIndex ? _right : null;
+        if (target is null) return;
+
+        if (focusProjection)
+            _activeView = target;
+        target.PositionViewport();
+        SyncProjectionFromMain(target, focusProjection);
+        UpdateActivePageBorders();
+    }
+
+    private void OnFigureSelected(SpreadPageView view, FigureBlock figure, PageLayoutFragment fragment)
+    {
+        if (!_active) return;
+        _activeView = view;
+        _selectedFigureKey = FigureKey(figure);
+        _left.SetSelectedFigure(_selectedFigureKey);
+        _right.SetSelectedFigure(_selectedFigureKey);
+        UpdateActivePageBorders();
+
+        PageObjectSelectionHub.SelectFigure(new PageFigureSelection(
+            figure.SourceLine,
+            figure.Identifier,
+            figure.Source,
+            figure.Caption,
+            figure.Layout,
+            figure.Formatting?.AnchoredObject,
+            fragment.Bounds.WidthPoints,
+            fragment.Bounds.HeightPoints));
+    }
+
+    private void OnFigureMoved(
+        SpreadPageView view,
+        FigureBlock snapshot,
+        PageLayoutFragment fragment,
+        double deltaXPoints,
+        double deltaYPoints)
+    {
+        if (!_active || (Math.Abs(deltaXPoints) < .1 && Math.Abs(deltaYPoints) < .1)) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var figure = FigureSourceEditor.FindFigure(ast, snapshot.SourceLine, snapshot.Identifier, snapshot.Source);
+            if (figure is null) return;
+
+            var current = figure.Formatting?.AnchoredObject;
+            var anchored = new AnchoredObjectFormatting(
+                current?.Id ?? figure.Identifier ?? $"figure-{figure.SourceLine}",
+                current?.Placement ?? ToFloatPlacement(figure.Layout?.Placement),
+                current?.Wrap ?? TextWrapMode.None,
+                (current?.OffsetXPoints ?? 0) + deltaXPoints,
+                (current?.OffsetYPoints ?? 0) + deltaYPoints,
+                current?.WrapTopPoints ?? 0,
+                current?.WrapRightPoints ?? 0,
+                current?.WrapBottomPoints ?? 0,
+                current?.WrapLeftPoints ?? 0,
+                current?.KeepWithAnchor ?? true);
+
+            var updated = RichBlockFormattingEditor.SetAnchoredObject(source, figure.SourceLine, anchored);
+            _selectedFigureKey = FigureKey(figure);
+            _viewModel.UpdateEditorText(updated);
+            PageObjectSelectionHub.SelectFigure(new PageFigureSelection(
+                figure.SourceLine,
+                figure.Identifier,
+                figure.Source,
+                figure.Caption,
+                figure.Layout,
+                anchored,
+                fragment.Bounds.WidthPoints,
+                fragment.Bounds.HeightPoints));
+        }
+        catch
+        {
+            // The next layout pass restores the object from canonical source if a transient
+            // pointer/update race occurs.
+        }
+    }
+
+    private void OnFigureResized(
+        SpreadPageView view,
+        FigureBlock snapshot,
+        PageLayoutFragment fragment,
+        double columnWidthPoints,
+        double widthPoints,
+        double heightPoints)
+    {
+        if (!_active || columnWidthPoints <= 0) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var figure = FigureSourceEditor.FindFigure(ast, snapshot.SourceLine, snapshot.Identifier, snapshot.Source);
+            if (figure is null) return;
+
+            var widthPercent = Math.Clamp(widthPoints / columnWidthPoints * 100d, 10, 100);
+            var captionHeight = string.IsNullOrWhiteSpace(figure.Caption)
+                ? 0
+                : _viewModel.CurrentStyle.CaptionFontSizePoints * 1.3;
+            var imageHeightPoints = Math.Max(36, heightPoints - captionHeight);
+
+            var layout = (figure.Layout ?? new FigureLayout()) with
+            {
+                WidthPercent = widthPercent,
+                HeightInches = Math.Clamp(imageHeightPoints / 72d, .5, 24)
+            };
+            var updatedFigure = figure with { Layout = layout };
+            var updated = FigureSourceEditor.ReplaceFigure(source, figure, updatedFigure);
+            _selectedFigureKey = FigureKey(updatedFigure);
+            _viewModel.UpdateEditorText(updated);
+
+            PageObjectSelectionHub.SelectFigure(new PageFigureSelection(
+                updatedFigure.SourceLine,
+                updatedFigure.Identifier,
+                updatedFigure.Source,
+                updatedFigure.Caption,
+                updatedFigure.Layout,
+                updatedFigure.Formatting?.AnchoredObject,
+                widthPoints,
+                heightPoints));
+        }
+        catch
+        {
+            // Keep the last canonical figure if a transient layout update races the pointer.
+        }
+    }
+
+    private static string FigureKey(FigureBlock figure)
+        => !string.IsNullOrWhiteSpace(figure.Identifier)
+            ? $"id:{figure.Identifier}"
+            : $"source:{figure.Source}\u001f{figure.Caption}";
+
+    private static FloatPlacementMode ToFloatPlacement(FigurePlacement? placement)
+        => placement switch
+        {
+            FigurePlacement.Inline => FloatPlacementMode.Inline,
+            FigurePlacement.Top => FloatPlacementMode.Top,
+            FigurePlacement.Bottom => FloatPlacementMode.Bottom,
+            FigurePlacement.Page => FloatPlacementMode.Page,
+            _ => FloatPlacementMode.Here
+        };
+
+    private void OnTextFrameSelected(
+        SpreadPageView view,
+        AstBlock block,
+        TextFrameFormatting frame,
+        PageLayoutRect container,
+        bool overset)
+    {
+        if (!_active) return;
+        _activeView = view;
+        _selectedFrameId = frame.Id;
+        _left.SetSelectedTextFrame(_selectedFrameId);
+        _right.SetSelectedTextFrame(_selectedFrameId);
+        UpdateActivePageBorders();
+
+        PageObjectSelectionHub.SelectTextFrame(BuildFrameSelection(block, frame, container, overset));
+    }
+
+    private void OnTextFrameMoved(
+        SpreadPageView view,
+        AstBlock snapshot,
+        TextFrameFormatting snapshotFrame,
+        PageLayoutRect container,
+        double deltaXPoints,
+        double deltaYPoints)
+    {
+        if (!_active || (Math.Abs(deltaXPoints) < .1 && Math.Abs(deltaYPoints) < .1)) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var block = TextFrameSourceEditor.FindFrameBlock(ast, snapshotFrame.Id, snapshot.SourceLine);
+            var current = block?.Formatting?.TextFrame;
+            if (block is null || current is null) return;
+
+            var content = view.Range?.Page.ContentBounds;
+            var baseX = current.XPoints ?? (content is null ? 0 : container.XPoints - content.XPoints);
+            var baseY = current.YPoints ?? (content is null ? 0 : container.YPoints - content.YPoints);
+
+            var updatedFrame = current with
+            {
+                XPoints = baseX + deltaXPoints,
+                YPoints = baseY + deltaYPoints,
+                WidthPoints = current.WidthPoints ?? container.WidthPoints,
+                HeightPoints = current.HeightPoints ?? container.HeightPoints
+            };
+
+            var updated = TextFrameSourceEditor.UpdateFrame(
+                source,
+                ast,
+                current.Id,
+                _ => updatedFrame,
+                block.SourceLine);
+            _selectedFrameId = current.Id;
+            _viewModel.UpdateEditorText(updated);
+            PageObjectSelectionHub.SelectTextFrame(
+                BuildFrameSelection(block, updatedFrame, container, overset: false));
+        }
+        catch
+        {
+            // A repagination may race the pointer release; canonical source remains unchanged
+            // until the frame can be resolved on the next pass.
+        }
+    }
+
+    private void OnTextFrameResized(
+        SpreadPageView view,
+        AstBlock snapshot,
+        TextFrameFormatting snapshotFrame,
+        PageLayoutRect container,
+        double widthPoints,
+        double heightPoints)
+    {
+        if (!_active) return;
+
+        try
+        {
+            var source = _mainEditor.Text ?? string.Empty;
+            var ast = _parser.Parse(source);
+            var block = TextFrameSourceEditor.FindFrameBlock(ast, snapshotFrame.Id, snapshot.SourceLine);
+            var current = block?.Formatting?.TextFrame;
+            if (block is null || current is null) return;
+
+            var content = view.Range?.Page.ContentBounds;
+            var updatedFrame = current with
+            {
+                XPoints = current.XPoints ?? (content is null ? 0 : container.XPoints - content.XPoints),
+                YPoints = current.YPoints ?? (content is null ? 0 : container.YPoints - content.YPoints),
+                WidthPoints = Math.Clamp(widthPoints, 36, view.Range?.Page.WidthPoints ?? 2000),
+                HeightPoints = Math.Clamp(heightPoints, 36, view.Range?.Page.HeightPoints ?? 2000)
+            };
+
+            var updated = TextFrameSourceEditor.UpdateFrame(
+                source,
+                ast,
+                current.Id,
+                _ => updatedFrame,
+                block.SourceLine);
+            _selectedFrameId = current.Id;
+            _viewModel.UpdateEditorText(updated);
+            PageObjectSelectionHub.SelectTextFrame(
+                BuildFrameSelection(block, updatedFrame, container, overset: false));
+        }
+        catch
+        {
+            // Keep the last committed frame geometry if a transient layout update races the pointer.
+        }
+    }
+
+    private static PageTextFrameSelection BuildFrameSelection(
+        AstBlock block,
+        TextFrameFormatting frame,
+        PageLayoutRect container,
+        bool overset)
+        => new(
+            block.SourceLine,
+            frame.Id,
+            frame.NextFrameId,
+            frame.Columns,
+            frame.ColumnGapPoints,
+            frame.InsetTopPoints,
+            frame.InsetRightPoints,
+            frame.InsetBottomPoints,
+            frame.InsetLeftPoints,
+            frame.XPoints,
+            frame.YPoints,
+            frame.WidthPoints ?? container.WidthPoints,
+            frame.HeightPoints ?? container.HeightPoints,
+            frame.PageOffset,
+            overset);
+
+    private void OnFurnitureSelected(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageFurnitureKind kind,
+        string value)
+    {
+        if (!_active) return;
+        _activeView = view;
+        _selectedFurnitureKey = FurnitureKey(page.Index, kind);
+        _left.SetSelectedFurniture(_selectedFurnitureKey);
+        _right.SetSelectedFurniture(_selectedFurnitureKey);
+        UpdateActivePageBorders();
+
+        PageObjectSelectionHub.SelectFurniture(new PageFurnitureSelection(
+            page.Index,
+            page.DisplayNumber,
+            page.DisplayNumberText,
+            page.PageStyleId,
+            page.IsLeftPage,
+            kind,
+            value));
+    }
+
+    private async void OnFurnitureEdited(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageFurnitureKind kind,
+        string value)
+    {
+        if (!_active || kind is PageFurnitureKind.ParentPage or PageFurnitureKind.PageNumber) return;
+
+        try
+        {
+            var style = _viewModel.CurrentStyle;
+            var updated = kind switch
+            {
+                PageFurnitureKind.HeaderLeft => style with { HeaderLeft = value },
+                PageFurnitureKind.HeaderCenter => style with { HeaderCenter = value },
+                PageFurnitureKind.HeaderRight => style with { HeaderRight = value },
+                PageFurnitureKind.FooterLeft => style with { FooterLeft = value },
+                PageFurnitureKind.FooterCenter => style with { FooterCenter = value },
+                PageFurnitureKind.FooterRight => style with { FooterRight = value },
+                _ => style
+            };
+
+            await _viewModel.UpdateStyleAsync(updated.Validate());
+            _selectedFurnitureKey = FurnitureKey(page.Index, kind);
+            PageObjectSelectionHub.SelectFurniture(new PageFurnitureSelection(
+                page.Index,
+                page.DisplayNumber,
+                page.DisplayNumberText,
+                page.PageStyleId,
+                page.IsLeftPage,
+                kind,
+                value));
+        }
+        catch
+        {
+            // Keep the last persisted running furniture when a style save fails.
+            ScheduleRefresh();
+        }
+    }
+
+    private async void OnGuideCreated(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageGuideOrientation orientation,
+        double positionPoints)
+    {
+        if (!_active) return;
+
+        try
+        {
+            var max = orientation == PageGuideOrientation.Vertical ? page.WidthPoints : page.HeightPoints;
+            var clamped = Math.Clamp(positionPoints, 0, max);
+            await UpdateParentGuidesAsync(page, guides =>
+            {
+                guides.Add(new PageGuideDefinition(
+                    $"guide-{Guid.NewGuid():N}",
+                    orientation,
+                    clamped / 72d,
+                    $"Guide {guides.Count + 1}"));
+            });
+
+            OnFurnitureSelected(
+                view,
+                page,
+                PageFurnitureKind.ParentPage,
+                page.PageStyleId ?? _viewModel.CurrentStyle.DefaultPageStyleId);
+        }
+        catch
+        {
+            ScheduleRefresh();
+        }
+    }
+
+    private async void OnGuideMoved(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageLayoutGuide guide,
+        double positionPoints)
+    {
+        if (!_active || guide.Locked || string.IsNullOrWhiteSpace(guide.Id)) return;
+
+        try
+        {
+            var orientation = guide.Orientation == PageLayoutGuideOrientation.Vertical
+                ? PageGuideOrientation.Vertical
+                : PageGuideOrientation.Horizontal;
+            var max = orientation == PageGuideOrientation.Vertical ? page.WidthPoints : page.HeightPoints;
+            var clamped = Math.Clamp(positionPoints, 0, max);
+
+            await UpdateParentGuidesAsync(page, guides =>
+            {
+                var index = guides.FindIndex(item =>
+                    string.Equals(item.Id, guide.Id, StringComparison.Ordinal));
+                if (index < 0) return;
+                guides[index] = guides[index] with
+                {
+                    Orientation = orientation,
+                    PositionInches = clamped / 72d
+                };
+            });
+
+            OnFurnitureSelected(
+                view,
+                page,
+                PageFurnitureKind.ParentPage,
+                page.PageStyleId ?? _viewModel.CurrentStyle.DefaultPageStyleId);
+        }
+        catch
+        {
+            ScheduleRefresh();
+        }
+    }
+
+    private async Task UpdateParentGuidesAsync(
+        PageLayoutPage page,
+        Action<List<PageGuideDefinition>> update)
+    {
+        var style = _viewModel.CurrentStyle;
+        var id = page.PageStyleId ?? style.DefaultPageStyleId;
+        var raw = style.NamedStyles.PageStyles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase))
+            ?? new PageStyleDefinition(id, id, null);
+        var resolved = style.NamedStyles.ResolvePage(id);
+        var guides = (resolved?.Guides ?? raw.Guides ?? []).ToList();
+        update(guides);
+
+        var updatedPage = raw with { Guides = guides };
+        var found = false;
+        var pages = style.NamedStyles.PageStyles.Select(candidate =>
+        {
+            if (!string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase))
+                return candidate;
+            found = true;
+            return updatedPage;
+        }).ToList();
+        if (!found) pages.Add(updatedPage);
+
+        var catalog = style.NamedStyles with { PageStyles = pages };
+        await _viewModel.UpdateStyleAsync((style with { NamedStyles = catalog }).Validate());
+    }
+
+    private static string FurnitureKey(int pageIndex, PageFurnitureKind kind)
+        => $"{pageIndex}:{kind}";
+
+    private void OnProjectionFocused(SpreadPageView view)
+    {
+        if (!_active || _syncing) return;
+        _activeView = view;
+        SyncMainFromProjection(view);
+        UpdateActivePageBorders();
+    }
+
+    private void OnProjectionCaretChanged(SpreadPageView view)
+    {
+        if (!_active || _syncing || !view.Editor.IsKeyboardFocusWithin) return;
+
+        var caret = view.Editor.CaretOffset;
+        var ownRange = view.Range;
+        if (ownRange is not null && (caret < ownRange.StartOffset || caret >= ownRange.EndOffset) &&
+            FindPageForOffset(caret) is { } destination)
+        {
+            SyncMainFromProjection(view);
+            NavigateToOffset(destination.StartOffset <= caret ? caret : destination.StartOffset, focusProjection: true);
+            return;
+        }
+
+        _activeView = view;
+        SyncMainFromProjection(view);
+        UpdateActivePageBorders();
+    }
+
+    private void OnProjectionSelectionChanged(SpreadPageView view)
+    {
+        if (!_active || _syncing || !view.Editor.IsKeyboardFocusWithin) return;
+        _activeView = view;
+        SyncMainFromProjection(view);
+    }
+
+    private void SyncMainFromProjection(SpreadPageView view)
+    {
+        _syncing = true;
+        try
+        {
+            var editor = view.Editor;
+            var start = Math.Clamp(editor.SelectionStart, 0, _mainEditor.Document.TextLength);
+            var length = Math.Clamp(editor.SelectionLength, 0, _mainEditor.Document.TextLength - start);
+            if (length > 0)
+                _mainEditor.Select(start, length);
+            else
+            {
+                _mainEditor.CaretOffset = Math.Clamp(editor.CaretOffset, 0, _mainEditor.Document.TextLength);
+                _mainEditor.Select(_mainEditor.CaretOffset, 0);
+            }
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private void SyncMainFromActiveProjection()
+    {
+        if (_activeView is not null)
+            SyncMainFromProjection(_activeView);
+    }
+
+    private void SyncProjectionFromMain(SpreadPageView view, bool focus)
+    {
+        if (view.Range is null || !view.Range.Editable) return;
+
+        _syncing = true;
+        try
+        {
+            var caret = Math.Clamp(_mainEditor.CaretOffset, view.Range.StartOffset, Math.Max(view.Range.StartOffset, view.Range.EndOffset));
+            var selectionStart = _mainEditor.SelectionStart;
+            var selectionLength = _mainEditor.SelectionLength;
+
+            if (selectionLength > 0)
+            {
+                // Preserve the full canonical selection in the active page view so typing,
+                // cut/delete and formatting still operate on the whole selection even when
+                // it spans a page boundary.
+                view.Editor.Select(selectionStart, selectionLength);
+            }
+            else
+            {
+                view.Editor.CaretOffset = caret;
+                view.Editor.Select(caret, 0);
+            }
+
+            view.PositionViewport();
+            if (focus)
+                view.Editor.Focus();
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private void UpdateActivePageBorders()
+    {
+        _left.SetActive(ReferenceEquals(_activeView, _left));
+        _right.SetActive(ReferenceEquals(_activeView, _right));
+    }
+
+    private void UpdateNavigation()
+    {
+        _previous.IsEnabled = _spreadIndex > 0;
+        _next.IsEnabled = _spreadIndex + 1 < _spreads.Count;
+        ToolTip.SetTip(_previous, _previous.IsEnabled ? "Previous spread" : "First spread");
+        ToolTip.SetTip(_next, _next.IsEnabled ? "Next spread" : "Last spread");
+    }
+
+    private SpreadPageRange? FindPageForOffset(int offset)
+    {
+        if (_ranges.Count == 0) return null;
+        offset = Math.Clamp(offset, 0, _mainEditor.Document.TextLength);
+
+        SpreadPageRange? preceding = null;
+        foreach (var range in _ranges)
+        {
+            if (!range.Editable) continue;
+            if (offset >= range.StartOffset && (offset < range.EndOffset ||
+                                                range.EndOffset == _mainEditor.Document.TextLength && offset == range.EndOffset))
+                return range;
+            if (range.StartOffset <= offset)
+                preceding = range;
+        }
+
+        return preceding ?? _ranges.FirstOrDefault(static page => page.Editable);
+    }
+
+    private int SpreadIndexForPage(int pageIndex)
+    {
+        for (var index = 0; index < _spreads.Count; index++)
+        {
+            var spread = _spreads[index];
+            if (spread.Left?.PageIndex == pageIndex || spread.Right?.PageIndex == pageIndex)
+                return index;
+        }
+        return Math.Clamp(_spreadIndex, 0, Math.Max(0, _spreads.Count - 1));
+    }
+
+    private static IReadOnlyList<SpreadPageRange> BuildPageRanges(
+        string source,
+        DocumentAst ast,
+        PagedLayoutResult layout)
+    {
+        if (layout.Pages.Count == 0) return [];
+
+        var starts = new int?[layout.Pages.Count];
+        for (var pageIndex = 0; pageIndex < layout.Pages.Count; pageIndex++)
+        {
+            var page = layout.Pages[pageIndex];
+            var fragment = FirstAuthoredFragment(page);
+            if (fragment is null) continue;
+
+            try
+            {
+                starts[pageIndex] = Math.Clamp(
+                    PagedLayoutSourceMapper.GetSourceOffsetForPlainText(
+                        source,
+                        ast,
+                        fragment.SourceBlockIndex,
+                        fragment.SourceTextStart),
+                    0,
+                    source.Length);
+            }
+            catch
+            {
+                starts[pageIndex] = null;
+            }
+        }
+
+        var result = new List<SpreadPageRange>(layout.Pages.Count);
+        for (var pageIndex = 0; pageIndex < layout.Pages.Count; pageIndex++)
+        {
+            var page = layout.Pages[pageIndex];
+            var start = starts[pageIndex];
+            if (start is null || page.IsBlank)
+            {
+                result.Add(new SpreadPageRange(pageIndex, page, 0, 0, Editable: false));
+                continue;
+            }
+
+            var end = source.Length;
+            for (var next = pageIndex + 1; next < starts.Length; next++)
+            {
+                if (starts[next] is int candidate && candidate > start.Value)
+                {
+                    end = candidate;
+                    break;
+                }
+            }
+
+            result.Add(new SpreadPageRange(
+                pageIndex,
+                page,
+                start.Value,
+                Math.Max(start.Value, end),
+                Editable: true));
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<SpreadPair> BuildSpreads(IReadOnlyList<SpreadPageRange> pages)
+    {
+        var output = new List<SpreadPair>();
+        for (var index = 0; index < pages.Count;)
+        {
+            var page = pages[index];
+            if (!page.Page.FacingPages)
+            {
+                output.Add(new SpreadPair(null, page));
+                index++;
+                continue;
+            }
+
+            if (page.Page.IsLeftPage)
+            {
+                SpreadPageRange? right = null;
+                if (index + 1 < pages.Count &&
+                    pages[index + 1].Page.FacingPages &&
+                    !pages[index + 1].Page.IsLeftPage)
+                {
+                    right = pages[index + 1];
+                }
+                output.Add(new SpreadPair(page, right));
+                index += right is null ? 1 : 2;
+                continue;
+            }
+
+            output.Add(new SpreadPair(null, page));
+            index++;
+        }
+
+        return output;
+    }
+
+    private static PageLayoutFragment? FirstAuthoredFragment(PageLayoutPage page)
+    {
+        foreach (var column in page.Columns.OrderBy(static column => column.Index))
+        {
+            var fragment = column.Fragments.FirstOrDefault(static candidate =>
+                candidate.SourceBlockIndex >= 0 &&
+                candidate.Kind != PageLayoutFragmentKind.OversetIndicator &&
+                !candidate.IsRepeatedHeader);
+            if (fragment is not null) return fragment;
+        }
+
+        return page.FloatingObjects.FirstOrDefault(static candidate => candidate.SourceBlockIndex >= 0)
+               ?? page.Footnotes.FirstOrDefault(static candidate => candidate.SourceBlockIndex >= 0);
+    }
+
+    private sealed record SpreadPair(SpreadPageRange? Left, SpreadPageRange? Right);
+
+    internal sealed record SpreadPageRange(
+        int PageIndex,
+        PageLayoutPage Page,
+        int StartOffset,
+        int EndOffset,
+        bool Editable);
+
+    private static SolidColorBrush Brush(string value) => new(Color.Parse(value));
+}
+
+internal sealed class SpreadPageView : Grid
+{
+    private readonly Action<SpreadPageView> _caretChanged;
+    private readonly Action<SpreadPageView> _selectionChanged;
+    private readonly Action<SpreadPageView> _focused;
+    private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment> _figureSelected;
+    private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double> _figureMoved;
+    private readonly Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> _figureResized;
+    private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, bool> _textFrameSelected;
+    private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameMoved;
+    private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameResized;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> _furnitureSelected;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> _furnitureEdited;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageGuideOrientation, double> _guideCreated;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageLayoutGuide, double> _guideMoved;
+    private readonly Func<bool> _snapEnabled;
+    private readonly List<FigureObjectOverlay> _figureObjects = [];
+    private readonly List<TextFrameObjectOverlay> _textFrameObjects = [];
+    private readonly List<RunningFurnitureOverlay> _furnitureObjects = [];
+    private readonly List<PageGuideOverlay> _guideObjects = [];
+    private readonly Border _pageBorder = new()
+    {
+        Background = Brushes.White,
+        BorderBrush = new SolidColorBrush(Color.Parse("#555A62")),
+        BorderThickness = new Thickness(1),
+        BoxShadow = new BoxShadows(new BoxShadow
+        {
+            Blur = 14,
+            OffsetY = 5,
+            Color = Color.FromArgb(78, 0, 0, 0)
+        })
+    };
+    private readonly Canvas _pageCanvas = new() { ClipToBounds = true };
+    private readonly Canvas _horizontalRuler = new() { Height = 20, ClipToBounds = true };
+    private readonly Canvas _verticalRuler = new() { Width = 26, ClipToBounds = true };
+    private readonly Border _rulerCorner = new()
+    {
+        Width = 26,
+        Height = 20,
+        Background = new SolidColorBrush(Color.Parse("#252526")),
+        BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
+        BorderThickness = new Thickness(0, 0, 1, 1)
+    };
+    private readonly Grid _pageHost = new()
+    {
+        ColumnDefinitions = new ColumnDefinitions("26,Auto"),
+        RowDefinitions = new RowDefinitions("20,Auto")
+    };
+    private readonly TextBlock _label = new()
+    {
+        HorizontalAlignment = HorizontalAlignment.Center,
+        FontSize = 10.5,
+        Opacity = .7,
+        Margin = new Thickness(0, 0, 0, 6)
+    };
+    private readonly TextBlock _blank = new()
+    {
+        Text = "Blank page",
+        Foreground = new SolidColorBrush(Color.Parse("#8A8F98")),
+        FontStyle = FontStyle.Italic,
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center
+    };
+
+    private double _scale = .8;
+    private bool _disposed;
+    private PageLayoutPage? _currentPage;
+    private bool _creatingGuide;
+    private PageGuideOrientation _creatingGuideOrientation;
+    private Border? _guideGhost;
+
+    public SpreadPageView(
+        AvaloniaEdit.Document.TextDocument sharedDocument,
+        Action<SpreadPageView> caretChanged,
+        Action<SpreadPageView> selectionChanged,
+        Action<SpreadPageView> focused,
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment> figureSelected,
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double> figureMoved,
+        Action<SpreadPageView, FigureBlock, PageLayoutFragment, double, double, double> figureResized,
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, bool> textFrameSelected,
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameMoved,
+        Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameResized,
+        Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureSelected,
+        Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureEdited,
+        Action<SpreadPageView, PageLayoutPage, PageGuideOrientation, double> guideCreated,
+        Action<SpreadPageView, PageLayoutPage, PageLayoutGuide, double> guideMoved,
+        Func<bool> snapEnabled)
+    {
+        _caretChanged = caretChanged;
+        _selectionChanged = selectionChanged;
+        _focused = focused;
+        _figureSelected = figureSelected;
+        _figureMoved = figureMoved;
+        _figureResized = figureResized;
+        _textFrameSelected = textFrameSelected;
+        _textFrameMoved = textFrameMoved;
+        _textFrameResized = textFrameResized;
+        _furnitureSelected = furnitureSelected;
+        _furnitureEdited = furnitureEdited;
+        _guideCreated = guideCreated;
+        _guideMoved = guideMoved;
+        _snapEnabled = snapEnabled;
+
+        RowDefinitions = new RowDefinitions("Auto,Auto");
+        Children.Add(_label);
+
+        _pageHost.Children.Add(_rulerCorner);
+        Grid.SetColumn(_horizontalRuler, 1);
+        _pageHost.Children.Add(_horizontalRuler);
+        Grid.SetRow(_verticalRuler, 1);
+        _pageHost.Children.Add(_verticalRuler);
+        Grid.SetRow(_pageBorder, 1);
+        Grid.SetColumn(_pageBorder, 1);
+        _pageHost.Children.Add(_pageBorder);
+
+        Grid.SetRow(_pageHost, 1);
+        Children.Add(_pageHost);
+        _pageBorder.Child = _pageCanvas;
+
+        _horizontalRuler.Background = new SolidColorBrush(Color.Parse("#252526"));
+        _verticalRuler.Background = new SolidColorBrush(Color.Parse("#252526"));
+        _horizontalRuler.PointerPressed += RulerPointerPressed;
+        _horizontalRuler.PointerMoved += RulerPointerMoved;
+        _horizontalRuler.PointerReleased += RulerPointerReleased;
+        _verticalRuler.PointerPressed += RulerPointerPressed;
+        _verticalRuler.PointerMoved += RulerPointerMoved;
+        _verticalRuler.PointerReleased += RulerPointerReleased;
+        ToolTip.SetTip(_horizontalRuler, "Drag from the ruler to create a vertical guide");
+        ToolTip.SetTip(_verticalRuler, "Drag from the ruler to create a horizontal guide");
+
+        Editor = new ManuscriptEditor(sharedDocument, projectionView: true)
+        {
+            ShowLineNumbers = false,
+            WordWrap = true,
+            Background = Brushes.Transparent,
+            Foreground = new SolidColorBrush(Color.Parse("#202124")),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Margin = new Thickness(0),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden
+        };
+        Editor.Classes.Add("spread-page-editor");
+        Editor.TextArea.Caret.PositionChanged += EditorCaretChanged;
+        Editor.TextArea.SelectionChanged += EditorSelectionChanged;
+        Editor.GotFocus += EditorGotFocus;
+    }
+
+    public ManuscriptEditor Editor { get; }
+    public FacingSpreadSurface.SpreadPageRange? Range { get; private set; }
+
+    public void Configure(
+        FacingSpreadSurface.SpreadPageRange? range,
+        DocumentAst? ast,
+        BookStyle style,
+        double scale,
+        bool active,
+        string? selectedFigureKey,
+        string? selectedFrameId,
+        string? selectedFurnitureKey)
+    {
+        if (_disposed) return;
+        Range = range;
+        _scale = scale;
+        SetActive(active);
+
+        if (range is null)
+        {
+            IsVisible = true;
+            _currentPage = null;
+            _label.Text = string.Empty;
+            _pageBorder.Width = style.PageWidthInches * 72 * scale;
+            _pageBorder.Height = style.PageHeightInches * 72 * scale;
+            _pageCanvas.Width = _pageBorder.Width;
+            _pageCanvas.Height = _pageBorder.Height;
+            DrawRulers(style.PageWidthInches * 72, style.PageHeightInches * 72, scale);
+            ClearPageCanvas();
+            _blank.Text = "No page";
+            _pageCanvas.Children.Add(_blank);
+            Canvas.SetLeft(_blank, Math.Max(0, (_pageCanvas.Width - 55) / 2));
+            Canvas.SetTop(_blank, Math.Max(0, (_pageCanvas.Height - 20) / 2));
+            return;
+        }
+
+        var page = range.Page;
+        _currentPage = page;
+        var pageWidth = page.WidthPoints * scale;
+        var pageHeight = page.HeightPoints * scale;
+        _label.Text = page.IsBlank
+            ? $"Page {page.DisplayNumberText} • blank"
+            : $"Page {page.DisplayNumberText}{(page.IsLeftPage ? " • left" : " • right")}";
+        _pageBorder.Width = pageWidth;
+        _pageBorder.Height = pageHeight;
+        _pageCanvas.Width = pageWidth;
+        _pageCanvas.Height = pageHeight;
+        DrawRulers(page.WidthPoints, page.HeightPoints, scale);
+        ClearPageCanvas();
+
+        DrawPageGuides(page, scale);
+        RenderRunningFurniture(page, style, scale, selectedFurnitureKey);
+
+        if (!range.Editable || page.IsBlank)
+        {
+            _blank.Text = "Blank page";
+            _pageCanvas.Children.Add(_blank);
+            Canvas.SetLeft(_blank, Math.Max(0, (pageWidth - 70) / 2));
+            Canvas.SetTop(_blank, Math.Max(0, (pageHeight - 20) / 2));
+            RaiseInteractiveGuides();
+            return;
+        }
+
+        var content = page.ContentBounds;
+        var contentWidth = Math.Max(80, content.WidthPoints * scale);
+        var contentHeight = Math.Max(80, content.HeightPoints * scale);
+
+        Editor.FontFamily = new FontFamily(style.BodyFontFamily);
+        Editor.FontSize = Math.Max(8, style.BodyFontSizePoints * scale);
+        Editor.Foreground = SafeBrush(style.BodyColorHex, "#202124");
+        Editor.Width = contentWidth;
+        Editor.Height = contentHeight;
+        Editor.MaxWidth = contentWidth;
+        Editor.MinWidth = contentWidth;
+        Editor.MaxHeight = contentHeight;
+        Editor.HorizontalAlignment = HorizontalAlignment.Left;
+        Editor.VerticalAlignment = VerticalAlignment.Top;
+
+        _pageCanvas.Children.Add(Editor);
+        Canvas.SetLeft(Editor, content.XPoints * scale);
+        Canvas.SetTop(Editor, content.YPoints * scale);
+
+        RenderTextFrameObjects(page, ast, scale, selectedFrameId);
+        RenderFigureObjects(page, ast, scale, selectedFigureKey);
+        RaiseInteractiveGuides();
+        PositionViewport();
+    }
+
+    public void SetActive(bool active)
+    {
+        _pageBorder.BorderBrush = new SolidColorBrush(Color.Parse(active ? "#007ACC" : "#555A62"));
+        _pageBorder.BorderThickness = new Thickness(active ? 2 : 1);
+    }
+
+    public void PositionViewport()
+    {
+        if (_disposed || Range is not { Editable: true } range) return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed || Range is not { Editable: true } current || current.PageIndex != range.PageIndex)
+                return;
+
+            var document = Editor.Document;
+            if (document.TextLength == 0) return;
+
+            try
+            {
+                var startOffset = Math.Clamp(range.StartOffset, 0, document.TextLength);
+                var endOffset = Math.Clamp(range.EndOffset, startOffset, document.TextLength);
+                var textView = Editor.TextArea.TextView;
+
+                var startLocation = document.GetLocation(startOffset);
+                var startPoint = textView.GetVisualPosition(
+                    new TextViewPosition(startLocation.Line, startLocation.Column),
+                    VisualYPosition.LineTop);
+
+                var endProbe = endOffset > startOffset ? endOffset - 1 : endOffset;
+                var endLocation = document.GetLocation(endProbe);
+                var endPoint = textView.GetVisualPosition(
+                    new TextViewPosition(endLocation.Line, endLocation.Column),
+                    VisualYPosition.LineBottom);
+
+                var availableHeight = range.Page.ContentBounds.HeightPoints * _scale;
+                var textHeight = Math.Max(
+                    textView.DefaultLineHeight * 1.4,
+                    endPoint.Y - startPoint.Y + textView.DefaultLineHeight);
+                Editor.Height = Math.Min(availableHeight, textHeight);
+                Editor.MaxHeight = availableHeight;
+
+                ((IScrollable)Editor.TextArea).Offset = new Vector(0, Math.Max(0, startPoint.Y));
+                textView.InvalidateMeasure();
+                textView.Redraw();
+            }
+            catch
+            {
+                // A transient visual-line rebuild can race a keystroke. The next layout pass
+                // repositions the shared view; editing remains attached to the same document.
+            }
+        }, DispatcherPriority.Background);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Editor.TextArea.Caret.PositionChanged -= EditorCaretChanged;
+        Editor.TextArea.SelectionChanged -= EditorSelectionChanged;
+        Editor.GotFocus -= EditorGotFocus;
+        _horizontalRuler.PointerPressed -= RulerPointerPressed;
+        _horizontalRuler.PointerMoved -= RulerPointerMoved;
+        _horizontalRuler.PointerReleased -= RulerPointerReleased;
+        _verticalRuler.PointerPressed -= RulerPointerPressed;
+        _verticalRuler.PointerMoved -= RulerPointerMoved;
+        _verticalRuler.PointerReleased -= RulerPointerReleased;
+        foreach (var figure in _figureObjects) figure.Dispose();
+        _figureObjects.Clear();
+        foreach (var frame in _textFrameObjects) frame.Dispose();
+        _textFrameObjects.Clear();
+        foreach (var furniture in _furnitureObjects) furniture.Dispose();
+        _furnitureObjects.Clear();
+        foreach (var guide in _guideObjects) guide.Dispose();
+        _guideObjects.Clear();
+    }
+
+    public void SetSelectedFigure(string? key)
+    {
+        foreach (var figure in _figureObjects)
+            figure.IsSelected = key is not null && string.Equals(figure.SelectionKey, key, StringComparison.Ordinal);
+    }
+
+    public void SetSelectedTextFrame(string? frameId)
+    {
+        foreach (var frame in _textFrameObjects)
+            frame.IsSelected = frameId is not null &&
+                               string.Equals(frame.FrameId, frameId, StringComparison.Ordinal);
+    }
+
+    public void SetSelectedFurniture(string? key)
+    {
+        foreach (var furniture in _furnitureObjects)
+            furniture.IsSelected = key is not null &&
+                                   string.Equals(furniture.SelectionKey, key, StringComparison.Ordinal);
+    }
+
+    private void ClearPageCanvas()
+    {
+        foreach (var figure in _figureObjects) figure.Dispose();
+        _figureObjects.Clear();
+        foreach (var frame in _textFrameObjects) frame.Dispose();
+        _textFrameObjects.Clear();
+        foreach (var furniture in _furnitureObjects) furniture.Dispose();
+        _furnitureObjects.Clear();
+        foreach (var guide in _guideObjects) guide.Dispose();
+        _guideObjects.Clear();
+        _pageCanvas.Children.Clear();
+    }
+
+    private void RaiseInteractiveGuides()
+    {
+        foreach (var guide in _guideObjects)
+        {
+            if (!_pageCanvas.Children.Remove(guide)) continue;
+            _pageCanvas.Children.Add(guide);
+        }
+    }
+
+    private void RenderRunningFurniture(
+        PageLayoutPage page,
+        BookStyle style,
+        double scale,
+        string? selectedFurnitureKey)
+    {
+        var content = page.ContentBounds;
+        var pageStyleId = page.PageStyleId ?? style.DefaultPageStyleId;
+
+        AddFurniture(
+            PageFurnitureKind.ParentPage,
+            pageStyleId,
+            $"Parent · {pageStyleId}",
+            content.XPoints,
+            5,
+            Math.Min(150, Math.Max(90, content.WidthPoints * .42)),
+            18,
+            TextAlignment.Left,
+            editable: false,
+            placeholder: null,
+            parentChip: true);
+
+        if (page.IsBlank) return;
+
+        var fontSize = Math.Max(6, style.HeaderFooterFontSizePoints);
+        var cellWidth = content.WidthPoints / 3d;
+        var headerHeight = Math.Max(16, fontSize * 1.7);
+        var footerHeight = headerHeight;
+        var headerY = Math.Max(20, content.YPoints / 2d - headerHeight / 2d);
+        var bottomMargin = Math.Max(18, page.HeightPoints - content.BottomPoints);
+        var footerY = Math.Min(
+            page.HeightPoints - footerHeight - 5,
+            content.BottomPoints + bottomMargin / 2d - footerHeight / 2d);
+
+        if (style.ShowHeadersAndFooters)
+        {
+            AddFurniture(PageFurnitureKind.HeaderLeft, style.HeaderLeft, style.HeaderLeft,
+                content.XPoints, headerY, cellWidth, headerHeight, TextAlignment.Left, true, "Header left");
+            AddFurniture(PageFurnitureKind.HeaderCenter, style.HeaderCenter, style.HeaderCenter,
+                content.XPoints + cellWidth, headerY, cellWidth, headerHeight, TextAlignment.Center, true, "Header center");
+            AddFurniture(PageFurnitureKind.HeaderRight, style.HeaderRight, style.HeaderRight,
+                content.XPoints + cellWidth * 2, headerY, cellWidth, headerHeight, TextAlignment.Right, true, "Header right");
+
+            AddFurniture(PageFurnitureKind.FooterLeft, style.FooterLeft, style.FooterLeft,
+                content.XPoints, footerY, cellWidth, footerHeight, TextAlignment.Left, true, "Footer left");
+
+            if (!string.IsNullOrWhiteSpace(style.FooterCenter) || !style.ShowPageNumbers)
+            {
+                AddFurniture(PageFurnitureKind.FooterCenter, style.FooterCenter, style.FooterCenter,
+                    content.XPoints + cellWidth, footerY, cellWidth, footerHeight, TextAlignment.Center, true, "Footer center");
+            }
+            else
+            {
+                AddFurniture(PageFurnitureKind.PageNumber, page.DisplayNumberText, page.DisplayNumberText,
+                    content.XPoints + cellWidth, footerY, cellWidth, footerHeight, TextAlignment.Center, false, null);
+            }
+
+            AddFurniture(PageFurnitureKind.FooterRight, style.FooterRight, style.FooterRight,
+                content.XPoints + cellWidth * 2, footerY, cellWidth, footerHeight, TextAlignment.Right, true, "Footer right");
+        }
+        else if (style.ShowPageNumbers)
+        {
+            AddFurniture(PageFurnitureKind.PageNumber, page.DisplayNumberText, page.DisplayNumberText,
+                content.XPoints + cellWidth, footerY, cellWidth, footerHeight, TextAlignment.Center, false, null);
+        }
+
+        void AddFurniture(
+            PageFurnitureKind kind,
+            string value,
+            string display,
+            double xPoints,
+            double yPoints,
+            double widthPoints,
+            double heightPoints,
+            TextAlignment alignment,
+            bool editable,
+            string? placeholder,
+            bool parentChip = false)
+        {
+            var overlay = new RunningFurnitureOverlay(
+                page.Index,
+                kind,
+                value,
+                display,
+                Math.Max(36, widthPoints * scale),
+                Math.Max(16, heightPoints * scale),
+                Math.Max(6, style.HeaderFooterFontSizePoints * scale),
+                alignment,
+                editable,
+                placeholder,
+                parentChip,
+                () => _furnitureSelected(this, page, kind, value),
+                text => _furnitureEdited(this, page, kind, text));
+
+            overlay.IsSelected = selectedFurnitureKey is not null &&
+                                 string.Equals(overlay.SelectionKey, selectedFurnitureKey, StringComparison.Ordinal);
+            _furnitureObjects.Add(overlay);
+            _pageCanvas.Children.Add(overlay);
+            Canvas.SetLeft(overlay, xPoints * scale);
+            Canvas.SetTop(overlay, yPoints * scale);
+        }
+    }
+
+    private void RenderTextFrameObjects(
+        PageLayoutPage page,
+        DocumentAst? ast,
+        double scale,
+        string? selectedFrameId)
+    {
+        if (ast is null) return;
+
+        var allFragments = page.Columns.SelectMany(static column => column.Fragments).ToArray();
+        var frameGroups = allFragments
+            .Where(static fragment =>
+                fragment.Kind == PageLayoutFragmentKind.TextFrame &&
+                !string.IsNullOrWhiteSpace(fragment.FrameId))
+            .GroupBy(static fragment => fragment.FrameId!, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var group in frameGroups)
+        {
+            var block = TextFrameSourceEditor.FindFrameBlock(ast, group.Key);
+            var frame = block?.Formatting?.TextFrame;
+            if (block is null || frame is null) continue;
+
+            var first = group.First();
+            var container = first.ContainerBounds ?? Union(group.Select(static fragment => fragment.Bounds));
+            var overset = allFragments.Any(fragment =>
+                fragment.Kind == PageLayoutFragmentKind.OversetIndicator &&
+                string.Equals(fragment.FrameId, frame.Id, StringComparison.Ordinal));
+
+            var nearby = CollectSnapBounds(page, container);
+            var overlay = new TextFrameObjectOverlay(
+                _pageCanvas,
+                frame,
+                container,
+                scale,
+                overset,
+                () =>
+                {
+                    SetSelectedTextFrame(null);
+                    _textFrameSelected(this, block, frame, container, overset);
+                },
+                (dx, dy) => _textFrameMoved(this, block, frame, container, dx, dy),
+                (width, height) => _textFrameResized(this, block, frame, container, width, height),
+                (x, y) =>
+                {
+                    if (!_snapEnabled()) return (x, y);
+                    var snapped = PagedLayoutSnapEngine.SnapMove(page, container, x, y, nearby);
+                    return (snapped.XPoints, snapped.YPoints);
+                },
+                (width, height) =>
+                {
+                    if (!_snapEnabled()) return (width, height);
+                    var snapped = PagedLayoutSnapEngine.SnapResize(page, container, width, height, nearby);
+                    return (snapped.WidthPoints, snapped.HeightPoints);
+                });
+
+            overlay.IsSelected = selectedFrameId is not null &&
+                                 string.Equals(selectedFrameId, frame.Id, StringComparison.Ordinal);
+            _textFrameObjects.Add(overlay);
+            _pageCanvas.Children.Add(overlay);
+            Canvas.SetLeft(overlay, container.XPoints * scale);
+            Canvas.SetTop(overlay, container.YPoints * scale);
+        }
+    }
+
+    private static IReadOnlyList<PageLayoutRect> CollectSnapBounds(
+        PageLayoutPage page,
+        PageLayoutRect moving)
+    {
+        var candidates = page.FloatingObjects
+            .Where(static fragment =>
+                fragment.Kind is PageLayoutFragmentKind.Figure or
+                    PageLayoutFragmentKind.FloatingObject or
+                    PageLayoutFragmentKind.MarginNote)
+            .Select(static fragment => fragment.Bounds)
+            .Concat(page.Columns.SelectMany(static column => column.Fragments)
+                .Where(static fragment => fragment.Kind == PageLayoutFragmentKind.TextFrame)
+                .Select(static fragment => fragment.ContainerBounds ?? fragment.Bounds))
+            .Where(bounds => !SameBounds(bounds, moving))
+            .Distinct()
+            .ToArray();
+
+        return candidates;
+    }
+
+    private static bool SameBounds(PageLayoutRect left, PageLayoutRect right)
+        => Math.Abs(left.XPoints - right.XPoints) < .01 &&
+           Math.Abs(left.YPoints - right.YPoints) < .01 &&
+           Math.Abs(left.WidthPoints - right.WidthPoints) < .01 &&
+           Math.Abs(left.HeightPoints - right.HeightPoints) < .01;
+
+    private static PageLayoutRect Union(IEnumerable<PageLayoutRect> rectangles)
+    {
+        var values = rectangles.ToArray();
+        if (values.Length == 0) return new PageLayoutRect(0, 0, 36, 36);
+        var left = values.Min(static rect => rect.XPoints);
+        var top = values.Min(static rect => rect.YPoints);
+        var right = values.Max(static rect => rect.RightPoints);
+        var bottom = values.Max(static rect => rect.BottomPoints);
+        return new PageLayoutRect(left, top, Math.Max(36, right - left), Math.Max(36, bottom - top));
+    }
+
+    private void RenderFigureObjects(
+        PageLayoutPage page,
+        DocumentAst? ast,
+        double scale,
+        string? selectedFigureKey)
+    {
+        if (ast is null) return;
+
+        var fragments = page.Columns.SelectMany(static column => column.Fragments)
+            .Concat(page.FloatingObjects)
+            .Where(static fragment =>
+                fragment.Kind is PageLayoutFragmentKind.Figure or
+                    PageLayoutFragmentKind.FloatingObject or
+                    PageLayoutFragmentKind.MarginNote)
+            .ToArray();
+
+        foreach (var fragment in fragments)
+        {
+            if (fragment.SourceBlockIndex < 0 || fragment.SourceBlockIndex >= ast.Blocks.Count ||
+                ast.Blocks[fragment.SourceBlockIndex] is not FigureBlock figure)
+                continue;
+
+            var columnWidth = page.Columns
+                .FirstOrDefault(column => column.Fragments.Any(candidate => candidate.Id == fragment.Id))
+                ?.Bounds.WidthPoints ?? page.ContentBounds.WidthPoints;
+
+            var nearby = CollectSnapBounds(page, fragment.Bounds);
+            var overlay = new FigureObjectOverlay(
+                _pageCanvas,
+                figure,
+                fragment,
+                columnWidth,
+                scale,
+                () =>
+                {
+                    SetSelectedFigure(null);
+                    _figureSelected(this, figure, fragment);
+                },
+                (dx, dy) => _figureMoved(this, figure, fragment, dx, dy),
+                (width, height) => _figureResized(this, figure, fragment, columnWidth, width, height),
+                (x, y) =>
+                {
+                    if (!_snapEnabled()) return (x, y);
+                    var snapped = PagedLayoutSnapEngine.SnapMove(page, fragment.Bounds, x, y, nearby);
+                    return (snapped.XPoints, snapped.YPoints);
+                },
+                (width, height) =>
+                {
+                    if (!_snapEnabled()) return (width, height);
+                    var snapped = PagedLayoutSnapEngine.SnapResize(page, fragment.Bounds, width, height, nearby);
+                    return (snapped.WidthPoints, snapped.HeightPoints);
+                });
+
+            overlay.IsSelected = selectedFigureKey is not null &&
+                                 string.Equals(overlay.SelectionKey, selectedFigureKey, StringComparison.Ordinal);
+            _figureObjects.Add(overlay);
+            _pageCanvas.Children.Add(overlay);
+            Canvas.SetLeft(overlay, fragment.Bounds.XPoints * scale);
+            Canvas.SetTop(overlay, fragment.Bounds.YPoints * scale);
+        }
+    }
+
+    private void EditorCaretChanged(object? sender, EventArgs e) => _caretChanged(this);
+    private void EditorSelectionChanged(object? sender, EventArgs e) => _selectionChanged(this);
+    private void EditorGotFocus(object? sender, GotFocusEventArgs e) => _focused(this);
+
+    private void DrawRulers(double widthPoints, double heightPoints, double scale)
+    {
+        _horizontalRuler.Width = Math.Max(1, widthPoints * scale);
+        _verticalRuler.Height = Math.Max(1, heightPoints * scale);
+        _horizontalRuler.Children.Clear();
+        _verticalRuler.Children.Clear();
+
+        var tickBrush = new SolidColorBrush(Color.Parse("#8B8B91"));
+        var labelBrush = new SolidColorBrush(Color.Parse("#C8C8CC"));
+
+        for (double point = 0; point <= widthPoints + .001; point += 36)
+        {
+            var major = Math.Abs(point % 72) < .001;
+            var tick = new Border
+            {
+                Width = 1,
+                Height = major ? 8 : 5,
+                Background = tickBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(tick, point * scale);
+            Canvas.SetTop(tick, 20 - tick.Height);
+            _horizontalRuler.Children.Add(tick);
+
+            if (!major) continue;
+            var label = new TextBlock
+            {
+                Text = ((int)Math.Round(point / 72d)).ToString(),
+                FontSize = 8,
+                Foreground = labelBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(label, point * scale + 2);
+            Canvas.SetTop(label, 1);
+            _horizontalRuler.Children.Add(label);
+        }
+
+        for (double point = 0; point <= heightPoints + .001; point += 36)
+        {
+            var major = Math.Abs(point % 72) < .001;
+            var tick = new Border
+            {
+                Width = major ? 8 : 5,
+                Height = 1,
+                Background = tickBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(tick, 26 - tick.Width);
+            Canvas.SetTop(tick, point * scale);
+            _verticalRuler.Children.Add(tick);
+
+            if (!major) continue;
+            var label = new TextBlock
+            {
+                Text = ((int)Math.Round(point / 72d)).ToString(),
+                FontSize = 8,
+                Foreground = labelBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(label, 2);
+            Canvas.SetTop(label, point * scale + 1);
+            _verticalRuler.Children.Add(label);
+        }
+    }
+
+    private void RulerPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_currentPage is null || sender is not Control source ||
+            !e.GetCurrentPoint(source).Properties.IsLeftButtonPressed)
+            return;
+
+        _creatingGuide = true;
+        _creatingGuideOrientation = ReferenceEquals(sender, _horizontalRuler)
+            ? PageGuideOrientation.Vertical
+            : PageGuideOrientation.Horizontal;
+        e.Pointer.Capture(source);
+        UpdateGuideGhost(e.GetPosition(_pageCanvas));
+        e.Handled = true;
+    }
+
+    private void RulerPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_creatingGuide) return;
+        UpdateGuideGhost(e.GetPosition(_pageCanvas));
+        e.Handled = true;
+    }
+
+    private void RulerPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_creatingGuide || _currentPage is null) return;
+
+        var point = e.GetPosition(_pageCanvas);
+        _creatingGuide = false;
+        e.Pointer.Capture(null);
+        RemoveGuideGhost();
+
+        var position = _creatingGuideOrientation == PageGuideOrientation.Vertical
+            ? point.X / Math.Max(.01, _scale)
+            : point.Y / Math.Max(.01, _scale);
+        _guideCreated(this, _currentPage, _creatingGuideOrientation, position);
+        e.Handled = true;
+    }
+
+    private void UpdateGuideGhost(Point point)
+    {
+        RemoveGuideGhost();
+
+        if (_creatingGuideOrientation == PageGuideOrientation.Vertical)
+        {
+            _guideGhost = new Border
+            {
+                Width = 1,
+                Height = _pageCanvas.Height,
+                Background = new SolidColorBrush(Color.Parse("#00AEEF")),
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(_guideGhost, Math.Clamp(point.X, 0, _pageCanvas.Width));
+            Canvas.SetTop(_guideGhost, 0);
+        }
+        else
+        {
+            _guideGhost = new Border
+            {
+                Width = _pageCanvas.Width,
+                Height = 1,
+                Background = new SolidColorBrush(Color.Parse("#00AEEF")),
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(_guideGhost, 0);
+            Canvas.SetTop(_guideGhost, Math.Clamp(point.Y, 0, _pageCanvas.Height));
+        }
+
+        _pageCanvas.Children.Add(_guideGhost);
+    }
+
+    private void RemoveGuideGhost()
+    {
+        if (_guideGhost is null) return;
+        _pageCanvas.Children.Remove(_guideGhost);
+        _guideGhost = null;
+    }
+
+    private void DrawPageGuides(PageLayoutPage page, double scale)
+    {
+        if (page.BaselineGrid is { Enabled: true } baseline && baseline.IncrementPoints > 0)
+        {
+            var brush = new SolidColorBrush(Color.FromArgb(24, 80, 125, 190));
+            var start = page.ContentBounds.YPoints + Math.Max(0, baseline.StartPoints);
+            for (var y = start; y <= page.ContentBounds.BottomPoints; y += baseline.IncrementPoints)
+            {
+                var line = new Border
+                {
+                    Width = page.ContentBounds.WidthPoints * scale,
+                    Height = 1,
+                    Background = brush,
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(line, page.ContentBounds.XPoints * scale);
+                Canvas.SetTop(line, y * scale);
+                _pageCanvas.Children.Add(line);
+            }
+        }
+
+        foreach (var guide in page.Guides)
+        {
+            if (string.Equals(guide.Kind, "custom", StringComparison.Ordinal))
+            {
+                var overlay = new PageGuideOverlay(
+                    _pageCanvas,
+                    guide,
+                    page.WidthPoints * scale,
+                    page.HeightPoints * scale,
+                    scale,
+                    () => _furnitureSelected(
+                        this,
+                        page,
+                        PageFurnitureKind.ParentPage,
+                        page.PageStyleId ?? string.Empty),
+                    position => _guideMoved(this, page, guide, position));
+                _guideObjects.Add(overlay);
+                _pageCanvas.Children.Add(overlay);
+
+                if (guide.Orientation == PageLayoutGuideOrientation.Vertical)
+                {
+                    Canvas.SetLeft(overlay, guide.PositionPoints * scale - overlay.Width / 2d);
+                    Canvas.SetTop(overlay, 0);
+                }
+                else
+                {
+                    Canvas.SetLeft(overlay, 0);
+                    Canvas.SetTop(overlay, guide.PositionPoints * scale - overlay.Height / 2d);
+                }
+                continue;
+            }
+
+            var color = guide.Kind == "margin"
+                ? Color.FromArgb(52, 45, 126, 214)
+                : Color.FromArgb(38, 90, 155, 230);
+            var line = guide.Orientation == PageLayoutGuideOrientation.Vertical
+                ? new Border
+                {
+                    Width = 1,
+                    Height = page.HeightPoints * scale,
+                    Background = new SolidColorBrush(color),
+                    IsHitTestVisible = false
+                }
+                : new Border
+                {
+                    Width = page.WidthPoints * scale,
+                    Height = 1,
+                    Background = new SolidColorBrush(color),
+                    IsHitTestVisible = false
+                };
+
+            if (guide.Orientation == PageLayoutGuideOrientation.Vertical)
+            {
+                Canvas.SetLeft(line, guide.PositionPoints * scale);
+                Canvas.SetTop(line, 0);
+            }
+            else
+            {
+                Canvas.SetLeft(line, 0);
+                Canvas.SetTop(line, guide.PositionPoints * scale);
+            }
+            _pageCanvas.Children.Add(line);
+        }
+    }
+
+    private static IBrush SafeBrush(string? value, string fallback)
+    {
+        try
+        {
+            return new SolidColorBrush(Color.Parse(string.IsNullOrWhiteSpace(value) ? fallback : value));
+        }
+        catch
+        {
+            return new SolidColorBrush(Color.Parse(fallback));
+        }
+    }
+}
+
+internal sealed class PageGuideOverlay : Border, IDisposable
+{
+    private readonly Canvas _canvas;
+    private readonly PageLayoutGuide _guide;
+    private readonly double _scale;
+    private readonly Action _select;
+    private readonly Action<double> _commit;
+    private bool _dragging;
+
+    public PageGuideOverlay(
+        Canvas canvas,
+        PageLayoutGuide guide,
+        double pageWidth,
+        double pageHeight,
+        double scale,
+        Action select,
+        Action<double> commit)
+    {
+        _canvas = canvas;
+        _guide = guide;
+        _scale = scale;
+        _select = select;
+        _commit = commit;
+
+        Background = new SolidColorBrush(Color.FromArgb(1, 0, 174, 239));
+        Child = new Border
+        {
+            Width = guide.Orientation == PageLayoutGuideOrientation.Vertical ? 1 : double.NaN,
+            Height = guide.Orientation == PageLayoutGuideOrientation.Horizontal ? 1 : double.NaN,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.Parse(guide.Locked ? "#8A8F98" : "#00AEEF"))
+        };
+
+        if (guide.Orientation == PageLayoutGuideOrientation.Vertical)
+        {
+            Width = 7;
+            Height = pageHeight;
+        }
+        else
+        {
+            Width = pageWidth;
+            Height = 7;
+        }
+
+        PointerPressed += GuidePointerPressed;
+        PointerMoved += GuidePointerMoved;
+        PointerReleased += GuidePointerReleased;
+        ToolTip.SetTip(this, guide.Locked
+            ? "Locked parent-page guide"
+            : "Drag to reposition this parent-page guide");
+    }
+
+    public void Dispose()
+    {
+        PointerPressed -= GuidePointerPressed;
+        PointerMoved -= GuidePointerMoved;
+        PointerReleased -= GuidePointerReleased;
+    }
+
+    private void GuidePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        if (_guide.Locked)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        _dragging = true;
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    private void GuidePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging) return;
+        var point = e.GetPosition(_canvas);
+        if (_guide.Orientation == PageLayoutGuideOrientation.Vertical)
+        {
+            var x = Math.Clamp(point.X, 0, _canvas.Width);
+            Canvas.SetLeft(this, x - Width / 2d);
+        }
+        else
+        {
+            var y = Math.Clamp(point.Y, 0, _canvas.Height);
+            Canvas.SetTop(this, y - Height / 2d);
+        }
+        e.Handled = true;
+    }
+
+    private void GuidePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        e.Pointer.Capture(null);
+
+        var positionPixels = _guide.Orientation == PageLayoutGuideOrientation.Vertical
+            ? Canvas.GetLeft(this) + Width / 2d
+            : Canvas.GetTop(this) + Height / 2d;
+        _commit(positionPixels / Math.Max(.01, _scale));
+        e.Handled = true;
+    }
+}
+
+internal sealed class RunningFurnitureOverlay : Border, IDisposable
+{
+    private readonly int _pageIndex;
+    private readonly PageFurnitureKind _kind;
+    private string _lastCommittedValue;
+    private readonly Action _select;
+    private readonly Action<string> _commit;
+    private readonly TextBox? _editor;
+    private readonly TextBlock? _label;
+    private bool _selected;
+
+    public RunningFurnitureOverlay(
+        int pageIndex,
+        PageFurnitureKind kind,
+        string value,
+        string display,
+        double width,
+        double height,
+        double fontSize,
+        TextAlignment alignment,
+        bool editable,
+        string? placeholder,
+        bool parentChip,
+        Action select,
+        Action<string> commit)
+    {
+        _pageIndex = pageIndex;
+        _kind = kind;
+        _lastCommittedValue = value ?? string.Empty;
+        _select = select;
+        _commit = commit;
+
+        Width = width;
+        Height = height;
+        BorderThickness = new Thickness(1);
+        BorderBrush = Brushes.Transparent;
+        CornerRadius = new CornerRadius(parentChip ? 3 : 1);
+        Background = parentChip
+            ? new SolidColorBrush(Color.FromArgb(24, 0, 122, 204))
+            : Brushes.Transparent;
+
+        if (editable)
+        {
+            _editor = new TextBox
+            {
+                Text = value ?? string.Empty,
+                PlaceholderText = placeholder,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(3, 0),
+                FontSize = fontSize,
+                Foreground = new SolidColorBrush(Color.Parse("#60646C")),
+                TextAlignment = alignment,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                AcceptsReturn = false
+            };
+            _editor.GotFocus += EditorGotFocus;
+            _editor.LostFocus += EditorLostFocus;
+            _editor.KeyDown += EditorKeyDown;
+            Child = _editor;
+        }
+        else
+        {
+            _label = new TextBlock
+            {
+                Text = display,
+                FontSize = parentChip ? Math.Max(8, fontSize * .9) : fontSize,
+                FontWeight = parentChip ? FontWeight.SemiBold : FontWeight.Normal,
+                Foreground = new SolidColorBrush(Color.Parse(parentChip ? "#007ACC" : "#60646C")),
+                TextAlignment = alignment,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0)
+            };
+            Child = _label;
+            PointerPressed += LabelPointerPressed;
+        }
+
+        ToolTip.SetTip(this, kind switch
+        {
+            PageFurnitureKind.ParentPage => "Select parent page / master-page settings",
+            PageFurnitureKind.PageNumber => "Generated page number",
+            _ => "Click and type to edit running furniture"
+        });
+    }
+
+    public string SelectionKey => $"{_pageIndex}:{_kind}";
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            BorderBrush = new SolidColorBrush(Color.Parse(value ? "#007ACC" : "#00000000"));
+            BorderThickness = new Thickness(value ? 1.5 : 1);
+            if (_editor is not null)
+                _editor.Opacity = value || !string.IsNullOrWhiteSpace(_editor.Text) ? 1 : .42;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_editor is not null)
+        {
+            _editor.GotFocus -= EditorGotFocus;
+            _editor.LostFocus -= EditorLostFocus;
+            _editor.KeyDown -= EditorKeyDown;
+        }
+        if (_label is not null)
+            PointerPressed -= LabelPointerPressed;
+    }
+
+    private void LabelPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        e.Handled = true;
+    }
+
+    private void EditorGotFocus(object? sender, GotFocusEventArgs e)
+    {
+        _select();
+        IsSelected = true;
+    }
+
+    private void EditorLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => CommitIfChanged();
+
+    private void EditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        CommitIfChanged();
+        e.Handled = true;
+    }
+
+    private void CommitIfChanged()
+    {
+        if (_editor is null) return;
+        var value = _editor.Text ?? string.Empty;
+        if (string.Equals(value, _lastCommittedValue, StringComparison.Ordinal)) return;
+        _lastCommittedValue = value;
+        _commit(value);
+    }
+}
+
+internal sealed class FigureObjectOverlay : Grid, IDisposable
+{
+    private readonly Canvas _canvas;
+    private readonly FigureBlock _figure;
+    private readonly PageLayoutFragment _fragment;
+    private readonly double _scale;
+    private readonly Action _select;
+    private readonly Action<double, double> _moveCommitted;
+    private readonly Action<double, double> _resizeCommitted;
+    private readonly Func<double, double, (double X, double Y)> _snapMove;
+    private readonly Func<double, double, (double Width, double Height)> _snapResize;
+    private readonly Border _frame;
+    private readonly Border _resizeHandle;
+    private Bitmap? _bitmap;
+    private bool _selected;
+    private bool _dragging;
+    private bool _resizing;
+    private Point _startPointer;
+    private double _startLeft;
+    private double _startTop;
+    private double _startWidth;
+    private double _startHeight;
+
+    public FigureObjectOverlay(
+        Canvas canvas,
+        FigureBlock figure,
+        PageLayoutFragment fragment,
+        double columnWidthPoints,
+        double scale,
+        Action select,
+        Action<double, double> moveCommitted,
+        Action<double, double> resizeCommitted,
+        Func<double, double, (double X, double Y)> snapMove,
+        Func<double, double, (double Width, double Height)> snapResize)
+    {
+        _canvas = canvas;
+        _figure = figure;
+        _fragment = fragment;
+        _scale = scale;
+        _select = select;
+        _moveCommitted = moveCommitted;
+        _resizeCommitted = resizeCommitted;
+        _snapMove = snapMove;
+        _snapResize = snapResize;
+
+        Width = Math.Max(24, fragment.Bounds.WidthPoints * scale);
+        Height = Math.Max(24, fragment.Bounds.HeightPoints * scale);
+        ClipToBounds = false;
+
+        _frame = new Border
+        {
+            Background = Brushes.White,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(1),
+            ClipToBounds = true,
+            Child = BuildContent(figure)
+        };
+        Children.Add(_frame);
+
+        _resizeHandle = new Border
+        {
+            Width = 10,
+            Height = 10,
+            Background = new SolidColorBrush(Color.Parse("#007ACC")),
+            BorderBrush = Brushes.White,
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, -5, -5),
+            IsVisible = false
+        };
+        Children.Add(_resizeHandle);
+
+        PointerPressed += BodyPointerPressed;
+        PointerMoved += BodyPointerMoved;
+        PointerReleased += BodyPointerReleased;
+        _resizeHandle.PointerPressed += ResizePointerPressed;
+        _resizeHandle.PointerMoved += ResizePointerMoved;
+        _resizeHandle.PointerReleased += ResizePointerReleased;
+
+        ToolTip.SetTip(this, "Click to select • drag to move • drag blue handle to resize");
+    }
+
+    public string SelectionKey
+        => !string.IsNullOrWhiteSpace(_figure.Identifier)
+            ? $"id:{_figure.Identifier}"
+            : $"source:{_figure.Source}\u001f{_figure.Caption}";
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            _frame.BorderBrush = new SolidColorBrush(Color.Parse(value ? "#007ACC" : "#D8D8D8"));
+            _frame.BorderThickness = new Thickness(value ? 2 : 1);
+            _resizeHandle.IsVisible = value;
+        }
+    }
+
+    public void Dispose()
+    {
+        PointerPressed -= BodyPointerPressed;
+        PointerMoved -= BodyPointerMoved;
+        PointerReleased -= BodyPointerReleased;
+        _resizeHandle.PointerPressed -= ResizePointerPressed;
+        _resizeHandle.PointerMoved -= ResizePointerMoved;
+        _resizeHandle.PointerReleased -= ResizePointerReleased;
+        _bitmap?.Dispose();
+        _bitmap = null;
+    }
+
+    private Control BuildContent(FigureBlock figure)
+    {
+        var grid = new Grid
+        {
+            Background = Brushes.White,
+            RowDefinitions = string.IsNullOrWhiteSpace(figure.Caption)
+                ? new RowDefinitions("*")
+                : new RowDefinitions("*,Auto")
+        };
+
+        var image = TryLoadImage(figure);
+        if (image is not null)
+        {
+            grid.Children.Add(image);
+        }
+        else
+        {
+            grid.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#F2F3F5")),
+                Child = new TextBlock
+                {
+                    Text = figure.Source,
+                    Foreground = new SolidColorBrush(Color.Parse("#60646C")),
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center,
+                    Margin = new Thickness(8),
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(figure.Caption))
+        {
+            var caption = new TextBlock
+            {
+                Text = figure.Caption,
+                Foreground = new SolidColorBrush(Color.Parse("#30343A")),
+                FontSize = 9,
+                FontStyle = FontStyle.Italic,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+                Margin = new Thickness(5, 3, 5, 4)
+            };
+            Grid.SetRow(caption, 1);
+            grid.Children.Add(caption);
+        }
+
+        return grid;
+    }
+
+    private Image? TryLoadImage(FigureBlock figure)
+    {
+        if (figure.SourceKind == FigureSourceKind.ExternalUri || string.IsNullOrWhiteSpace(figure.Source))
+            return null;
+
+        var project = TrackingProjectRepository.ActiveInstance?.CurrentProject;
+        if (project is null) return null;
+
+        var source = figure.Source.Trim();
+        var path = Path.IsPathRooted(source)
+            ? source
+            : Path.Combine(project.RootPath, source.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            _bitmap = new Bitmap(path);
+            return new Image
+            {
+                Source = _bitmap,
+                Stretch = figure.Layout?.Fit switch
+                {
+                    FigureFitMode.Native => Stretch.None,
+                    FigureFitMode.Cover => Stretch.UniformToFill,
+                    FigureFitMode.Fill => Stretch.Fill,
+                    _ => Stretch.Uniform
+                }
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private void BodyPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_resizing || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _dragging = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startLeft = Canvas.GetLeft(this);
+        _startTop = Canvas.GetTop(this);
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    private void BodyPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging || _resizing) return;
+        var point = e.GetPosition(_canvas);
+        var dx = point.X - _startPointer.X;
+        var dy = point.Y - _startPointer.Y;
+        var rawX = (_startLeft + dx) / Math.Max(.01, _scale);
+        var rawY = (_startTop + dy) / Math.Max(.01, _scale);
+        var snapped = _snapMove(rawX, rawY);
+        var left = Math.Clamp(snapped.X * _scale, 0, Math.Max(0, _canvas.Width - Width));
+        var top = Math.Clamp(snapped.Y * _scale, 0, Math.Max(0, _canvas.Height - Height));
+        Canvas.SetLeft(this, left);
+        Canvas.SetTop(this, top);
+        e.Handled = true;
+    }
+
+    private void BodyPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_dragging || _resizing) return;
+        _dragging = false;
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _moveCommitted((left - _startLeft) / _scale, (top - _startTop) / _scale);
+    }
+
+    private void ResizePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_resizeHandle).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _dragging = false;
+        _resizing = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startWidth = Width;
+        _startHeight = Height;
+        e.Pointer.Capture(_resizeHandle);
+        e.Handled = true;
+    }
+
+    private void ResizePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_resizing) return;
+        var point = e.GetPosition(_canvas);
+        var dx = point.X - _startPointer.X;
+        var dy = point.Y - _startPointer.Y;
+        var rawWidth = Math.Max(24 / Math.Max(.01, _scale), (_startWidth + dx) / Math.Max(.01, _scale));
+        var rawHeight = Math.Max(24 / Math.Max(.01, _scale), (_startHeight + dy) / Math.Max(.01, _scale));
+        var snapped = _snapResize(rawWidth, rawHeight);
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        Width = Math.Clamp(snapped.Width * _scale, 36, Math.Max(36, _canvas.Width - left));
+        Height = Math.Clamp(snapped.Height * _scale, 36, Math.Max(36, _canvas.Height - top));
+        e.Handled = true;
+    }
+
+    private void ResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_resizing) return;
+        _resizing = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _resizeCommitted(Width / _scale, Height / _scale);
+    }
+}
+
+
+internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
+{
+    private readonly Canvas _canvas;
+    private readonly TextFrameFormatting _frame;
+    private readonly double _scale;
+    private readonly Action _select;
+    private readonly Action<double, double> _moveCommitted;
+    private readonly Action<double, double> _resizeCommitted;
+    private readonly Func<double, double, (double X, double Y)> _snapMove;
+    private readonly Func<double, double, (double Width, double Height)> _snapResize;
+    private readonly Border _outline;
+    private readonly Border _titleBar;
+    private readonly TextBlock _titleText;
+    private readonly Border _resizeHandle;
+    private readonly Border _inputPort;
+    private readonly Border _outputPort;
+    private readonly Border _oversetBadge;
+    private bool _selected;
+    private bool _dragging;
+    private bool _resizing;
+    private Point _startPointer;
+    private double _startLeft;
+    private double _startTop;
+    private double _startWidth;
+    private double _startHeight;
+
+    public TextFrameObjectOverlay(
+        Canvas canvas,
+        TextFrameFormatting frame,
+        PageLayoutRect container,
+        double scale,
+        bool overset,
+        Action select,
+        Action<double, double> moveCommitted,
+        Action<double, double> resizeCommitted,
+        Func<double, double, (double X, double Y)> snapMove,
+        Func<double, double, (double Width, double Height)> snapResize)
+    {
+        _canvas = canvas;
+        _frame = frame;
+        _scale = scale;
+        _select = select;
+        _moveCommitted = moveCommitted;
+        _resizeCommitted = resizeCommitted;
+        _snapMove = snapMove;
+        _snapResize = snapResize;
+
+        Width = Math.Max(36, container.WidthPoints * scale);
+        Height = Math.Max(36, container.HeightPoints * scale);
+        ClipToBounds = false;
+
+        _outline = new Border
+        {
+            Width = Width,
+            Height = Height,
+            BorderBrush = new SolidColorBrush(Color.Parse("#6C9BC5")),
+            BorderThickness = new Thickness(1),
+            Background = null,
+            IsHitTestVisible = false
+        };
+        Children.Add(_outline);
+
+        _titleText = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(frame.NextFrameId)
+                ? frame.Id
+                : $"{frame.Id}  →  {frame.NextFrameId}",
+            Foreground = Brushes.White,
+            FontSize = 9.5,
+            FontWeight = FontWeight.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0)
+        };
+        _titleBar = new Border
+        {
+            Height = 18,
+            Background = new SolidColorBrush(Color.FromArgb(205, 0, 122, 204)),
+            CornerRadius = new CornerRadius(2, 2, 0, 0),
+            Child = _titleText
+        };
+        Children.Add(_titleBar);
+
+        _inputPort = Port();
+        _outputPort = Port();
+        Children.Add(_inputPort);
+        Children.Add(_outputPort);
+
+        _resizeHandle = new Border
+        {
+            Width = 10,
+            Height = 10,
+            Background = new SolidColorBrush(Color.Parse("#007ACC")),
+            BorderBrush = Brushes.White,
+            BorderThickness = new Thickness(1),
+            IsVisible = false
+        };
+        Children.Add(_resizeHandle);
+
+        _oversetBadge = new Border
+        {
+            Width = 15,
+            Height = 15,
+            Background = new SolidColorBrush(Color.Parse("#D13438")),
+            CornerRadius = new CornerRadius(2),
+            IsVisible = overset,
+            Child = new TextBlock
+            {
+                Text = "+",
+                Foreground = Brushes.White,
+                FontSize = 11,
+                FontWeight = FontWeight.Bold,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        Children.Add(_oversetBadge);
+
+        _titleBar.PointerPressed += DragPointerPressed;
+        _titleBar.PointerMoved += DragPointerMoved;
+        _titleBar.PointerReleased += DragPointerReleased;
+        _inputPort.PointerPressed += SelectPointerPressed;
+        _outputPort.PointerPressed += SelectPointerPressed;
+        _resizeHandle.PointerPressed += ResizePointerPressed;
+        _resizeHandle.PointerMoved += ResizePointerMoved;
+        _resizeHandle.PointerReleased += ResizePointerReleased;
+
+        UpdateChrome();
+        ToolTip.SetTip(_titleBar, "Text frame • drag to move");
+        ToolTip.SetTip(_resizeHandle, "Resize text frame");
+        ToolTip.SetTip(_outputPort,
+            string.IsNullOrWhiteSpace(frame.NextFrameId)
+                ? "Thread output: not linked"
+                : $"Thread output → {frame.NextFrameId}");
+        if (overset)
+            ToolTip.SetTip(_oversetBadge, "Overset text: enlarge or link this frame");
+    }
+
+    public string FrameId => _frame.Id;
+
+    public bool IsSelected
+    {
+        get => _selected;
+        set
+        {
+            _selected = value;
+            _outline.BorderBrush = new SolidColorBrush(Color.Parse(value ? "#007ACC" : "#6C9BC5"));
+            _outline.BorderThickness = new Thickness(value ? 2 : 1);
+            _titleBar.Opacity = value ? 1 : .78;
+            _resizeHandle.IsVisible = value;
+            _inputPort.IsVisible = value;
+            _outputPort.IsVisible = value;
+        }
+    }
+
+    public void Dispose()
+    {
+        _titleBar.PointerPressed -= DragPointerPressed;
+        _titleBar.PointerMoved -= DragPointerMoved;
+        _titleBar.PointerReleased -= DragPointerReleased;
+        _inputPort.PointerPressed -= SelectPointerPressed;
+        _outputPort.PointerPressed -= SelectPointerPressed;
+        _resizeHandle.PointerPressed -= ResizePointerPressed;
+        _resizeHandle.PointerMoved -= ResizePointerMoved;
+        _resizeHandle.PointerReleased -= ResizePointerReleased;
+    }
+
+    private static Border Port()
+        => new()
+        {
+            Width = 9,
+            Height = 9,
+            Background = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.Parse("#007ACC")),
+            BorderThickness = new Thickness(2),
+            IsVisible = false
+        };
+
+    private void UpdateChrome()
+    {
+        _outline.Width = Width;
+        _outline.Height = Height;
+        _titleBar.Width = Math.Max(56, Math.Min(Width, 190));
+        Canvas.SetLeft(_titleBar, 0);
+        Canvas.SetTop(_titleBar, -18);
+
+        Canvas.SetLeft(_inputPort, -4);
+        Canvas.SetTop(_inputPort, Math.Max(5, Height / 2 - 4));
+        Canvas.SetLeft(_outputPort, Math.Max(0, Width - 5));
+        Canvas.SetTop(_outputPort, Math.Max(5, Height / 2 - 4));
+
+        Canvas.SetLeft(_resizeHandle, Math.Max(0, Width - 5));
+        Canvas.SetTop(_resizeHandle, Math.Max(0, Height - 5));
+        Canvas.SetLeft(_oversetBadge, Math.Max(0, Width - 15));
+        Canvas.SetTop(_oversetBadge, Math.Max(0, Height - 15));
+    }
+
+    private void SelectPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        e.Handled = true;
+    }
+
+    private void DragPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_titleBar).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _dragging = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startLeft = Canvas.GetLeft(this);
+        _startTop = Canvas.GetTop(this);
+        e.Pointer.Capture(_titleBar);
+        e.Handled = true;
+    }
+
+    private void DragPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging) return;
+        var point = e.GetPosition(_canvas);
+        var rawX = (_startLeft + point.X - _startPointer.X) / Math.Max(.01, _scale);
+        var rawY = (_startTop + point.Y - _startPointer.Y) / Math.Max(.01, _scale);
+        var snapped = _snapMove(rawX, rawY);
+        Canvas.SetLeft(this, Math.Clamp(snapped.X * _scale, 0, Math.Max(0, _canvas.Width - Width)));
+        Canvas.SetTop(this, Math.Clamp(snapped.Y * _scale, 0, Math.Max(0, _canvas.Height - Height)));
+        e.Handled = true;
+    }
+
+    private void DragPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _moveCommitted((left - _startLeft) / _scale, (top - _startTop) / _scale);
+    }
+
+    private void ResizePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_resizeHandle).Properties.IsLeftButtonPressed) return;
+        _select();
+        IsSelected = true;
+        _resizing = true;
+        _startPointer = e.GetPosition(_canvas);
+        _startWidth = Width;
+        _startHeight = Height;
+        e.Pointer.Capture(_resizeHandle);
+        e.Handled = true;
+    }
+
+    private void ResizePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_resizing) return;
+        var point = e.GetPosition(_canvas);
+        var rawWidth = Math.Max(36 / Math.Max(.01, _scale), (_startWidth + point.X - _startPointer.X) / Math.Max(.01, _scale));
+        var rawHeight = Math.Max(36 / Math.Max(.01, _scale), (_startHeight + point.Y - _startPointer.Y) / Math.Max(.01, _scale));
+        var snapped = _snapResize(rawWidth, rawHeight);
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        Width = Math.Clamp(snapped.Width * _scale, 54, Math.Max(54, _canvas.Width - left));
+        Height = Math.Clamp(snapped.Height * _scale, 54, Math.Max(54, _canvas.Height - top));
+        UpdateChrome();
+        e.Handled = true;
+    }
+
+    private void ResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_resizing) return;
+        _resizing = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        _resizeCommitted(Width / _scale, Height / _scale);
+    }
+}

@@ -186,7 +186,12 @@ public sealed record TextFrameFormatting(
     double InsetBottomPoints = 0,
     double InsetLeftPoints = 0,
     TextDirectionMode Direction = TextDirectionMode.Auto,
-    BaselineGridFormatting? BaselineGrid = null);
+    BaselineGridFormatting? BaselineGrid = null,
+    double? XPoints = null,
+    double? YPoints = null,
+    double? WidthPoints = null,
+    double? HeightPoints = null,
+    int PageOffset = 0);
 
 public sealed record AnchoredObjectFormatting(
     string Id,

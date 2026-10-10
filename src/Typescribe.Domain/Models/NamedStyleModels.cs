@@ -221,7 +221,8 @@ public sealed record NamedStyleCatalog(
             BleedOutsideInches = child.BleedOutsideInches ?? parent.BleedOutsideInches,
             SlugInches = child.SlugInches ?? parent.SlugInches,
             CropMarks = child.CropMarks ?? parent.CropMarks,
-            BaselineGrid = child.BaselineGrid ?? parent.BaselineGrid
+            BaselineGrid = child.BaselineGrid ?? parent.BaselineGrid,
+            Guides = child.Guides ?? parent.Guides
         };
 }
 
@@ -338,6 +339,15 @@ public sealed record CellStyleDefinition(
     ScriptMode? Script = null,
     TextDirectionMode? Direction = null) : INamedStyleDefinition;
 
+public enum PageGuideOrientation { Horizontal, Vertical }
+
+public sealed record PageGuideDefinition(
+    string Id,
+    PageGuideOrientation Orientation,
+    double PositionInches,
+    string? Name = null,
+    bool Locked = false);
+
 public sealed record PageStyleDefinition(
     string Id,
     string Name,
@@ -357,4 +367,5 @@ public sealed record PageStyleDefinition(
     double? BleedOutsideInches = null,
     double? SlugInches = null,
     bool? CropMarks = null,
-    BaselineGridFormatting? BaselineGrid = null) : INamedStyleDefinition;
+    BaselineGridFormatting? BaselineGrid = null,
+    IReadOnlyList<PageGuideDefinition>? Guides = null) : INamedStyleDefinition;

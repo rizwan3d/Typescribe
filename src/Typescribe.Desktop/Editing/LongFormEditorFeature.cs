@@ -24,7 +24,7 @@ internal sealed class LongFormEditorFeature
     private const double DefaultFontSize = 16;
     private const double MinFontSize = 12;
     private const double MaxFontSize = 26;
-    private const double PageWidth = 940;
+    private const double PageWidth = 820;
     private const int MaximumMatches = 5000;
 
     private readonly StudioWorkspaceWindow _window;
@@ -58,7 +58,7 @@ internal sealed class LongFormEditorFeature
     private bool _markdownMarks;
     private bool _wordWrap = true;
     private bool _lineNumbers;
-    private bool _pageWidth;
+    private bool _pageWidth = true;
 
     private LongFormEditorFeature(StudioWorkspaceWindow window, WorkspaceViewModel viewModel)
     {

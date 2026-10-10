@@ -4,21 +4,23 @@
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="TsAppBackgroundBrush" Color="#F3F5F8" />
+          <SolidColorBrush x:Key="TsAppBackgroundBrush" Color="#E9EBEE" />
+          <SolidColorBrush x:Key="TsCanvasBrush" Color="#E9EBEE" />
           <SolidColorBrush x:Key="TsSurfaceBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="TsSurfaceMutedBrush" Color="#F0F2F6" />
-          <SolidColorBrush x:Key="TsSurfaceHoverBrush" Color="#E8EBF1" />
-          <SolidColorBrush x:Key="TsEditorBrush" Color="#FBFCFD" />
-          <SolidColorBrush x:Key="TsBorderBrush" Color="#D8DDE6" />
-          <SolidColorBrush x:Key="TsTextBrush" Color="#202633" />
-          <SolidColorBrush x:Key="TsMutedTextBrush" Color="#687386" />
-          <SolidColorBrush x:Key="TsAccentBrush" Color="#5965D8" />
-          <SolidColorBrush x:Key="TsAccentHoverBrush" Color="#4D58C4" />
-          <SolidColorBrush x:Key="TsAccentSoftBrush" Color="#E9EBFF" />
+          <SolidColorBrush x:Key="TsSurfaceMutedBrush" Color="#F4F5F7" />
+          <SolidColorBrush x:Key="TsSurfaceHoverBrush" Color="#EAF2FD" />
+          <SolidColorBrush x:Key="TsEditorBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="TsBorderBrush" Color="#D5D9E0" />
+          <SolidColorBrush x:Key="TsTextBrush" Color="#1E242C" />
+          <SolidColorBrush x:Key="TsMutedTextBrush" Color="#697386" />
+          <SolidColorBrush x:Key="TsAccentBrush" Color="#2F80ED" />
+          <SolidColorBrush x:Key="TsAccentHoverBrush" Color="#1D6FD8" />
+          <SolidColorBrush x:Key="TsAccentSoftBrush" Color="#E7F1FF" />
           <SolidColorBrush x:Key="TsDangerBrush" Color="#C64B59" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <SolidColorBrush x:Key="TsAppBackgroundBrush" Color="#111419" />
+          <SolidColorBrush x:Key="TsCanvasBrush" Color="#111419" />
           <SolidColorBrush x:Key="TsSurfaceBrush" Color="#181C22" />
           <SolidColorBrush x:Key="TsSurfaceMutedBrush" Color="#20252E" />
           <SolidColorBrush x:Key="TsSurfaceHoverBrush" Color="#2A303B" />
@@ -313,5 +315,53 @@
   <Style Selector="Window.typescribe-studio GridSplitter:pointerover">
     <Setter Property="Background" Value="{DynamicResource TsAccentBrush}" />
     <Setter Property="Opacity" Value="0.7" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace ToggleButton.workspace-view-toggle">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
+    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="FontSize" Value="11.5" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace ToggleButton.workspace-view-toggle:pointerover">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceHoverBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsTextBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace ToggleButton.workspace-view-toggle:checked">
+    <Setter Property="Background" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="Foreground" Value="White" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace TabControl.unified-inspector-tabs">
+    <Setter Property="Background" Value="{DynamicResource TsSurfaceBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace TabControl.unified-inspector-tabs TabItem">
+    <Setter Property="MinWidth" Value="68" />
+    <Setter Property="Width" Value="76" />
+    <Setter Property="MinHeight" Value="34" />
+    <Setter Property="Padding" Value="7,5" />
+    <Setter Property="Margin" Value="1,2" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="FontSize" Value="11" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace TabControl.unified-inspector-tabs TabItem:selected">
+    <Setter Property="Background" Value="{DynamicResource TsAccentSoftBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TsAccentBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace TextBlock.inspector-section-title">
+    <Setter Property="Foreground" Value="{DynamicResource TsMutedTextBrush}" />
+  </Style>
+
+  <Style Selector="Window.typescribe-studio.unified-visual-workspace Expander">
+    <Setter Property="Margin" Value="0,1" />
   </Style>
 </Styles>

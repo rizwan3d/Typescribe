@@ -22,7 +22,7 @@ public sealed class App : AvaloniaApplication
 {
     public override void Initialize()
     {
-        RequestedThemeVariant = ThemeVariant.Default;
+        RequestedThemeVariant = ThemeVariant.Dark;
         Styles.Add(new FluentTheme());
         Styles.Add(new StyleInclude(new Uri("avares://Typescribe/"))
         {
@@ -101,6 +101,12 @@ public sealed class App : AvaloniaApplication
             // Install this last so later workspace enhancements cannot replace or hide the search row.
             InstallProjectSearch(window, viewModel);
             ReferenceTopChrome.Apply(window);
+            UnifiedVisualWorkspaceFeature.Apply(window, viewModel);
+            ContinuousPagedEditingFeature.Apply(window, viewModel, parser);
+            FacingSpreadEditingFeature.Apply(window, viewModel, parser);
+            FigureContextInspectorFeature.Apply(window, viewModel, parser);
+            TextFrameContextInspectorFeature.Apply(window, viewModel, parser);
+            ParentPageFurnitureInspectorFeature.Apply(window, viewModel);
             if (startupProjectPath is not null)
             {
                 window.Opened += async (_, _) =>
