@@ -200,6 +200,13 @@ internal sealed class FacingSpreadSurface : Grid
 
     private readonly Button _previous = new() { Content = "‹", Width = 32, Height = 28 };
     private readonly Button _next = new() { Content = "›", Width = 32, Height = 28 };
+    private readonly ToggleButton _snap = new()
+    {
+        Content = "Snap",
+        IsChecked = true,
+        MinWidth = 58,
+        Height = 28
+    };
     private readonly TextBlock _spreadLabel = new()
     {
         Text = "Facing pages",
@@ -259,7 +266,10 @@ internal sealed class FacingSpreadSurface : Grid
             OnTextFrameMoved,
             OnTextFrameResized,
             OnFurnitureSelected,
-            OnFurnitureEdited);
+            OnFurnitureEdited,
+            OnGuideCreated,
+            OnGuideMoved,
+            () => _snap.IsChecked == true);
         _right = new SpreadPageView(
             mainEditor.Document,
             OnProjectionCaretChanged,
@@ -272,10 +282,28 @@ internal sealed class FacingSpreadSurface : Grid
             OnTextFrameMoved,
             OnTextFrameResized,
             OnFurnitureSelected,
-            OnFurnitureEdited);
+            OnFurnitureEdited,
+            OnGuideCreated,
+            OnGuideMoved,
+            () => _snap.IsChecked == true);
         _spreadGrid.Children.Add(_left);
         Grid.SetColumn(_right, 2);
         _spreadGrid.Children.Add(_right);
+
+        var topGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,*,Auto"),
+            ColumnSpacing = 7
+        };
+        topGrid.Children.Add(_previous);
+        Grid.SetColumn(_next, 1);
+        topGrid.Children.Add(_next);
+        Grid.SetColumn(_spreadLabel, 2);
+        topGrid.Children.Add(_spreadLabel);
+        Grid.SetColumn(_snap, 3);
+        topGrid.Children.Add(_snap);
+        Grid.SetColumn(_hint, 5);
+        topGrid.Children.Add(_hint);
 
         var top = new Border
         {
@@ -283,20 +311,8 @@ internal sealed class FacingSpreadSurface : Grid
             BorderBrush = Brush("#3F3F46"),
             BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(10, 6),
-            Child = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,*,Auto"),
-                ColumnSpacing = 7,
-                Children =
-                {
-                    _previous,
-                    _next,
-                    _spreadLabel,
-                    _hint
-                }
-            }
+            Child = topGrid
         };
-        Grid.SetColumn(_hint, 4);
 
         var scroll = new ScrollViewer
         {
@@ -313,6 +329,7 @@ internal sealed class FacingSpreadSurface : Grid
 
         _previous.Click += PreviousClicked;
         _next.Click += NextClicked;
+        _snap.IsCheckedChanged += SnapChanged;
         SizeChanged += SurfaceSizeChanged;
 
         _layoutTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(95) };
@@ -349,6 +366,7 @@ internal sealed class FacingSpreadSurface : Grid
 
         _previous.Click -= PreviousClicked;
         _next.Click -= NextClicked;
+        _snap.IsCheckedChanged -= SnapChanged;
         SizeChanged -= SurfaceSizeChanged;
         _viewModel.StateChanged -= WorkspaceChanged;
         PageObjectSelectionHub.FigureSelectionChanged -= ExternalFigureSelectionChanged;
@@ -360,6 +378,13 @@ internal sealed class FacingSpreadSurface : Grid
 
         _left.Dispose();
         _right.Dispose();
+    }
+
+    private void SnapChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _hint.Text = _snap.IsChecked == true
+            ? "Snap on • margins, guides, page centers and nearby objects"
+            : "Snap off • free positioning on the physical page";
     }
 
     private void PreviousClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
