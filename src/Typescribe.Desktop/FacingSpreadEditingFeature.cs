@@ -1335,9 +1335,13 @@ internal sealed class SpreadPageView : Grid
     private readonly Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> _textFrameResized;
     private readonly Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> _furnitureSelected;
     private readonly Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> _furnitureEdited;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageGuideOrientation, double> _guideCreated;
+    private readonly Action<SpreadPageView, PageLayoutPage, PageLayoutGuide, double> _guideMoved;
+    private readonly Func<bool> _snapEnabled;
     private readonly List<FigureObjectOverlay> _figureObjects = [];
     private readonly List<TextFrameObjectOverlay> _textFrameObjects = [];
     private readonly List<RunningFurnitureOverlay> _furnitureObjects = [];
+    private readonly List<PageGuideOverlay> _guideObjects = [];
     private readonly Border _pageBorder = new()
     {
         Background = Brushes.White,
@@ -1351,6 +1355,21 @@ internal sealed class SpreadPageView : Grid
         })
     };
     private readonly Canvas _pageCanvas = new() { ClipToBounds = true };
+    private readonly Canvas _horizontalRuler = new() { Height = 20, ClipToBounds = true };
+    private readonly Canvas _verticalRuler = new() { Width = 26, ClipToBounds = true };
+    private readonly Border _rulerCorner = new()
+    {
+        Width = 26,
+        Height = 20,
+        Background = new SolidColorBrush(Color.Parse("#252526")),
+        BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
+        BorderThickness = new Thickness(0, 0, 1, 1)
+    };
+    private readonly Grid _pageHost = new()
+    {
+        ColumnDefinitions = new ColumnDefinitions("26,Auto"),
+        RowDefinitions = new RowDefinitions("20,Auto")
+    };
     private readonly TextBlock _label = new()
     {
         HorizontalAlignment = HorizontalAlignment.Center,
@@ -1369,6 +1388,10 @@ internal sealed class SpreadPageView : Grid
 
     private double _scale = .8;
     private bool _disposed;
+    private PageLayoutPage? _currentPage;
+    private bool _creatingGuide;
+    private PageGuideOrientation _creatingGuideOrientation;
+    private Border? _guideGhost;
 
     public SpreadPageView(
         AvaloniaEdit.Document.TextDocument sharedDocument,
@@ -1382,7 +1405,10 @@ internal sealed class SpreadPageView : Grid
         Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameMoved,
         Action<SpreadPageView, AstBlock, TextFrameFormatting, PageLayoutRect, double, double> textFrameResized,
         Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureSelected,
-        Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureEdited)
+        Action<SpreadPageView, PageLayoutPage, PageFurnitureKind, string> furnitureEdited,
+        Action<SpreadPageView, PageLayoutPage, PageGuideOrientation, double> guideCreated,
+        Action<SpreadPageView, PageLayoutPage, PageLayoutGuide, double> guideMoved,
+        Func<bool> snapEnabled)
     {
         _caretChanged = caretChanged;
         _selectionChanged = selectionChanged;
@@ -1395,12 +1421,36 @@ internal sealed class SpreadPageView : Grid
         _textFrameResized = textFrameResized;
         _furnitureSelected = furnitureSelected;
         _furnitureEdited = furnitureEdited;
+        _guideCreated = guideCreated;
+        _guideMoved = guideMoved;
+        _snapEnabled = snapEnabled;
 
         RowDefinitions = new RowDefinitions("Auto,Auto");
         Children.Add(_label);
+
+        _pageHost.Children.Add(_rulerCorner);
+        Grid.SetColumn(_horizontalRuler, 1);
+        _pageHost.Children.Add(_horizontalRuler);
+        Grid.SetRow(_verticalRuler, 1);
+        _pageHost.Children.Add(_verticalRuler);
         Grid.SetRow(_pageBorder, 1);
-        Children.Add(_pageBorder);
+        Grid.SetColumn(_pageBorder, 1);
+        _pageHost.Children.Add(_pageBorder);
+
+        Grid.SetRow(_pageHost, 1);
+        Children.Add(_pageHost);
         _pageBorder.Child = _pageCanvas;
+
+        _horizontalRuler.Background = new SolidColorBrush(Color.Parse("#252526"));
+        _verticalRuler.Background = new SolidColorBrush(Color.Parse("#252526"));
+        _horizontalRuler.PointerPressed += RulerPointerPressed;
+        _horizontalRuler.PointerMoved += RulerPointerMoved;
+        _horizontalRuler.PointerReleased += RulerPointerReleased;
+        _verticalRuler.PointerPressed += RulerPointerPressed;
+        _verticalRuler.PointerMoved += RulerPointerMoved;
+        _verticalRuler.PointerReleased += RulerPointerReleased;
+        ToolTip.SetTip(_horizontalRuler, "Drag from the ruler to create a vertical guide");
+        ToolTip.SetTip(_verticalRuler, "Drag from the ruler to create a horizontal guide");
 
         Editor = new ManuscriptEditor(sharedDocument, projectionView: true)
         {
