@@ -1797,6 +1797,7 @@ internal sealed class SpreadPageView : Grid
                 fragment.Kind == PageLayoutFragmentKind.OversetIndicator &&
                 string.Equals(fragment.FrameId, frame.Id, StringComparison.Ordinal));
 
+            var nearby = CollectSnapBounds(page, container);
             var overlay = new TextFrameObjectOverlay(
                 _pageCanvas,
                 frame,
@@ -1809,7 +1810,19 @@ internal sealed class SpreadPageView : Grid
                     _textFrameSelected(this, block, frame, container, overset);
                 },
                 (dx, dy) => _textFrameMoved(this, block, frame, container, dx, dy),
-                (width, height) => _textFrameResized(this, block, frame, container, width, height));
+                (width, height) => _textFrameResized(this, block, frame, container, width, height),
+                (x, y) =>
+                {
+                    if (!_snapEnabled()) return (x, y);
+                    var snapped = PagedLayoutSnapEngine.SnapMove(page, container, x, y, nearby);
+                    return (snapped.XPoints, snapped.YPoints);
+                },
+                (width, height) =>
+                {
+                    if (!_snapEnabled()) return (width, height);
+                    var snapped = PagedLayoutSnapEngine.SnapResize(page, container, width, height, nearby);
+                    return (snapped.WidthPoints, snapped.HeightPoints);
+                });
 
             overlay.IsSelected = selectedFrameId is not null &&
                                  string.Equals(selectedFrameId, frame.Id, StringComparison.Ordinal);
@@ -1819,6 +1832,32 @@ internal sealed class SpreadPageView : Grid
             Canvas.SetTop(overlay, container.YPoints * scale);
         }
     }
+
+    private static IReadOnlyList<PageLayoutRect> CollectSnapBounds(
+        PageLayoutPage page,
+        PageLayoutRect moving)
+    {
+        var candidates = page.FloatingObjects
+            .Where(static fragment =>
+                fragment.Kind is PageLayoutFragmentKind.Figure or
+                    PageLayoutFragmentKind.FloatingObject or
+                    PageLayoutFragmentKind.MarginNote)
+            .Select(static fragment => fragment.Bounds)
+            .Concat(page.Columns.SelectMany(static column => column.Fragments)
+                .Where(static fragment => fragment.Kind == PageLayoutFragmentKind.TextFrame)
+                .Select(static fragment => fragment.ContainerBounds ?? fragment.Bounds))
+            .Where(bounds => !SameBounds(bounds, moving))
+            .Distinct()
+            .ToArray();
+
+        return candidates;
+    }
+
+    private static bool SameBounds(PageLayoutRect left, PageLayoutRect right)
+        => Math.Abs(left.XPoints - right.XPoints) < .01 &&
+           Math.Abs(left.YPoints - right.YPoints) < .01 &&
+           Math.Abs(left.WidthPoints - right.WidthPoints) < .01 &&
+           Math.Abs(left.HeightPoints - right.HeightPoints) < .01;
 
     private static PageLayoutRect Union(IEnumerable<PageLayoutRect> rectangles)
     {
@@ -1857,6 +1896,7 @@ internal sealed class SpreadPageView : Grid
                 .FirstOrDefault(column => column.Fragments.Any(candidate => candidate.Id == fragment.Id))
                 ?.Bounds.WidthPoints ?? page.ContentBounds.WidthPoints;
 
+            var nearby = CollectSnapBounds(page, fragment.Bounds);
             var overlay = new FigureObjectOverlay(
                 _pageCanvas,
                 figure,
@@ -1869,7 +1909,19 @@ internal sealed class SpreadPageView : Grid
                     _figureSelected(this, figure, fragment);
                 },
                 (dx, dy) => _figureMoved(this, figure, fragment, dx, dy),
-                (width, height) => _figureResized(this, figure, fragment, columnWidth, width, height));
+                (width, height) => _figureResized(this, figure, fragment, columnWidth, width, height),
+                (x, y) =>
+                {
+                    if (!_snapEnabled()) return (x, y);
+                    var snapped = PagedLayoutSnapEngine.SnapMove(page, fragment.Bounds, x, y, nearby);
+                    return (snapped.XPoints, snapped.YPoints);
+                },
+                (width, height) =>
+                {
+                    if (!_snapEnabled()) return (width, height);
+                    var snapped = PagedLayoutSnapEngine.SnapResize(page, fragment.Bounds, width, height, nearby);
+                    return (snapped.WidthPoints, snapped.HeightPoints);
+                });
 
             overlay.IsSelected = selectedFigureKey is not null &&
                                  string.Equals(overlay.SelectionKey, selectedFigureKey, StringComparison.Ordinal);
