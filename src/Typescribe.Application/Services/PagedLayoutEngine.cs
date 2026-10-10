@@ -36,7 +36,12 @@ public sealed record PageLayoutRect(double XPoints, double YPoints, double Width
     public double BottomPoints => YPoints + HeightPoints;
 }
 
-public sealed record PageLayoutGuide(PageLayoutGuideOrientation Orientation, double PositionPoints, string Kind);
+public sealed record PageLayoutGuide(
+    PageLayoutGuideOrientation Orientation,
+    double PositionPoints,
+    string Kind,
+    string? Id = null,
+    bool Locked = false);
 
 public sealed record PageLayoutFragment(
     string Id,
@@ -1146,7 +1151,8 @@ public sealed class PagedLayoutEngine
             section.BleedBottomPoints > 0 ? section.BleedBottomPoints : (page?.BleedBottomInches ?? 0) * 72,
             section.BleedInsidePoints > 0 ? section.BleedInsidePoints : (page?.BleedInsideInches ?? 0) * 72,
             section.BleedOutsidePoints > 0 ? section.BleedOutsidePoints : (page?.BleedOutsideInches ?? 0) * 72,
-            section.SlugPoints > 0 ? section.SlugPoints : (page?.SlugInches ?? 0) * 72);
+            section.SlugPoints > 0 ? section.SlugPoints : (page?.SlugInches ?? 0) * 72,
+            page?.Guides ?? []);
     }
 
     private static PageLayoutFragmentKind KindFor(AstBlock block)
@@ -1294,7 +1300,8 @@ public sealed class PagedLayoutEngine
         double BleedBottomPoints,
         double BleedInsidePoints,
         double BleedOutsidePoints,
-        double SlugPoints);
+        double SlugPoints,
+        IReadOnlyList<PageGuideDefinition> CustomGuides);
 
     private sealed class ColumnBuilder(int index, PageLayoutRect bounds)
     {
@@ -1414,6 +1421,32 @@ public sealed class PagedLayoutEngine
                 guides.Add(new PageLayoutGuide(PageLayoutGuideOrientation.Vertical, column.Bounds.XPoints, "column"));
                 guides.Add(new PageLayoutGuide(PageLayoutGuideOrientation.Vertical, column.Bounds.RightPoints, "column"));
             }
+
+            foreach (var guide in Geometry.CustomGuides)
+            {
+                var position = Math.Max(0, guide.PositionInches * 72);
+                if (guide.Orientation == PageGuideOrientation.Vertical)
+                {
+                    position = Math.Min(Geometry.WidthPoints, position);
+                    guides.Add(new PageLayoutGuide(
+                        PageLayoutGuideOrientation.Vertical,
+                        position,
+                        "custom",
+                        guide.Id,
+                        guide.Locked));
+                }
+                else
+                {
+                    position = Math.Min(Geometry.HeightPoints, position);
+                    guides.Add(new PageLayoutGuide(
+                        PageLayoutGuideOrientation.Horizontal,
+                        position,
+                        "custom",
+                        guide.Id,
+                        guide.Locked));
+                }
+            }
+
             return guides;
         }
 
