@@ -2125,6 +2125,112 @@ internal sealed class SpreadPageView : Grid
     }
 }
 
+internal sealed class PageGuideOverlay : Border, IDisposable
+{
+    private readonly Canvas _canvas;
+    private readonly PageLayoutGuide _guide;
+    private readonly double _scale;
+    private readonly Action _select;
+    private readonly Action<double> _commit;
+    private bool _dragging;
+
+    public PageGuideOverlay(
+        Canvas canvas,
+        PageLayoutGuide guide,
+        double pageWidth,
+        double pageHeight,
+        double scale,
+        Action select,
+        Action<double> commit)
+    {
+        _canvas = canvas;
+        _guide = guide;
+        _scale = scale;
+        _select = select;
+        _commit = commit;
+
+        Background = new SolidColorBrush(Color.FromArgb(1, 0, 174, 239));
+        Child = new Border
+        {
+            Width = guide.Orientation == PageLayoutGuideOrientation.Vertical ? 1 : double.NaN,
+            Height = guide.Orientation == PageLayoutGuideOrientation.Horizontal ? 1 : double.NaN,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.Parse(guide.Locked ? "#8A8F98" : "#00AEEF"))
+        };
+
+        if (guide.Orientation == PageLayoutGuideOrientation.Vertical)
+        {
+            Width = 7;
+            Height = pageHeight;
+        }
+        else
+        {
+            Width = pageWidth;
+            Height = 7;
+        }
+
+        PointerPressed += GuidePointerPressed;
+        PointerMoved += GuidePointerMoved;
+        PointerReleased += GuidePointerReleased;
+        ToolTip.SetTip(this, guide.Locked
+            ? "Locked parent-page guide"
+            : "Drag to reposition this parent-page guide");
+    }
+
+    public void Dispose()
+    {
+        PointerPressed -= GuidePointerPressed;
+        PointerMoved -= GuidePointerMoved;
+        PointerReleased -= GuidePointerReleased;
+    }
+
+    private void GuidePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        _select();
+        if (_guide.Locked)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        _dragging = true;
+        e.Pointer.Capture(this);
+        e.Handled = true;
+    }
+
+    private void GuidePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging) return;
+        var point = e.GetPosition(_canvas);
+        if (_guide.Orientation == PageLayoutGuideOrientation.Vertical)
+        {
+            var x = Math.Clamp(point.X, 0, _canvas.Width);
+            Canvas.SetLeft(this, x - Width / 2d);
+        }
+        else
+        {
+            var y = Math.Clamp(point.Y, 0, _canvas.Height);
+            Canvas.SetTop(this, y - Height / 2d);
+        }
+        e.Handled = true;
+    }
+
+    private void GuidePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        e.Pointer.Capture(null);
+
+        var positionPixels = _guide.Orientation == PageLayoutGuideOrientation.Vertical
+            ? Canvas.GetLeft(this) + Width / 2d
+            : Canvas.GetTop(this) + Height / 2d;
+        _commit(positionPixels / Math.Max(.01, _scale));
+        e.Handled = true;
+    }
+}
+
 internal sealed class RunningFurnitureOverlay : Border, IDisposable
 {
     private readonly int _pageIndex;
