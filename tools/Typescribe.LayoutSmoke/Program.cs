@@ -183,7 +183,12 @@ var parentEditedPage = namedStyles.PageStyles[0] with
     MarginTopInches = .6,
     MarginBottomInches = .7,
     MarginInnerInches = .8,
-    MarginOuterInches = .55
+    MarginOuterInches = .55,
+    Guides =
+    [
+        new PageGuideDefinition("guide.v", PageGuideOrientation.Vertical, 1.25, "Vertical smoke"),
+        new PageGuideDefinition("guide.h", PageGuideOrientation.Horizontal, 2.5, "Horizontal smoke")
+    ]
 };
 var parentEditedCatalog = namedStyles with { PageStyles = [parentEditedPage] };
 var parentEditedStyle = style with { NamedStyles = parentEditedCatalog };
@@ -206,6 +211,45 @@ Assert(Math.Abs(parentEdited.ContentBounds.YPoints - 43.2) < .001 &&
     "Editing parent-page top/bottom margins must change the projected content box.");
 Assert(parentEdited.PageStyleId == "page.smoke",
     "Projected pages must retain the parent page ID used by the spread inspector.");
+Assert(parentEdited.Guides.Any(guide =>
+        guide.Kind == "custom" &&
+        guide.Id == "guide.v" &&
+        guide.Orientation == PageLayoutGuideOrientation.Vertical &&
+        Math.Abs(guide.PositionPoints - 90) < .001) &&
+       parentEdited.Guides.Any(guide =>
+        guide.Kind == "custom" &&
+        guide.Id == "guide.h" &&
+        guide.Orientation == PageLayoutGuideOrientation.Horizontal &&
+        Math.Abs(guide.PositionPoints - 180) < .001),
+    "Custom parent-page guides must project into physical page coordinates.");
+
+var snapMove = PagedLayoutSnapEngine.SnapMove(
+    parentEdited,
+    new PageLayoutRect(40, 80, 48, 36),
+    proposedXPoints: 87,
+    proposedYPoints: 177);
+Assert(snapMove.SnappedX && snapMove.SnappedY &&
+       Math.Abs(snapMove.XPoints - 90) < .001 &&
+       Math.Abs(snapMove.YPoints - 180) < .001,
+    "Direct page objects must snap to custom vertical and horizontal guides.");
+
+var snapResize = PagedLayoutSnapEngine.SnapResize(
+    parentEdited,
+    new PageLayoutRect(20, 40, 40, 40),
+    proposedWidthPoints: 68.5,
+    proposedHeightPoints: 60);
+Assert(snapResize.SnappedWidth &&
+       Math.Abs(snapResize.WidthPoints - 70) < .001,
+    "Object resize must snap its right edge to the nearest page guide.");
+
+var nearbySnap = PagedLayoutSnapEngine.SnapMove(
+    parentEdited,
+    new PageLayoutRect(20, 30, 40, 30),
+    proposedXPoints: 145,
+    proposedYPoints: 30,
+    nearbyObjects: [new PageLayoutRect(190, 30, 50, 30)]);
+Assert(nearbySnap.SnappedX && Math.Abs(nearbySnap.XPoints - 150) < .001,
+    "Direct page objects must snap to nearby object edges.");
 
 var furnitureStyle = style with
 {
