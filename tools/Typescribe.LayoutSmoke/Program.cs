@@ -245,10 +245,10 @@ Assert(snapResize.SnappedWidth &&
 var nearbySnap = PagedLayoutSnapEngine.SnapMove(
     parentEdited,
     new PageLayoutRect(20, 30, 40, 30),
-    proposedXPoints: 145,
+    proposedXPoints: 205,
     proposedYPoints: 30,
-    nearbyObjects: [new PageLayoutRect(190, 30, 50, 30)]);
-Assert(nearbySnap.SnappedX && Math.Abs(nearbySnap.XPoints - 150) < .001,
+    nearbyObjects: [new PageLayoutRect(250, 30, 50, 30)]);
+Assert(nearbySnap.SnappedX && Math.Abs(nearbySnap.XPoints - 210) < .001,
     "Direct page objects must snap to nearby object edges.");
 
 var furnitureStyle = style with
