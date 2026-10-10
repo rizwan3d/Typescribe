@@ -59,6 +59,20 @@ Frames remain auto-flowing by default for backward compatibility. Direct page ma
 
 The facing-page canvas uses those source-backed rectangles for direct manipulation. Dragging the frame label persists X/Y geometry; dragging the lower-right handle persists width/height. Frame input/output ports, thread labels and the overset badge are UI projections only; the canonical relationship remains `TextFrameFormatting.Id/NextFrameId`.
 
+## Rulers, guides and snapping
+
+The unified facing-page surface uses physical point geometry from `PagedLayoutEngine` for rulers and snapping:
+
+- each page has horizontal and vertical inch rulers outside the trim;
+- dragging from a ruler creates a custom guide on that page's resolved parent `PageStyleDefinition`;
+- custom guides are stored as stable `PageGuideDefinition` records (orientation, position, optional name/lock state) and are projected back into `PageLayoutPage.Guides`;
+- margin and column guides remain derived from page/section geometry and are never redundantly persisted;
+- the baseline grid is projected from the existing `BaselineGridFormatting` and can be edited alongside parent-page guides;
+- `PagedLayoutSnapEngine` provides one deterministic snap algorithm for move/resize operations. Figures and text frames snap to page edges/center, margins, columns, custom guides and nearby object edges;
+- the spread-level **Snap** toggle disables/enables that geometry assistance without changing stored object coordinates.
+
+Guide positions are parent-page layout metadata, not Markdown manuscript text. Snapping only chooses the coordinates written by the existing figure/text-frame metadata paths; it does not create a second canvas document.
+
 ## Parent-page furniture on the unified spread
 
 Facing-page editing projects parent/master-page furniture directly into the normal document spread. The page margins remain outside the canonical manuscript text stream:
