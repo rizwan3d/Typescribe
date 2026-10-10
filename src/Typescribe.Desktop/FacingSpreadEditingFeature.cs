@@ -1529,6 +1529,7 @@ internal sealed class SpreadPageView : Grid
             _pageCanvas.Children.Add(_blank);
             Canvas.SetLeft(_blank, Math.Max(0, (pageWidth - 70) / 2));
             Canvas.SetTop(_blank, Math.Max(0, (pageHeight - 20) / 2));
+            RaiseInteractiveGuides();
             return;
         }
 
@@ -1553,6 +1554,7 @@ internal sealed class SpreadPageView : Grid
 
         RenderTextFrameObjects(page, ast, scale, selectedFrameId);
         RenderFigureObjects(page, ast, scale, selectedFigureKey);
+        RaiseInteractiveGuides();
         PositionViewport();
     }
 
@@ -1664,6 +1666,15 @@ internal sealed class SpreadPageView : Grid
         foreach (var guide in _guideObjects) guide.Dispose();
         _guideObjects.Clear();
         _pageCanvas.Children.Clear();
+    }
+
+    private void RaiseInteractiveGuides()
+    {
+        foreach (var guide in _guideObjects)
+        {
+            if (!_pageCanvas.Children.Remove(guide)) continue;
+            _pageCanvas.Children.Add(guide);
+        }
     }
 
     private void RenderRunningFurniture(
