@@ -42,6 +42,10 @@ internal sealed class ParentPageFurnitureInspectorFeature
     private TextBox? _marginOuter;
     private CheckBox? _facingPages;
     private CheckBox? _cropMarks;
+    private TextBox? _verticalGuides;
+    private TextBox? _horizontalGuides;
+    private CheckBox? _baselineGrid;
+    private TextBox? _baselineIncrement;
     private TextBlock? _status;
 
     private bool _installed;
@@ -132,6 +136,10 @@ internal sealed class ParentPageFurnitureInspectorFeature
         _marginOuter = Box("0.7");
         _facingPages = new CheckBox { Content = "Facing pages" };
         _cropMarks = new CheckBox { Content = "Crop marks" };
+        _verticalGuides = Box("e.g. 1.25, 3, 4.75");
+        _horizontalGuides = Box("e.g. 1, 5.5, 8");
+        _baselineGrid = new CheckBox { Content = "Show baseline grid" };
+        _baselineIncrement = Box("12");
         _status = new TextBlock
         {
             TextWrapping = TextWrapping.Wrap,
@@ -185,6 +193,18 @@ internal sealed class ParentPageFurnitureInspectorFeature
         panel.Children.Add(TwoColumns(Field("Inner margin", _marginInner), Field("Outer margin", _marginOuter)));
         panel.Children.Add(_facingPages);
         panel.Children.Add(_cropMarks);
+        panel.Children.Add(Section("GUIDES & GRID"));
+        panel.Children.Add(Field("Vertical guides (in)", _verticalGuides));
+        panel.Children.Add(Field("Horizontal guides (in)", _horizontalGuides));
+        panel.Children.Add(_baselineGrid);
+        panel.Children.Add(Field("Baseline increment (pt)", _baselineIncrement));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Tip: drag from either page ruler to create a guide; drag a cyan guide to move it.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 10,
+            Opacity = .58
+        });
         panel.Children.Add(applyParent);
         panel.Children.Add(back);
         panel.Children.Add(_status);
@@ -224,7 +244,9 @@ internal sealed class ParentPageFurnitureInspectorFeature
             _footerLeft is null || _footerCenter is null || _footerRight is null ||
             _pageStyleLabel is null || _pageWidth is null || _pageHeight is null ||
             _marginTop is null || _marginBottom is null || _marginInner is null || _marginOuter is null ||
-            _facingPages is null || _cropMarks is null || _status is null)
+            _facingPages is null || _cropMarks is null || _verticalGuides is null ||
+            _horizontalGuides is null || _baselineGrid is null || _baselineIncrement is null ||
+            _status is null)
             return;
 
         var style = _viewModel.CurrentStyle;
@@ -254,6 +276,18 @@ internal sealed class ParentPageFurnitureInspectorFeature
         _marginOuter.Text = Number(resolved?.MarginOuterInches ?? style.MarginOuterInches);
         _facingPages.IsChecked = resolved?.FacingPages ?? false;
         _cropMarks.IsChecked = resolved?.CropMarks ?? false;
+
+        var guides = resolved?.Guides ?? [];
+        _verticalGuides.Text = string.Join(", ", guides
+            .Where(static guide => guide.Orientation == PageGuideOrientation.Vertical)
+            .OrderBy(static guide => guide.PositionInches)
+            .Select(static guide => Number(guide.PositionInches)));
+        _horizontalGuides.Text = string.Join(", ", guides
+            .Where(static guide => guide.Orientation == PageGuideOrientation.Horizontal)
+            .OrderBy(static guide => guide.PositionInches)
+            .Select(static guide => Number(guide.PositionInches)));
+        _baselineGrid.IsChecked = resolved?.BaselineGrid?.Enabled == true;
+        _baselineIncrement.Text = Number(resolved?.BaselineGrid?.IncrementPoints ?? 12);
 
         _status.Text = selection.Kind switch
         {
@@ -303,7 +337,9 @@ internal sealed class ParentPageFurnitureInspectorFeature
     {
         if (_selection is null || _pageWidth is null || _pageHeight is null ||
             _marginTop is null || _marginBottom is null || _marginInner is null || _marginOuter is null ||
-            _facingPages is null || _cropMarks is null || _status is null)
+            _facingPages is null || _cropMarks is null || _verticalGuides is null ||
+            _horizontalGuides is null || _baselineGrid is null || _baselineIncrement is null ||
+            _status is null)
             return;
 
         try
@@ -320,6 +356,19 @@ internal sealed class ParentPageFurnitureInspectorFeature
             var bottom = Math.Clamp(Parse(_marginBottom.Text, raw.MarginBottomInches ?? style.MarginBottomInches), 0, 5);
             var inner = Math.Clamp(Parse(_marginInner.Text, raw.MarginInnerInches ?? style.MarginInnerInches), 0, 5);
             var outer = Math.Clamp(Parse(_marginOuter.Text, raw.MarginOuterInches ?? style.MarginOuterInches), 0, 5);
+            var resolved = style.NamedStyles.ResolvePage(pageStyleId);
+            var existingGuides = (resolved?.Guides ?? raw.Guides ?? []).ToArray();
+            var verticalPositions = ParseGuideList(_verticalGuides.Text, width);
+            var horizontalPositions = ParseGuideList(_horizontalGuides.Text, height);
+            var guides = BuildGuideList(existingGuides, verticalPositions, horizontalPositions);
+            var baselineIncrement = Math.Clamp(
+                Parse(_baselineIncrement.Text, resolved?.BaselineGrid?.IncrementPoints ?? 12),
+                4,
+                72);
+            var baseline = new BaselineGridFormatting(
+                _baselineGrid.IsChecked == true,
+                baselineIncrement,
+                resolved?.BaselineGrid?.StartPoints ?? 0);
 
             var updatedPage = raw with
             {
@@ -330,7 +379,9 @@ internal sealed class ParentPageFurnitureInspectorFeature
                 MarginInnerInches = inner,
                 MarginOuterInches = outer,
                 FacingPages = _facingPages.IsChecked == true,
-                CropMarks = _cropMarks.IsChecked == true
+                CropMarks = _cropMarks.IsChecked == true,
+                Guides = guides,
+                BaselineGrid = baseline
             };
 
             var found = false;
@@ -432,6 +483,70 @@ internal sealed class ParentPageFurnitureInspectorFeature
 
     private static IEnumerable<string> Headers(TabControl tabs)
         => TabItems(tabs).Select(item => item.Header?.ToString() ?? string.Empty);
+
+    private static IReadOnlyList<double> ParseGuideList(string? text, double maximum)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return [];
+
+        var output = new List<double>();
+        foreach (var token in text.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
+                !double.TryParse(token, NumberStyles.Float, CultureInfo.CurrentCulture, out value))
+                continue;
+            value = Math.Clamp(value, 0, maximum);
+            if (output.All(existing => Math.Abs(existing - value) > .001))
+                output.Add(value);
+        }
+
+        output.Sort();
+        return output;
+    }
+
+    private static IReadOnlyList<PageGuideDefinition> BuildGuideList(
+        IReadOnlyList<PageGuideDefinition> existing,
+        IReadOnlyList<double> vertical,
+        IReadOnlyList<double> horizontal)
+    {
+        static IEnumerable<PageGuideDefinition> Build(
+            IReadOnlyList<PageGuideDefinition> prior,
+            IReadOnlyList<double> positions,
+            PageGuideOrientation orientation)
+        {
+            for (var index = 0; index < positions.Count; index++)
+            {
+                if (index < prior.Count)
+                {
+                    yield return prior[index] with
+                    {
+                        Orientation = orientation,
+                        PositionInches = positions[index]
+                    };
+                }
+                else
+                {
+                    yield return new PageGuideDefinition(
+                        $"guide-{Guid.NewGuid():N}",
+                        orientation,
+                        positions[index],
+                        $"Guide {index + 1}");
+                }
+            }
+        }
+
+        var verticalPrior = existing
+            .Where(static guide => guide.Orientation == PageGuideOrientation.Vertical)
+            .OrderBy(static guide => guide.PositionInches)
+            .ToArray();
+        var horizontalPrior = existing
+            .Where(static guide => guide.Orientation == PageGuideOrientation.Horizontal)
+            .OrderBy(static guide => guide.PositionInches)
+            .ToArray();
+
+        return Build(verticalPrior, vertical, PageGuideOrientation.Vertical)
+            .Concat(Build(horizontalPrior, horizontal, PageGuideOrientation.Horizontal))
+            .ToArray();
+    }
 
     private static double Parse(string? text, double fallback)
         => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var invariant) ||
