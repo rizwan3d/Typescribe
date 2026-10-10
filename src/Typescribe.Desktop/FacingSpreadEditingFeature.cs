@@ -1491,11 +1491,13 @@ internal sealed class SpreadPageView : Grid
         if (range is null)
         {
             IsVisible = true;
+            _currentPage = null;
             _label.Text = string.Empty;
             _pageBorder.Width = style.PageWidthInches * 72 * scale;
             _pageBorder.Height = style.PageHeightInches * 72 * scale;
             _pageCanvas.Width = _pageBorder.Width;
             _pageCanvas.Height = _pageBorder.Height;
+            DrawRulers(style.PageWidthInches * 72, style.PageHeightInches * 72, scale);
             ClearPageCanvas();
             _blank.Text = "No page";
             _pageCanvas.Children.Add(_blank);
@@ -1505,6 +1507,7 @@ internal sealed class SpreadPageView : Grid
         }
 
         var page = range.Page;
+        _currentPage = page;
         var pageWidth = page.WidthPoints * scale;
         var pageHeight = page.HeightPoints * scale;
         _label.Text = page.IsBlank
@@ -1514,6 +1517,7 @@ internal sealed class SpreadPageView : Grid
         _pageBorder.Height = pageHeight;
         _pageCanvas.Width = pageWidth;
         _pageCanvas.Height = pageHeight;
+        DrawRulers(page.WidthPoints, page.HeightPoints, scale);
         ClearPageCanvas();
 
         DrawPageGuides(page, scale);
@@ -1613,12 +1617,20 @@ internal sealed class SpreadPageView : Grid
         Editor.TextArea.Caret.PositionChanged -= EditorCaretChanged;
         Editor.TextArea.SelectionChanged -= EditorSelectionChanged;
         Editor.GotFocus -= EditorGotFocus;
+        _horizontalRuler.PointerPressed -= RulerPointerPressed;
+        _horizontalRuler.PointerMoved -= RulerPointerMoved;
+        _horizontalRuler.PointerReleased -= RulerPointerReleased;
+        _verticalRuler.PointerPressed -= RulerPointerPressed;
+        _verticalRuler.PointerMoved -= RulerPointerMoved;
+        _verticalRuler.PointerReleased -= RulerPointerReleased;
         foreach (var figure in _figureObjects) figure.Dispose();
         _figureObjects.Clear();
         foreach (var frame in _textFrameObjects) frame.Dispose();
         _textFrameObjects.Clear();
         foreach (var furniture in _furnitureObjects) furniture.Dispose();
         _furnitureObjects.Clear();
+        foreach (var guide in _guideObjects) guide.Dispose();
+        _guideObjects.Clear();
     }
 
     public void SetSelectedFigure(string? key)
@@ -1649,6 +1661,8 @@ internal sealed class SpreadPageView : Grid
         _textFrameObjects.Clear();
         foreach (var furniture in _furnitureObjects) furniture.Dispose();
         _furnitureObjects.Clear();
+        foreach (var guide in _guideObjects) guide.Dispose();
+        _guideObjects.Clear();
         _pageCanvas.Children.Clear();
     }
 
