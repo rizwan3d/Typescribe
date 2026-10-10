@@ -2440,6 +2440,8 @@ internal sealed class FigureObjectOverlay : Grid, IDisposable
     private readonly Action _select;
     private readonly Action<double, double> _moveCommitted;
     private readonly Action<double, double> _resizeCommitted;
+    private readonly Func<double, double, (double X, double Y)> _snapMove;
+    private readonly Func<double, double, (double Width, double Height)> _snapResize;
     private readonly Border _frame;
     private readonly Border _resizeHandle;
     private Bitmap? _bitmap;
@@ -2460,7 +2462,9 @@ internal sealed class FigureObjectOverlay : Grid, IDisposable
         double scale,
         Action select,
         Action<double, double> moveCommitted,
-        Action<double, double> resizeCommitted)
+        Action<double, double> resizeCommitted,
+        Func<double, double, (double X, double Y)> snapMove,
+        Func<double, double, (double Width, double Height)> snapResize)
     {
         _canvas = canvas;
         _figure = figure;
@@ -2469,6 +2473,8 @@ internal sealed class FigureObjectOverlay : Grid, IDisposable
         _select = select;
         _moveCommitted = moveCommitted;
         _resizeCommitted = resizeCommitted;
+        _snapMove = snapMove;
+        _snapResize = snapResize;
 
         Width = Math.Max(24, fragment.Bounds.WidthPoints * scale);
         Height = Math.Max(24, fragment.Bounds.HeightPoints * scale);
@@ -2643,8 +2649,13 @@ internal sealed class FigureObjectOverlay : Grid, IDisposable
         var point = e.GetPosition(_canvas);
         var dx = point.X - _startPointer.X;
         var dy = point.Y - _startPointer.Y;
-        Canvas.SetLeft(this, _startLeft + dx);
-        Canvas.SetTop(this, _startTop + dy);
+        var rawX = (_startLeft + dx) / Math.Max(.01, _scale);
+        var rawY = (_startTop + dy) / Math.Max(.01, _scale);
+        var snapped = _snapMove(rawX, rawY);
+        var left = Math.Clamp(snapped.X * _scale, 0, Math.Max(0, _canvas.Width - Width));
+        var top = Math.Clamp(snapped.Y * _scale, 0, Math.Max(0, _canvas.Height - Height));
+        Canvas.SetLeft(this, left);
+        Canvas.SetTop(this, top);
         e.Handled = true;
     }
 
@@ -2679,8 +2690,13 @@ internal sealed class FigureObjectOverlay : Grid, IDisposable
         var point = e.GetPosition(_canvas);
         var dx = point.X - _startPointer.X;
         var dy = point.Y - _startPointer.Y;
-        Width = Math.Max(36, _startWidth + dx);
-        Height = Math.Max(36, _startHeight + dy);
+        var rawWidth = Math.Max(24 / Math.Max(.01, _scale), (_startWidth + dx) / Math.Max(.01, _scale));
+        var rawHeight = Math.Max(24 / Math.Max(.01, _scale), (_startHeight + dy) / Math.Max(.01, _scale));
+        var snapped = _snapResize(rawWidth, rawHeight);
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        Width = Math.Clamp(snapped.Width * _scale, 36, Math.Max(36, _canvas.Width - left));
+        Height = Math.Clamp(snapped.Height * _scale, 36, Math.Max(36, _canvas.Height - top));
         e.Handled = true;
     }
 
@@ -2703,6 +2719,8 @@ internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
     private readonly Action _select;
     private readonly Action<double, double> _moveCommitted;
     private readonly Action<double, double> _resizeCommitted;
+    private readonly Func<double, double, (double X, double Y)> _snapMove;
+    private readonly Func<double, double, (double Width, double Height)> _snapResize;
     private readonly Border _outline;
     private readonly Border _titleBar;
     private readonly TextBlock _titleText;
@@ -2727,7 +2745,9 @@ internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
         bool overset,
         Action select,
         Action<double, double> moveCommitted,
-        Action<double, double> resizeCommitted)
+        Action<double, double> resizeCommitted,
+        Func<double, double, (double X, double Y)> snapMove,
+        Func<double, double, (double Width, double Height)> snapResize)
     {
         _canvas = canvas;
         _frame = frame;
@@ -2735,6 +2755,8 @@ internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
         _select = select;
         _moveCommitted = moveCommitted;
         _resizeCommitted = resizeCommitted;
+        _snapMove = snapMove;
+        _snapResize = snapResize;
 
         Width = Math.Max(36, container.WidthPoints * scale);
         Height = Math.Max(36, container.HeightPoints * scale);
@@ -2911,8 +2933,11 @@ internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
     {
         if (!_dragging) return;
         var point = e.GetPosition(_canvas);
-        Canvas.SetLeft(this, _startLeft + point.X - _startPointer.X);
-        Canvas.SetTop(this, _startTop + point.Y - _startPointer.Y);
+        var rawX = (_startLeft + point.X - _startPointer.X) / Math.Max(.01, _scale);
+        var rawY = (_startTop + point.Y - _startPointer.Y) / Math.Max(.01, _scale);
+        var snapped = _snapMove(rawX, rawY);
+        Canvas.SetLeft(this, Math.Clamp(snapped.X * _scale, 0, Math.Max(0, _canvas.Width - Width)));
+        Canvas.SetTop(this, Math.Clamp(snapped.Y * _scale, 0, Math.Max(0, _canvas.Height - Height)));
         e.Handled = true;
     }
 
@@ -2944,8 +2969,13 @@ internal sealed class TextFrameObjectOverlay : Canvas, IDisposable
     {
         if (!_resizing) return;
         var point = e.GetPosition(_canvas);
-        Width = Math.Max(54, _startWidth + point.X - _startPointer.X);
-        Height = Math.Max(54, _startHeight + point.Y - _startPointer.Y);
+        var rawWidth = Math.Max(36 / Math.Max(.01, _scale), (_startWidth + point.X - _startPointer.X) / Math.Max(.01, _scale));
+        var rawHeight = Math.Max(36 / Math.Max(.01, _scale), (_startHeight + point.Y - _startPointer.Y) / Math.Max(.01, _scale));
+        var snapped = _snapResize(rawWidth, rawHeight);
+        var left = Canvas.GetLeft(this);
+        var top = Canvas.GetTop(this);
+        Width = Math.Clamp(snapped.Width * _scale, 54, Math.Max(54, _canvas.Width - left));
+        Height = Math.Clamp(snapped.Height * _scale, 54, Math.Max(54, _canvas.Height - top));
         UpdateChrome();
         e.Handled = true;
     }
