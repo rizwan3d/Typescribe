@@ -1884,31 +1884,232 @@ internal sealed class SpreadPageView : Grid
     private void EditorSelectionChanged(object? sender, EventArgs e) => _selectionChanged(this);
     private void EditorGotFocus(object? sender, GotFocusEventArgs e) => _focused(this);
 
+    private void DrawRulers(double widthPoints, double heightPoints, double scale)
+    {
+        _horizontalRuler.Width = Math.Max(1, widthPoints * scale);
+        _verticalRuler.Height = Math.Max(1, heightPoints * scale);
+        _horizontalRuler.Children.Clear();
+        _verticalRuler.Children.Clear();
+
+        var tickBrush = new SolidColorBrush(Color.Parse("#8B8B91"));
+        var labelBrush = new SolidColorBrush(Color.Parse("#C8C8CC"));
+
+        for (double point = 0; point <= widthPoints + .001; point += 36)
+        {
+            var major = Math.Abs(point % 72) < .001;
+            var tick = new Border
+            {
+                Width = 1,
+                Height = major ? 8 : 5,
+                Background = tickBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(tick, point * scale);
+            Canvas.SetTop(tick, 20 - tick.Height);
+            _horizontalRuler.Children.Add(tick);
+
+            if (!major) continue;
+            var label = new TextBlock
+            {
+                Text = ((int)Math.Round(point / 72d)).ToString(),
+                FontSize = 8,
+                Foreground = labelBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(label, point * scale + 2);
+            Canvas.SetTop(label, 1);
+            _horizontalRuler.Children.Add(label);
+        }
+
+        for (double point = 0; point <= heightPoints + .001; point += 36)
+        {
+            var major = Math.Abs(point % 72) < .001;
+            var tick = new Border
+            {
+                Width = major ? 8 : 5,
+                Height = 1,
+                Background = tickBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(tick, 26 - tick.Width);
+            Canvas.SetTop(tick, point * scale);
+            _verticalRuler.Children.Add(tick);
+
+            if (!major) continue;
+            var label = new TextBlock
+            {
+                Text = ((int)Math.Round(point / 72d)).ToString(),
+                FontSize = 8,
+                Foreground = labelBrush,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(label, 2);
+            Canvas.SetTop(label, point * scale + 1);
+            _verticalRuler.Children.Add(label);
+        }
+    }
+
+    private void RulerPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_currentPage is null || sender is not Control source ||
+            !e.GetCurrentPoint(source).Properties.IsLeftButtonPressed)
+            return;
+
+        _creatingGuide = true;
+        _creatingGuideOrientation = ReferenceEquals(sender, _horizontalRuler)
+            ? PageGuideOrientation.Vertical
+            : PageGuideOrientation.Horizontal;
+        e.Pointer.Capture(source);
+        UpdateGuideGhost(e.GetPosition(_pageCanvas));
+        e.Handled = true;
+    }
+
+    private void RulerPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_creatingGuide) return;
+        UpdateGuideGhost(e.GetPosition(_pageCanvas));
+        e.Handled = true;
+    }
+
+    private void RulerPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_creatingGuide || _currentPage is null) return;
+
+        var point = e.GetPosition(_pageCanvas);
+        _creatingGuide = false;
+        e.Pointer.Capture(null);
+        RemoveGuideGhost();
+
+        var position = _creatingGuideOrientation == PageGuideOrientation.Vertical
+            ? point.X / Math.Max(.01, _scale)
+            : point.Y / Math.Max(.01, _scale);
+        _guideCreated(this, _currentPage, _creatingGuideOrientation, position);
+        e.Handled = true;
+    }
+
+    private void UpdateGuideGhost(Point point)
+    {
+        RemoveGuideGhost();
+
+        if (_creatingGuideOrientation == PageGuideOrientation.Vertical)
+        {
+            _guideGhost = new Border
+            {
+                Width = 1,
+                Height = _pageCanvas.Height,
+                Background = new SolidColorBrush(Color.Parse("#00AEEF")),
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(_guideGhost, Math.Clamp(point.X, 0, _pageCanvas.Width));
+            Canvas.SetTop(_guideGhost, 0);
+        }
+        else
+        {
+            _guideGhost = new Border
+            {
+                Width = _pageCanvas.Width,
+                Height = 1,
+                Background = new SolidColorBrush(Color.Parse("#00AEEF")),
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(_guideGhost, 0);
+            Canvas.SetTop(_guideGhost, Math.Clamp(point.Y, 0, _pageCanvas.Height));
+        }
+
+        _pageCanvas.Children.Add(_guideGhost);
+    }
+
+    private void RemoveGuideGhost()
+    {
+        if (_guideGhost is null) return;
+        _pageCanvas.Children.Remove(_guideGhost);
+        _guideGhost = null;
+    }
+
     private void DrawPageGuides(PageLayoutPage page, double scale)
     {
-        var content = page.ContentBounds;
-        var guideBrush = new SolidColorBrush(Color.FromArgb(45, 45, 126, 214));
+        if (page.BaselineGrid is { Enabled: true } baseline && baseline.IncrementPoints > 0)
+        {
+            var brush = new SolidColorBrush(Color.FromArgb(24, 80, 125, 190));
+            var start = page.ContentBounds.YPoints + Math.Max(0, baseline.StartPoints);
+            for (var y = start; y <= page.ContentBounds.BottomPoints; y += baseline.IncrementPoints)
+            {
+                var line = new Border
+                {
+                    Width = page.ContentBounds.WidthPoints * scale,
+                    Height = 1,
+                    Background = brush,
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(line, page.ContentBounds.XPoints * scale);
+                Canvas.SetTop(line, y * scale);
+                _pageCanvas.Children.Add(line);
+            }
+        }
 
-        var leftGuide = new Border { Width = 1, Height = content.HeightPoints * scale, Background = guideBrush, IsHitTestVisible = false };
-        Canvas.SetLeft(leftGuide, content.XPoints * scale);
-        Canvas.SetTop(leftGuide, content.YPoints * scale);
-        _pageCanvas.Children.Add(leftGuide);
+        foreach (var guide in page.Guides)
+        {
+            if (string.Equals(guide.Kind, "custom", StringComparison.Ordinal))
+            {
+                var overlay = new PageGuideOverlay(
+                    _pageCanvas,
+                    guide,
+                    page.WidthPoints * scale,
+                    page.HeightPoints * scale,
+                    scale,
+                    () => _furnitureSelected(
+                        this,
+                        page,
+                        PageFurnitureKind.ParentPage,
+                        page.PageStyleId ?? string.Empty),
+                    position => _guideMoved(this, page, guide, position));
+                _guideObjects.Add(overlay);
+                _pageCanvas.Children.Add(overlay);
 
-        var rightGuide = new Border { Width = 1, Height = content.HeightPoints * scale, Background = guideBrush, IsHitTestVisible = false };
-        Canvas.SetLeft(rightGuide, content.RightPoints * scale);
-        Canvas.SetTop(rightGuide, content.YPoints * scale);
-        _pageCanvas.Children.Add(rightGuide);
+                if (guide.Orientation == PageLayoutGuideOrientation.Vertical)
+                {
+                    Canvas.SetLeft(overlay, guide.PositionPoints * scale - overlay.Width / 2d);
+                    Canvas.SetTop(overlay, 0);
+                }
+                else
+                {
+                    Canvas.SetLeft(overlay, 0);
+                    Canvas.SetTop(overlay, guide.PositionPoints * scale - overlay.Height / 2d);
+                }
+                continue;
+            }
 
-        var topGuide = new Border { Width = content.WidthPoints * scale, Height = 1, Background = guideBrush, IsHitTestVisible = false };
-        Canvas.SetLeft(topGuide, content.XPoints * scale);
-        Canvas.SetTop(topGuide, content.YPoints * scale);
-        _pageCanvas.Children.Add(topGuide);
+            var color = guide.Kind == "margin"
+                ? Color.FromArgb(52, 45, 126, 214)
+                : Color.FromArgb(38, 90, 155, 230);
+            var line = guide.Orientation == PageLayoutGuideOrientation.Vertical
+                ? new Border
+                {
+                    Width = 1,
+                    Height = page.HeightPoints * scale,
+                    Background = new SolidColorBrush(color),
+                    IsHitTestVisible = false
+                }
+                : new Border
+                {
+                    Width = page.WidthPoints * scale,
+                    Height = 1,
+                    Background = new SolidColorBrush(color),
+                    IsHitTestVisible = false
+                };
 
-        var bottomGuide = new Border { Width = content.WidthPoints * scale, Height = 1, Background = guideBrush, IsHitTestVisible = false };
-        Canvas.SetLeft(bottomGuide, content.XPoints * scale);
-        Canvas.SetTop(bottomGuide, content.BottomPoints * scale);
-        _pageCanvas.Children.Add(bottomGuide);
-
+            if (guide.Orientation == PageLayoutGuideOrientation.Vertical)
+            {
+                Canvas.SetLeft(line, guide.PositionPoints * scale);
+                Canvas.SetTop(line, 0);
+            }
+            else
+            {
+                Canvas.SetLeft(line, 0);
+                Canvas.SetTop(line, guide.PositionPoints * scale);
+            }
+            _pageCanvas.Children.Add(line);
+        }
     }
 
     private static IBrush SafeBrush(string? value, string fallback)
