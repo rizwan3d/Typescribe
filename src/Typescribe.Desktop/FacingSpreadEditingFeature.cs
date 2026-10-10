@@ -954,6 +954,107 @@ internal sealed class FacingSpreadSurface : Grid
         }
     }
 
+    private async void OnGuideCreated(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageGuideOrientation orientation,
+        double positionPoints)
+    {
+        if (!_active) return;
+
+        try
+        {
+            var max = orientation == PageGuideOrientation.Vertical ? page.WidthPoints : page.HeightPoints;
+            var clamped = Math.Clamp(positionPoints, 0, max);
+            await UpdateParentGuidesAsync(page, guides =>
+            {
+                guides.Add(new PageGuideDefinition(
+                    $"guide-{Guid.NewGuid():N}",
+                    orientation,
+                    clamped / 72d,
+                    $"Guide {guides.Count + 1}"));
+            });
+
+            OnFurnitureSelected(
+                view,
+                page,
+                PageFurnitureKind.ParentPage,
+                page.PageStyleId ?? _viewModel.CurrentStyle.DefaultPageStyleId);
+        }
+        catch
+        {
+            ScheduleRefresh();
+        }
+    }
+
+    private async void OnGuideMoved(
+        SpreadPageView view,
+        PageLayoutPage page,
+        PageLayoutGuide guide,
+        double positionPoints)
+    {
+        if (!_active || guide.Locked || string.IsNullOrWhiteSpace(guide.Id)) return;
+
+        try
+        {
+            var orientation = guide.Orientation == PageLayoutGuideOrientation.Vertical
+                ? PageGuideOrientation.Vertical
+                : PageGuideOrientation.Horizontal;
+            var max = orientation == PageGuideOrientation.Vertical ? page.WidthPoints : page.HeightPoints;
+            var clamped = Math.Clamp(positionPoints, 0, max);
+
+            await UpdateParentGuidesAsync(page, guides =>
+            {
+                var index = guides.FindIndex(item =>
+                    string.Equals(item.Id, guide.Id, StringComparison.Ordinal));
+                if (index < 0) return;
+                guides[index] = guides[index] with
+                {
+                    Orientation = orientation,
+                    PositionInches = clamped / 72d
+                };
+            });
+
+            OnFurnitureSelected(
+                view,
+                page,
+                PageFurnitureKind.ParentPage,
+                page.PageStyleId ?? _viewModel.CurrentStyle.DefaultPageStyleId);
+        }
+        catch
+        {
+            ScheduleRefresh();
+        }
+    }
+
+    private async Task UpdateParentGuidesAsync(
+        PageLayoutPage page,
+        Action<List<PageGuideDefinition>> update)
+    {
+        var style = _viewModel.CurrentStyle;
+        var id = page.PageStyleId ?? style.DefaultPageStyleId;
+        var raw = style.NamedStyles.PageStyles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase))
+            ?? new PageStyleDefinition(id, id, null);
+        var resolved = style.NamedStyles.ResolvePage(id);
+        var guides = (resolved?.Guides ?? raw.Guides ?? []).ToList();
+        update(guides);
+
+        var updatedPage = raw with { Guides = guides };
+        var found = false;
+        var pages = style.NamedStyles.PageStyles.Select(candidate =>
+        {
+            if (!string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase))
+                return candidate;
+            found = true;
+            return updatedPage;
+        }).ToList();
+        if (!found) pages.Add(updatedPage);
+
+        var catalog = style.NamedStyles with { PageStyles = pages };
+        await _viewModel.UpdateStyleAsync((style with { NamedStyles = catalog }).Validate());
+    }
+
     private static string FurnitureKey(int pageIndex, PageFurnitureKind kind)
         => $"{pageIndex}:{kind}";
 
